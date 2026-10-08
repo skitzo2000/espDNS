@@ -66,6 +66,108 @@ func TestCheckVersion(t *testing.T) {
 	}
 }
 
+// The release workflow runs on a version tag only (or by hand), checks the tag first, and
+// never has the signing key: no secret but the forge token, and nothing signs.
+func TestReleaseWorkflow(t *testing.T) {
+	releaseWorkflow(t, "../.github/workflows/release.yml", "GITHUB_TOKEN")
+}
+
+func releaseWorkflow(t *testing.T, path, secret string) {
+	t.Helper()
+	wf := read(t, path)
+	on := regexp.MustCompile(`(?ms)^on:\n(.*?)\n\S`).FindStringSubmatch(wf)
+	if on == nil {
+		t.Fatal(path + ": no on:")
+	}
+	var trig []string
+	for _, l := range strings.Split(on[1], "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+			trig = append(trig, l)
+		}
+	}
+	if strings.Join(trig, "|") != "push:|tags: ['v*']|workflow_dispatch:" {
+		t.Errorf("%s triggers on %q, want a v* tag push and workflow_dispatch only", path, trig)
+	}
+	for _, m := range regexp.MustCompile(`secrets\.([A-Za-z0-9_]+)`).FindAllStringSubmatch(wf, -1) {
+		if m[1] != secret {
+			t.Errorf("%s: secret %s: the only secret is the forge token %s (the release key never is one)", path, m[1], secret)
+		}
+	}
+	for _, bad := range []string{"release sign", ".pem", "RELEASE_KEY", "keys import", "key import"} {
+		if strings.Contains(wf, bad) {
+			t.Errorf("%s: %q: CI never signs", path, bad)
+		}
+	}
+	// Every job but the check waits for it
+	_, wf, ok := strings.Cut(wf, "\njobs:\n")
+	if !ok {
+		t.Fatal(path + ": no jobs:")
+	}
+	jobs := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9-]*):\n`).FindAllStringSubmatchIndex(wf, -1)
+	if len(jobs) < 4 {
+		t.Fatalf("%s: jobs %v", path, jobs)
+	}
+	for i, j := range jobs {
+		name := wf[j[2]:j[3]]
+		end := len(wf)
+		if i+1 < len(jobs) {
+			end = jobs[i+1][0]
+		}
+		body := wf[j[1]:end]
+		if name == "version" {
+			if !strings.Contains(body, "scripts/release/check-version.sh") {
+				t.Errorf("%s: the version job doesn't run check-version.sh", path)
+			}
+			continue
+		}
+		if !regexp.MustCompile(`(?m)^    needs: (version|\[version[,\]])`).MatchString(body) {
+			t.Errorf("%s: job %s doesn't need version", path, name)
+		}
+		// Nothing goes to the registry before every chip image has built
+		if name == "controller-image" && !regexp.MustCompile(`(?m)^    needs: \[[^\]]*\bfirmware\b`).MatchString(body) {
+			t.Errorf("%s: controller-image pushes before the firmware jobs have built", path)
+		}
+	}
+}
+
+// GitHub's workflows give the run's token only what each job writes: CI reads, the release
+// writes its draft (contents) and the controller's image (packages), each in its own job.
+func TestGitHubPermissions(t *testing.T) {
+	top := regexp.MustCompile(`(?m)^permissions:(.*)$`)
+	write := regexp.MustCompile(`(?m)^\s+([a-z-]+): write$`)
+	ci := read(t, "../.github/workflows/ci.yml")
+	if m := top.FindStringSubmatch(ci); m == nil || !strings.Contains(ci, "permissions:\n  contents: read\n") {
+		t.Error("ci.yml: no top-level permissions: contents: read")
+	}
+	if w := write.FindAllString(ci, -1); len(w) > 0 || strings.Contains(ci, "write-all") {
+		t.Errorf("ci.yml: CI writes nothing, permissions %v", w)
+	}
+	rel := read(t, "../.github/workflows/release.yml")
+	if m := top.FindStringSubmatch(rel); m == nil || strings.TrimSpace(m[1]) != "{}" {
+		t.Error("release.yml: the top-level permissions are not {}")
+	}
+	if strings.Contains(rel, "write-all") {
+		t.Error("release.yml: write-all")
+	}
+	_, jobs, _ := strings.Cut(rel, "\njobs:\n")
+	idx := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9-]*):\n`).FindAllStringSubmatchIndex(jobs, -1)
+	want := map[string]string{"controller-image": "packages", "draft": "contents"}
+	for i, j := range idx {
+		name := jobs[j[2]:j[3]]
+		end := len(jobs)
+		if i+1 < len(idx) {
+			end = idx[i+1][0]
+		}
+		var got []string
+		for _, m := range write.FindAllStringSubmatch(jobs[j[1]:end], -1) {
+			got = append(got, m[1])
+		}
+		if strings.Join(got, " ") != want[name] {
+			t.Errorf("release.yml: job %s writes %v, want %q", name, got, want[name])
+		}
+	}
+}
+
 // docs/releasing.md: its commands are docker and git (no make), its ESP-IDF image is the
 // pinned one, and the release key's fingerprint it gives is firmware/keys/release.pub's.
 func TestReleasingDoc(t *testing.T) {

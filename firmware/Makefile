@@ -120,7 +120,7 @@ SIGN      = mkdir -p $(OTA_DIR) && $(CONTAINER) $(SRC) --network none $(call RW,
 KEYGEN    = $(CONTAINER) $(SRC) --network none $(call RW,keys secrets)
 BOARDS_DIR = /boards
 SITE_DEFAULTS_IN = $(if $(SITE_DEFAULTS),/site/defaults.h)
-# NATIVE=1: already inside the ESP-IDF container (CI). The same
+# NATIVE=1: already inside the ESP-IDF container (CI, ../.github/workflows/ci.yml). The same
 # commands run without docker, with the catalog read from ../boards.
 ifeq ($(NATIVE),1)
 DOCKER     =

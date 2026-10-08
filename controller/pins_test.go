@@ -59,6 +59,55 @@ func TestDockerfileImagesPinned(t *testing.T) {
 	}
 }
 
+// Every workflow: CI on every push, the release on a version tag.
+func TestWorkflowPinned(t *testing.T) {
+	files, err := filepath.Glob("../.github/workflows/*.yml")
+	if err != nil || len(files) < 2 {
+		t.Fatalf(".github workflows: %v %v", files, err)
+	}
+	for _, f := range files {
+		workflowPinned(t, f)
+	}
+}
+
+func workflowPinned(t *testing.T, path string) {
+	name := filepath.Base(filepath.Dir(filepath.Dir(path))) + "/" + filepath.Base(path)
+	wf := read(t, path)
+	images := regexp.MustCompile(`(?m)^\s+image:\s*(\S+)`).FindAllStringSubmatch(wf, -1)
+	if len(images) == 0 {
+		t.Fatal(name + ": no container image")
+	}
+	idf := regexp.MustCompile(`(?m)^IDF_IMAGE\s*\?=\s*(\S+)`).FindStringSubmatch(read(t, "../firmware/Makefile"))
+	if idf == nil {
+		t.Fatal("firmware/Makefile: no IDF_IMAGE")
+	}
+	if !pinnedImage.MatchString(idf[1]) {
+		t.Errorf("firmware/Makefile: IDF_IMAGE %s is not pinned by digest", idf[1])
+	}
+	goTag := "golang:" + goVersion(t) + "-"
+	for _, m := range images {
+		img := m[1]
+		if !pinnedImage.MatchString(img) {
+			t.Errorf("%s: image %s is not pinned by digest (name:tag@sha256:...)", name, img)
+		}
+		if strings.HasPrefix(img, "espressif/idf:") && img != idf[1] {
+			t.Errorf("%s: image %s is not firmware/Makefile's IDF_IMAGE %s", name, img, idf[1])
+		}
+		if strings.HasPrefix(img, "golang:") && !strings.HasPrefix(img, goTag) {
+			t.Errorf("%s: image %s is not go.mod's Go (%s*)", name, img, goTag)
+		}
+	}
+	uses := regexp.MustCompile(`(?m)^\s+(?:-\s+)?uses:\s*(.+)$`).FindAllStringSubmatch(wf, -1)
+	if len(uses) == 0 {
+		t.Fatal(name + ": no actions")
+	}
+	for _, u := range uses {
+		if !pinnedAction.MatchString(strings.TrimSpace(u[1])) {
+			t.Errorf("%s: uses %s is not pinned by commit with its tag in a comment (owner/repo@<sha>  # vX)", name, u[1])
+		}
+	}
+}
+
 func TestPinnedPatterns(t *testing.T) {
 	for _, s := range []string{"golang:1.26-alpine", "golang@sha256:" + strings.Repeat("a", 64),
 		"golang:1.26.7-alpine@sha256:abc", "espressif/idf:latest"} {
