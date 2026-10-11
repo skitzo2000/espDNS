@@ -1,7 +1,7 @@
 # Reference
 
-Exact lists for espDNS 0.0.x (alpha). Each page was written from the code, not from
-memory. When this reference and the code disagree, the code wins: please open an issue.
+Exact lists for espDNS 0.0.x (alpha), written from the code. The guides tell the story; the
+facts roost here. If a page and the code disagree, the code wins: please open an issue.
 
 | Page | What it covers |
 |------|----------------|
@@ -13,11 +13,11 @@ memory. When this reference and the code disagree, the code wins: please open an
 
 ## Words used on these pages
 
-- **Node**: an ESP32 board that runs the espDNS firmware and answers DNS.
+- **Node**: an ESP32 board running the espDNS firmware and answering DNS.
 - **Controller**: the management service in the `espdns-controller` container. It serves the
-  dashboard and the API on `http://127.0.0.1:8480`. Nodes keep answering DNS when it is off.
-- **Data directory**: where the controller keeps all its state. In the container it is
-  `/data`, mounted from the host (`ESPDNS_DATA` in `.env`, `./data` by default).
+  dashboard and the API on `http://127.0.0.1:8480`. Nodes keep answering DNS when it's off.
+- **Data directory**: where the controller keeps all its state: `/data` in the container,
+  mounted from the host (`ESPDNS_DATA` in `.env`, `./data` by default).
 - **Release**: a signed change sent to a node (firmware, config, zones, blocklist, overrides
   or a control command). Nodes take only releases signed with a key they trust.
 - **Zone primary**: the DNS server the nodes copy their secondary zones from, over standard
@@ -26,7 +26,7 @@ memory. When this reference and the code disagree, the code wins: please open an
 
 ## Where to go next
 
-- How the system is put together: [Architecture](../architecture.md).
-- Setting it up: [Getting started](../getting-started.md).
+- How it fits together: [Architecture](../architecture.md).
+- Setting it up: [Getting started](../getting-started.md); Compose and own builds: [Developer guide](../developer.md).
 - How a release is built, signed and checked: [releasing.md](../releasing.md).
 - What changed in each version: [CHANGELOG.md](../../CHANGELOG.md).

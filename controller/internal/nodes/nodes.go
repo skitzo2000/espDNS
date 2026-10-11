@@ -68,12 +68,15 @@ type Node struct {
 	// MAC is the MAC of the interface the node uses (/status net.mac, release.MAC): what a
 	// DHCP reservation, or setting a static address, goes by. Kept while the node is offline,
 	// as Status is; "" until it reports one.
-	MAC      string    `json:"mac,omitempty"`
-	Source   string    `json:"source"` // SourceSettings, SourceMDNS or SourceLookup
-	Online   bool      `json:"online"`
-	LastSeen time.Time `json:"last_seen"`
-	Error    string    `json:"error,omitempty"` // why the last poll failed (cleared by the next good one)
-	Polled   time.Time `json:"polled"`          // the last poll, answered or not
+	MAC    string `json:"mac,omitempty"`
+	Source string `json:"source"` // SourceSettings, SourceMDNS or SourceLookup
+	// OutOfService: listed, and taken out of service (settings.json "out_of_service"): still
+	// polled and shown, sent nothing, counted as no peer.
+	OutOfService bool      `json:"out_of_service,omitempty"`
+	Online       bool      `json:"online"`
+	LastSeen     time.Time `json:"last_seen"`
+	Error        string    `json:"error,omitempty"` // why the last poll failed (cleared by the next good one)
+	Polled       time.Time `json:"polled"`          // the last poll, answered or not
 	// QPS is the queries a second over the last two answered polls (from /status
 	// queries.total); nil until there are two, after a reboot (the count started over), or
 	// on firmware without the count.
@@ -98,6 +101,7 @@ type Registry struct {
 	mu     sync.Mutex
 	byAddr map[string]*Node
 	static []string
+	out    []string // the listed nodes out of service (SetOutOfService)
 	client *http.Client
 	now    func() time.Time
 	polled []func([]Node)
@@ -141,6 +145,14 @@ func (r *Registry) SetListed(addrs []string) {
 		}
 	}
 	r.static = slices.Clone(addrs)
+}
+
+// SetOutOfService replaces the listed nodes out of service (settings.json "out_of_service",
+// read again): List says it of each.
+func (r *Registry) SetOutOfService(addrs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.out = slices.Clone(addrs)
 }
 
 // OnPoll has f called with the list after each poll (in the poller's goroutine: f must not
@@ -187,6 +199,7 @@ func (r *Registry) List() []Node {
 func (r *Registry) view(n *Node) Node {
 	c := *n
 	c.Online = !n.LastSeen.IsZero() && r.now().Sub(n.LastSeen) < offlineAfter
+	c.OutOfService = n.Source == SourceSettings && slices.Contains(r.out, n.Addr)
 	return c
 }
 

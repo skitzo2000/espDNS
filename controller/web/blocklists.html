@@ -4,34 +4,60 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>espDNS blocking</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="img/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="blocking.css">
 </head>
 <body>
 <main>
-  <h1>Blocklists</h1>
-  <p class="lead">Each list compiled from its sources, and each node's blocking.</p>
-  <div id="banner"></div>
-  <section class="card blknodes" id="nodes" aria-label="Nodes"><div class="empty">Loading the nodes…</div></section>
-  <div class="cfgs blkgrid">
-    <div class="cfgside">
-      <div class="card boardlist" id="lists" aria-label="Lists"><div class="empty">Loading lists…</div></div>
-      <form class="card newcfg" id="newlist" autocomplete="off">
-        <label>New list <input id="newlistname" placeholder="main" spellcheck="false" autocapitalize="off"></label>
-        <span class="sub">Compiled into lists/&lt;name&gt;.bin.</span>
-        <button class="btn small" type="submit">Create</button>
-      </form>
-      <div class="card boardlist" id="sources" aria-label="Source files"></div>
-      <form class="card newcfg" id="newsrc" autocomplete="off">
-        <label>New source file <input id="newsrcname" placeholder="allow.txt" spellcheck="false" autocapitalize="off"></label>
-        <span class="sub">A list to block or allow, popular or must-resolve names: .txt, .zone, .rpz, .csv, .hosts or .list.</span>
-        <button class="btn small" type="submit">Create</button>
-      </form>
-      <div class="card newcfg" id="deleted" hidden></div>
+  <div class="head">
+    <div class="lead summary">
+      <h1 id="title">Blocking</h1>
+      <div class="facts" id="facts"></div>
     </div>
-    <div class="card detail cfgmain" id="main"><div class="empty">Choose a list or a source file.</div></div>
+    <div class="row" id="head-actions"><div id="add-list"></div></div>
+  </div>
+  <div id="ask" hidden></div>
+  <div id="loading" class="panel empty"><p>Reading the blocking setup…</p></div>
+  <div id="off" class="panel empty" hidden>
+    <h2>Blocking is off</h2>
+    <p>Blocking stops your devices reaching ad, tracking and malware sites by answering "no such site" for them. Nodes always answer first; blocking never makes DNS less reliable.</p>
+    <div id="add-first"></div>
+    <span class="hint">Pick from well-known lists by name or tag, or add one by its web address.</span>
+  </div>
+  <div id="on" class="blocking" hidden>
+    <div class="panel pad row spread" id="pause"></div>
+
+    <section aria-labelledby="check-h">
+      <h2 id="check-h">Check a site</h2>
+      <div class="panel pad stack">
+        <form class="check" id="checkform" autocomplete="off">
+          <input class="t mono" id="checkq" placeholder="site.example" spellcheck="false" autocapitalize="off" aria-label="Site to check">
+          <button class="btn" type="submit">Check</button>
+        </form>
+        <div id="verdict" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="rules-h">
+      <h2 id="rules-h">Your own rules</h2>
+      <div class="exs" id="rules"></div>
+    </section>
+
+    <section aria-labelledby="lists-h">
+      <div class="sec-head"><h2 id="lists-h">Your blocklists</h2></div>
+      <div class="exs" id="lists"></div>
+      <div class="panel pad stack refresh" id="refresh" hidden></div>
+      <p class="hint" id="lists-hint"></p>
+    </section>
+
+    <section aria-label="Advanced">
+      <div class="exs" id="advanced"></div>
+    </section>
   </div>
 </main>
-<script type="module" src="blocklists.js"></script>
+<script type="module" src="blocking.js"></script>
 </body>
 </html>

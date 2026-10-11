@@ -26,7 +26,6 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
-	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
@@ -38,6 +37,8 @@ import (
 //	                                      with a grant of the password again in X-Reauth), its history
 //	POST /api/configs/{name}/check       {"text", "board", "node"}: the checks (internal/configs, Check), never saved
 //	POST /api/configs/{name}             {"text", "hash"} saves it (hash: the version edited; "" for a new file)
+//	POST /api/configs/{name}/delete      {"hash"} deletes it, kept in its history: only one no node runs
+//	                                      or was given (+ Add node's "Delete this name")
 //
 // Every one needs a login, the reads too (a config can hold a Wi-Fi password), even before
 // a password is set (when the rest is read-only and open). The password is never in a
@@ -60,6 +61,7 @@ func (c configsServer) routes(mux *routes) {
 	mux.HandleFunc("GET /api/configs/{name}", c.needLogin(c.get))
 	mux.HandleFunc("POST /api/configs/{name}/check", c.needLogin(c.check))
 	mux.HandleFunc("POST /api/configs/{name}", c.needLogin(c.save))
+	mux.HandleFunc("POST /api/configs/{name}/delete", c.needLogin(c.delete))
 }
 
 func httpErr(w http.ResponseWriter, code int, err error) {
@@ -375,14 +377,68 @@ func (c configsServer) save(w http.ResponseWriter, r *http.Request) {
 	case len(changed) == 0:
 		what = "same settings, text changed"
 	}
-	user := auth.User(r.Context())
-	if err := actionlog.Append(c.dataDir, actionlog.Entry{Event: "save", ID: "config-" + time.Now().UTC().Format("20060102-150405"),
+	logSave(c.dataDir, auth.User(r.Context()), name, what)
+	masked, _ := configs.Mask(f.Text)
+	writeJSON(w, map[string]any{"name": f.Name, "text": string(masked), "hash": f.Hash, "modified": f.Modified, "changed": changed})
+}
+
+// delete removes a config no node uses: none the controller knows runs it (by its name
+// and address, or as the config last pushed to it), and none was given it by an adoption
+// or a push (internal/configs, Pushed). The file goes to its history first.
+func (c configsServer) delete(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var req struct {
+		Hash string `json:"hash"`
+	}
+	if err := body(w, r, &req); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := configs.CheckName(name); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	saved, err := c.saved(name)
+	switch {
+	case err != nil:
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	case saved == nil:
+		httpErr(w, http.StatusNotFound, fmt.Errorf("no config %s in %s", name, configs.Path(c.dataDir)))
+		return
+	}
+	for _, n := range c.nodes() {
+		if st, ok := status(n); ok && (configs.Matches(saved.Config, n.Addr, st) || pushedHere(c.dataDir, st, name)) {
+			httpErr(w, http.StatusConflict, fmt.Errorf("%s runs %s: a config a node runs isn't deleted", n.Addr, name))
+			return
+		}
+	}
+	for _, p := range configs.AllPushed(c.dataDir) {
+		if p.File == name {
+			httpErr(w, http.StatusConflict, fmt.Errorf("node %s (%s) was given %s: a config a node was given isn't deleted",
+				p.NodeID, p.Host, name))
+			return
+		}
+	}
+	switch err := configs.Delete(c.dataDir, name, req.Hash); {
+	case errors.Is(err, configs.ErrChanged):
+		httpErr(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	logSave(c.dataDir, auth.User(r.Context()), name, "deleted, kept in its history")
+	writeJSON(w, map[string]any{"name": name, "deleted": true})
+}
+
+// logSave notes a config saved, by whom and what changed, in the action log and the log.
+func logSave(dataDir, user, name, what string) {
+	if err := actionlog.Append(dataDir, actionlog.Entry{Event: "save", ID: "config-" + time.Now().UTC().Format("20060102-150405"),
 		Source: "controller", Who: user, Action: "config save", Args: []string{name, what}, Result: "ok"}); err != nil {
 		log.Printf("configs: %s saved, but not in the action log: %v", name, err)
 	}
 	log.Printf("configs: %s saved by %s (%s)", name, user, what)
-	masked, _ := configs.Mask(f.Text)
-	writeJSON(w, map[string]any{"name": f.Name, "text": string(masked), "hash": f.Hash, "modified": f.Modified, "changed": changed})
 }
 
 // ---- the push ----------------------------------------------------------------------
@@ -393,7 +449,7 @@ func (c configsServer) save(w http.ResponseWriter, r *http.Request) {
 // one, the checks after), with the same refusals (internal/configs). A config that moves the
 // node to another address goes as espdns config -reboot does it: pushed, the node rebooted
 // once another node or a DNS peer answers, and confirmed on its new address before its
-// trial ends (fleet.ConfirmConfig); settings.json then still lists the old address.
+// trial ends (fleet.ConfirmConfig); settings.json then lists it at its new address.
 //
 //	{"node": "192.0.2.52", "config": "node2.json", "dry_run": true}
 //	{"node": "192.0.2.52", "config": "node2.json", "after": "<the dry run's job ID>"}
@@ -471,6 +527,9 @@ func (p configPush) kind(raw json.RawMessage) (jobs.Func, error) {
 	if !slices.Contains(s.Nodes, pp.Node) {
 		return nil, fmt.Errorf("%s is not in settings.json: configs are pushed only to the nodes listed there", pp.Node)
 	}
+	if s.IsOutOfService(pp.Node) {
+		return nil, fmt.Errorf("%s: skipped: out of service (returning it to service sends it its config)", pp.Node)
+	}
 	spec, err := p.load(pp)
 	if err != nil {
 		return nil, err
@@ -547,10 +606,13 @@ func (p configPush) run(ctx context.Context, run *jobs.Run, pp pushParams) (any,
 	if !slices.Contains(s.Nodes, host) {
 		return nil, fmt.Errorf("%s is no longer in settings.json: not pushed", host)
 	}
+	if s.IsOutOfService(host) {
+		return nil, fmt.Errorf("%s: skipped: out of service: not pushed", host)
+	}
 	c := p.client()
 	c.Logf = run.Logf
 	if k, err := p.signer(); err == nil {
-		c.Pusher = &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(p.dataDir), Client: c.HTTP}
+		c.Pusher = p.pusher(k, c.HTTP)
 		run.Logf("signing with the release key %s", keys.Fingerprint(k))
 	} else if !pp.DryRun {
 		return nil, err
@@ -587,7 +649,7 @@ func (p configPush) run(ctx context.Context, run *jobs.Run, pp pushParams) (any,
 	if len(s.DNSPeers) > 0 {
 		run.Logf("DNS peers: %s", strings.Join(s.DNSPeers, ", "))
 	}
-	ns, err := c.Discover(ctx, 0, s.Nodes)
+	ns, err := c.Discover(ctx, 0, s.InService())
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +730,7 @@ func (p configPush) move(ctx context.Context, run *jobs.Run, c *fleet.Client, pl
 		if err := c.RebootNow(ctx, plan, host, true); err != nil {
 			return nil, err
 		}
-		run.Logf("dry run passed: nothing was pushed; settings.json lists %s, which the push leaves for you to change to %s", host, to)
+		run.Logf("dry run passed: nothing was pushed; once it is confirmed on %s, settings.json lists it there", to)
 		return res, nil
 	}
 	// The rule before anything is pushed, as a rollout checks it.
@@ -706,6 +768,15 @@ func (p configPush) move(ctx context.Context, run *jobs.Run, c *fleet.Client, pl
 	}
 	res.Done = true
 	p.record(ctx, run, c, host, res.Config, spec.Payload, &res)
-	run.Logf("settings.json still lists %s: change it to %s (the controller doesn't edit settings.json)", spec.Host, to)
+	// Listed where it is now, in its place (as adoption moves a node: settings.MoveNode).
+	if host != spec.Host {
+		if _, err := settings.MoveNode(settings.Path(p.dataDir), spec.Host, host); err != nil {
+			run.Logf("settings.json still lists %s: change it to %s (%v)", spec.Host, host, err)
+		} else {
+			run.Logf("settings.json lists it at %s now", host)
+		}
+	} else {
+		run.Logf("settings.json still lists %s: change it to %s", spec.Host, to)
+	}
 	return res, nil
 }

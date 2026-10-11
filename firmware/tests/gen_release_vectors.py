@@ -3,6 +3,7 @@ main/release.c in test_core. Test-only keys, derived from fixed numbers.
 
     python tests/gen_release_vectors.py tests/release_vectors.h
     python tests/gen_release_vectors.py - --config-only    (print only the config vector)
+    python tests/gen_release_vectors.py - --keys-only      (print only the KEYS vectors)
 """
 import os
 import sys
@@ -37,9 +38,29 @@ cfg_payload = CFG_PAYLOAD
 cfg = release.header(K0, "config", 0, NODE, BOARD, 3000, cfg_payload)
 
 
+# KEYS releases (main/keys.h): new keys K2 (release) and K3 (recovery) for NODE, signed with
+# the recovery key K1 as a node takes them, and the two ways a node refuses one before its
+# payload: signed with the release key, addressed to any node.
+K2 = ec.derive_private_key(0x5EED0003 << 200 | 0xF00D, ec.SECP256R1())
+K3 = ec.derive_private_key(0x5EED0004 << 200 | 0xCAFE, ec.SECP256R1())
+keys_payload = release.keys_payload(release.public_raw(K2), release.public_raw(K3), True)
+keys = release.header(K1, "keys", 1, NODE, BOARD, 4000, keys_payload)
+keys_rel0 = release.header(K0, "keys", 0, NODE, BOARD, 4001, keys_payload)
+keys_any = release.header(K1, "keys", 1, release.ANY_NODE, BOARD, 4002, keys_payload)
+# A firmware release signed with the new release key, after the rotation
+fw_k2 = release.header(K2, "firmware", 0, NODE, BOARD, 5000, fw_payload)
+
+
 def vectors():
     """The lines for the config vector alone (appended to an existing file)."""
     return [arr("V_CFG", cfg), arr("V_CFG_PAYLOAD", cfg_payload)]
+
+
+def keys_vectors():
+    """The lines for the KEYS vectors alone (appended to an existing file)."""
+    return [arr("V_KEY2", release.public_raw(K2)), arr("V_KEY3", release.public_raw(K3)),
+            arr("V_KEYS", keys), arr("V_KEYS_PAYLOAD", keys_payload), arr("V_KEYS_REL0", keys_rel0),
+            arr("V_KEYS_ANY", keys_any), arr("V_FW_K2", fw_k2)]
 
 
 out = []
@@ -56,9 +77,13 @@ out.append(arr("V_BL", bl))
 out.append(arr("V_BL_PAYLOAD", bl_payload))
 out.append(arr("V_RESERVED", rsv))
 out.extend(vectors())
+out.extend(keys_vectors())
 
 if len(sys.argv) > 2 and sys.argv[2] == "--config-only":
     print("\n".join(vectors()))
+    sys.exit(0)
+if len(sys.argv) > 2 and sys.argv[2] == "--keys-only":
+    print("\n".join(keys_vectors()))
     sys.exit(0)
 with open(sys.argv[1], "w") as f:
     f.write("\n".join(out) + "\n")

@@ -1,0 +1,53 @@
+/* The first run (setup.html, setup.js) and the login (login.html), in the shell's look
+   (shell.css): the setup's numbered steps, each opening in place,
+   the Nodes page's "finish setting up" row (setupcheck.js), and the login's card. */
+
+/* The steps: a number (orange with a tick once done), the step and what it's for, and
+   Start, Done or Skipped at the right; the step being done opens under its row. */
+.setup-steps { display: grid; gap: 0 }
+.setup-steps .s { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 12px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line) }
+.setup-steps .s:first-child { border-top: none }
+.setup-steps .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 12px; color: var(--muted) }
+.setup-steps .s.done .n { background: var(--orange); border-color: var(--orange); color: #0d2b4e; font-weight: 600 }
+.setup-steps .s.now .n { border-color: var(--orange); color: var(--fg); font-weight: 600 }
+.setup-steps .s.open { box-shadow: inset 3px 0 0 var(--sky) }
+.setup-steps .s .what { min-width: 0 }
+.setup-steps .s .what .hint { overflow-wrap: anywhere }
+.setup-steps .sb { grid-column: 2 / -1; display: grid; gap: 14px; padding: 12px 0 6px; max-width: 720px }
+.setup-steps .sb .row { gap: 10px }
+.setup-steps .sb .grid2 { align-items: start }
+@media (max-width: 520px) {
+  .setup-steps .s { grid-template-columns: 24px 1fr; padding: 12px 14px }
+  .setup-steps .s > .act { grid-column: 2 }
+  .setup-steps .sb { grid-column: 1 / -1 }
+}
+
+/* A terminal command to copy, where one is still the way (the release key's import). */
+pre.cmd { font: 12.5px/1.55 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; margin: 0; overflow-x: auto; white-space: pre; max-width: 100% }
+.fp { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere }
+/* Make your keys: the ways with a key you have, each under its summary. */
+.setup-steps details.sub-ex > summary { cursor: pointer; color: var(--muted); font-size: 14px }
+.setup-steps details.sub-ex[open] > summary { margin-bottom: 10px }
+.setup-steps input[type=file] { max-width: 100%; font-size: 13.5px }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; margin: 0 }
+.kv dt { color: var(--muted) }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+@media (max-width: 520px) { .kv { grid-template-columns: 1fr } .kv dd { margin-bottom: 6px } }
+.addrs { display: flex; flex-wrap: wrap; gap: 10px 22px }
+.addrs > div { display: grid; gap: 2px }
+.setup-box { position: relative }
+.setup-box .combo { width: min(440px, 100%) }
+
+/* Nodes: the row that keeps the setup's checklist until it is done. */
+.setup-left .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; width: min(220px, 100%) }
+.setup-left .bar i { display: block; height: 100%; background: var(--sky) }
+
+/* The login: one card under the bar, in the shell's look. */
+.login-main { max-width: 460px }
+.login-card { padding: 22px; display: grid; gap: 14px }
+.login-card form { display: grid; gap: 14px }
+.login-card .status { min-height: 1.4em }
+.login-card .status.bad { color: var(--warn) }
+.login-card .banner-bad { border: 2px solid var(--warn-line); border-radius: var(--r); padding: 10px 12px; color: var(--warn) }
+.login-card details summary { cursor: pointer; color: var(--muted); font-size: 14px }
+.login-card details[open] summary { margin-bottom: 8px }

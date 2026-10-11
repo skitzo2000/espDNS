@@ -190,7 +190,7 @@ static const char *slot_open(int k, int slot, bool hash, rel_manifest_t *m, int 
     *fd = open(path, O_RDONLY);
     if (*fd < 0)
         return errno == ENOENT ? "missing" : "slot unreadable";
-    const char *why = blk_slot_read(*fd, ota_trust(), KIND[k], m);
+    const char *why = blk_slot_read(*fd, ota_trust_stored(), KIND[k], m);
     if (!why && hash)
         why = blk_slot_hash(*fd, m);
     if (why) {

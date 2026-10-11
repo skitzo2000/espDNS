@@ -4,32 +4,38 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>espDNS login</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="img/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="firstrun.css">
 </head>
 <body>
-<header class="top"><div class="topbar"><span class="brand">espDNS</span></div></header>
-<main class="narrow">
+<header class="top"><div class="top-in"><span class="brand">espDNS</span><img class="top-artie" src="img/artie.webp" width="14" height="24" alt="" title="Artie A. Record"></div></header>
+<main class="login-main" id="content">
   <h1>Log in</h1>
-  <div class="card login">
+  <div class="panel login-card">
     <form id="form" hidden>
-      <label>User <input id="user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
-      <label>Password <input id="password" name="password" type="password" autocomplete="current-password" required></label>
-      <button class="btn primary" id="submit" type="submit">Log in</button>
-      <div class="status" id="msg" role="status" aria-live="polite"></div>
+      <label class="f"><span>User</span><input class="t" id="user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
+      <label class="f"><span>Password</span><input class="t" id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <div class="row"><button class="btn primary" id="submit" type="submit">Log in</button></div>
+      <div class="status hint" id="msg" role="status" aria-live="polite"></div>
     </form>
-    <div id="nopass" hidden>
-      <p><strong>No password is set.</strong> Until one is, the controller is read-only: its
-        pages show the nodes, and it takes no actions. Set the password once, from the host:</p>
-      <pre class="cmd">docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data</pre>
-      <p class="sub">Run it in <code>controller/</code>. That runs <code>espdns passwd</code> in the controller's image with the
-        data directory mounted; it asks for the user name (your choice; <code>-user</code>
-        gives it), then the password twice, without echo, and keeps an argon2id hash in
-        <code>auth.json</code> (mode 0600). Outside Docker: <code>./espdns passwd -data data</code>.
-        Then reload this page.</p>
-      <p><a href="index.html">Go on, read-only</a></p>
+    <div id="nopass" class="stack" hidden>
+      <p><strong>No password is set yet.</strong> Until one is, the controller is read-only:
+        its pages show the nodes, and it takes no actions.</p>
+      <p class="small">Set one in the browser, as the first step of setting up espDNS, from the
+        controller's own machine.</p>
+      <div class="row"><a class="btn primary" href="setup.html">Set up espDNS</a><a class="btn" href="index.html">Go on, read-only</a></div>
+      <details>
+        <summary>Or from the terminal</summary>
+        <p class="small">In the controller's folder (<code>controller/</code>), run</p>
+        <pre class="cmd">docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data</pre>
+        <p class="hint">It asks for the user name, then the password twice, without echo
+          (outside Docker: <code>./espdns passwd -data data</code>). Then reload this page.</p>
+      </details>
     </div>
-    <div id="broken" class="banner bad" hidden></div>
+    <div id="broken" class="banner-bad" hidden></div>
   </div>
 </main>
 <script type="module" src="login.js"></script>

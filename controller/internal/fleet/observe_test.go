@@ -71,6 +71,13 @@ func TestMetricsVector(t *testing.T) {
 	if f := m.Family("espdns_fwd_inflight"); f == nil || f.Type != "gauge" || m.Sum("espdns_fwd_inflight") != 7 {
 		t.Errorf("%+v", f)
 	}
+	// The UDP receive queue under load.
+	if v, _ := m.Value("espdns_udp_queue_full_seconds_total"); math.Abs(v-12.345) > 1e-9 {
+		t.Errorf("queue full %v", v)
+	}
+	if f := m.Family("espdns_udp_queue_expired_total"); f == nil || f.Type != "counter" || f.Samples[0].Value != 7 {
+		t.Errorf("%+v", f)
+	}
 }
 
 func TestParseMetrics(t *testing.T) {

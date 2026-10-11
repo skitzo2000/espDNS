@@ -9,6 +9,7 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/image"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/zones"
@@ -29,7 +30,10 @@ type FirmwareInfo struct {
 	Elf     string `json:"elf,omitempty"`
 	Bytes   int64  `json:"bytes"`
 	Path    string `json:"path"`
-	Error   string `json:"error,omitempty"`
+	// Label is where it came from: "project release v0.0.3" or "your build v0.0.3" (an
+	// imported release, its provenance), "your build" (no release vouches for it).
+	Label string `json:"label"`
+	Error string `json:"error,omitempty"`
 }
 
 // ListInfo is one list file (blocklist or overrides).
@@ -135,7 +139,7 @@ func ReadFirmware(dataDir, catalog string) []FirmwareInfo {
 		if !e.IsDir() || configs.FileName(e.Name(), "", "") != nil {
 			continue
 		}
-		f := FirmwareInfo{Source: "builds/" + e.Name(), Board: e.Name(), Path: filepath.Join(dataDir, BuildsDir, e.Name(), BuildFile)}
+		f := FirmwareInfo{Source: "builds/" + e.Name(), Board: e.Name(), Path: filepath.Join(dataDir, BuildsDir, e.Name(), BuildFile), Label: "your build"}
 		img, err := BoardImage(dataDir, catalog, e.Name())
 		if err != nil {
 			f.Error = err.Error()
@@ -146,12 +150,13 @@ func ReadFirmware(dataDir, catalog string) []FirmwareInfo {
 	}
 	// The exported chip images: firmware/images/<image>/.
 	ents, _ = os.ReadDir(filepath.Join(dataDir, ImagesDir))
+	signers, _ := dist.LoadSigners(ProjectPub, dataDir)
 	for _, e := range ents {
 		if !e.IsDir() || configs.FileName(e.Name(), "", "") != nil {
 			continue
 		}
 		dir := filepath.Join(dataDir, ImagesDir, e.Name())
-		f := FirmwareInfo{Source: "images/" + e.Name(), Image: e.Name(), Path: filepath.Join(dir, "app.bin")}
+		f := FirmwareInfo{Source: "images/" + e.Name(), Image: e.Name(), Path: filepath.Join(dir, "app.bin"), Label: dist.ReadOrigin(dir, signers).Label}
 		c, err := image.Open(dir)
 		switch {
 		case err != nil:

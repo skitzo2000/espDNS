@@ -18,6 +18,7 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -28,6 +29,12 @@ import (
 // DefaultSoak is how long each changed node runs, checked again, before the next starts
 // (the CLI's -soak default; the Makefile and the Push page never go below it).
 const DefaultSoak = time.Minute
+
+// ProjectPub is the project's release public key file a firmware rollout re-checks an
+// imported release's provenance with (dist.CheckProvenance), with the release key in the
+// data directory: /keys/project.pub in the controller's image (the controller's
+// -project-pub).
+var ProjectPub = dist.ProjectPub
 
 // Request is one rolling push: what the CLI's rollout flags say, field for field.
 type Request struct {
@@ -58,6 +65,14 @@ type Request struct {
 	AllowSingle  bool          // -allow-single
 	Force        bool          // -force
 	DryRun       bool          // -dry-run
+	// Returning is the one node out of service (settings.json "out_of_service") the request
+	// may change: the node being returned to service, brought up to date first (espdns node
+	// in, the controller's job "node-in"). Every other node out of service is refused as a
+	// target and never counted as a peer.
+	Returning string
+	// Skipped are the nodes a Push page request named that are out of service (Web.Request):
+	// left out, and said so.
+	Skipped []string
 
 	// Files, if set, is where every file the request reads is read once (the settings
 	// too), so its Fingerprint is over the bytes pushed; nil: read when needed.
@@ -93,12 +108,21 @@ type Built struct {
 // the CLI counts them) for the request. logf gets what the CLI logs on the way.
 func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ...any)) (Built, error) {
 	var b Built
-	if r.Kind == release.Control {
+	if r.Kind == release.Control || r.Kind == release.Keys {
 		return b, errors.New("need -kind firmware, config, zones, blocklist or overrides")
+	}
+	s, err := r.loadSettings()
+	if err != nil {
+		return b, err
+	}
+	for _, h := range r.Hosts {
+		if s.IsOutOfService(h) && h != r.Returning {
+			return b, fmt.Errorf("%s is out of service: it is sent nothing until it is returned to service (which brings it up to date)", h)
+		}
 	}
 	hosts := slices.Clone(r.Hosts)
 	if r.All {
-		ns, err := Known(ctx, c, r, logf)
+		ns, err := Counted(ctx, c, r, logf)
 		if err != nil {
 			return b, err
 		}
@@ -118,7 +142,7 @@ func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 	if p.DNSPeers, err = DNSPeers(r, logf); err != nil {
 		return b, err
 	}
-	ns, err := Known(ctx, c, r, logf)
+	ns, err := Counted(ctx, c, r, logf)
 	if err != nil {
 		return b, err
 	}
@@ -217,6 +241,27 @@ func Known(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 	return ns, err
 }
 
+// Counted is Known but the nodes out of service (settings.json "out_of_service"; the
+// request's Returning aside), each said in the log: never changed by -all, nor counted
+// as a peer for the last-healthy-node rule, answering or not.
+func Counted(ctx context.Context, c *fleet.Client, r Request, logf func(string, ...any)) ([]fleet.Node, error) {
+	s, err := r.loadSettings()
+	if err != nil {
+		return nil, err
+	}
+	ns, err := Known(ctx, c, r, logf)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(ns, func(n fleet.Node) bool {
+		if !s.IsOutOfService(n.Addr) || n.Addr == r.Returning {
+			return false
+		}
+		logf("%s: skipped: out of service (not changed, not counted)", n.Addr)
+		return true
+	}), nil
+}
+
 // LoadChange reads what the request pushes to hosts, checked: the firmware's app
 // descriptors, each node's config, the zones, the list's header.
 func LoadChange(r Request, hosts []string, logf func(string, ...any)) (fleet.Change, []configs.Spec, error) {
@@ -225,7 +270,11 @@ func LoadChange(r Request, hosts []string, logf func(string, ...any)) (fleet.Cha
 	var err error
 	switch r.Kind {
 	case release.Firmware:
-		ch.Firmware, err = loadFirmware(r.read, r.Images, r.Board, logf)
+		ch.Firmware, err = loadFirmware(r.read, r.Images, r.Board, r.DataDir, logf)
+		ch.BoardImage = func(board string) string {
+			img, _ := BoardImage(r.DataDir, r.Catalog, board)
+			return img
+		}
 	case release.Config:
 		ch.Payload, specs, err = configPayloads(r.read, r.Configs, hosts, r.Catalog, r.DataDir)
 		if err == nil {
@@ -263,12 +312,35 @@ func CheckList(b []byte) error {
 	return nil
 }
 
-// LoadFirmware reads the -image flags: chip image directories, or name=app.bin.
-func LoadFirmware(specs []string, board string, logf func(string, ...any)) ([]fleet.Firmware, error) {
-	return loadFirmware(os.ReadFile, specs, board, logf)
+// LoadFirmware reads the -image flags: chip image directories, or name=app.bin. A chip
+// image directory's app is checked against its provenance (Provenance) with the release key
+// in dataDir.
+func LoadFirmware(specs []string, board, dataDir string, logf func(string, ...any)) ([]fleet.Firmware, error) {
+	return loadFirmware(os.ReadFile, specs, board, dataDir, logf)
 }
 
-func loadFirmware(read func(string) ([]byte, error), specs []string, board string, logf func(string, ...any)) ([]fleet.Firmware, error) {
+// Provenance is the check of the chip image in dir before its app is pushed, and what it is
+// for the log: an imported release's chain (dist.CheckProvenance) with ProjectPub's key and
+// the release key in dataDir, each read again when it runs; nothing for your own build (a
+// chip image with no provenance), whose label says so.
+func Provenance(dir, dataDir string) (string, func([]byte) error) {
+	signers := func() (dist.Signers, error) { return dist.LoadSigners(ProjectPub, dataDir) }
+	s, err := signers()
+	label := dist.ReadOrigin(dir, s).Label
+	if err != nil {
+		label = err.Error()
+	}
+	return label, func(app []byte) error {
+		s, err := signers()
+		if err != nil {
+			return err
+		}
+		_, err = dist.CheckProvenance(dir, app, s)
+		return err
+	}
+}
+
+func loadFirmware(read func(string) ([]byte, error), specs []string, board, dataDir string, logf func(string, ...any)) ([]fleet.Firmware, error) {
 	if len(specs) == 0 {
 		return nil, errors.New("need -image")
 	}
@@ -290,6 +362,7 @@ func loadFirmware(read func(string) ([]byte, error), specs []string, board strin
 				return nil, fmt.Errorf("%s/image.json: %w", s, err)
 			}
 			f.Image, path = meta.Image, filepath.Join(s, "app.bin")
+			f.Origin, f.Check = Provenance(s, dataDir)
 		}
 		app, err := read(path)
 		if err != nil {
@@ -299,8 +372,11 @@ func loadFirmware(read func(string) ([]byte, error), specs []string, board strin
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		f.App, f.Board = app, board
-		logf("%s: %s %s built %s, elf %s, for %s (%d bytes)", path, f.Desc.Project, f.Desc.Version,
-			f.Desc.Built, f.Desc.ElfSHA256, f.Image, len(app))
+		if f.Origin == "" {
+			f.Origin = "your build"
+		}
+		logf("%s: %s %s built %s, elf %s, for %s (%d bytes; %s)", path, f.Desc.Project, f.Desc.Version,
+			f.Desc.Built, f.Desc.ElfSHA256, f.Image, len(app), f.Origin)
 		out = append(out, f)
 	}
 	return out, nil

@@ -44,6 +44,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import release  # noqa: E402
 
 APP_DESC_OFF = 32  # esp_image_header_t (24) + first segment header (8)
+# Sibling chip images (firmware/CMakeLists.txt): the same chip and flash layout, built
+# differently. A node moves between them over the air, the app signed for the image it runs.
+SIBLINGS = {"esp32s3-octal": "esp32s3-eth", "esp32s3-eth": "esp32s3-octal"}
 
 
 def app_desc(image):
@@ -192,9 +195,11 @@ def prepare(a):
         # The name the node checks: its chip image; or, on firmware from before board
         # definitions, the board it was built for (only a transitional image for that board fits).
         if "image" in cur:
-            if cur["image"] != a.image_name:
+            if cur["image"] != a.image_name and SIBLINGS.get(cur["image"]) != a.image_name:
                 sys.exit(f"node runs chip image {cur['image']}, this is {a.image_name}")
-            name = a.image_name
+            if cur["image"] != a.image_name:
+                print(f"node runs chip image {cur['image']}: moving it to its sibling {a.image_name}")
+            name = cur["image"]
         else:
             if cur.get("board") != a.board:
                 sys.exit(f"node runs firmware from before board definitions, built for board "
@@ -220,9 +225,9 @@ def sign(a):
         headers["X-OTA-HMAC"] = hmac.new(key, image, hashlib.sha256).hexdigest()
         body = image
     else:
-        # The name the node checks is the chip image this was built as, or, on firmware from
-        # before board definitions, the board it was built for: nothing else
-        if plan["name"] not in (a.image_name, a.board or a.image_name):
+        # The name the node checks is the chip image this was built as or its sibling, or, on
+        # firmware from before board definitions, the board it was built for: nothing else
+        if plan["name"] not in (a.image_name, SIBLINGS.get(a.image_name), a.board or a.image_name):
             sys.exit(f"the plan names {plan['name']!r}, and this is chip image {a.image_name}"
                      f"{f' for board {a.board}' if a.board else ''}: push again")
         key_id = release.KEY_RECOVERY if a.recovery else release.KEY_RELEASE

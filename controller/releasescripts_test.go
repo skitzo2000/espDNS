@@ -169,10 +169,10 @@ func TestGitHubPermissions(t *testing.T) {
 }
 
 // docs/releasing.md: its commands are docker and git (no make), its ESP-IDF image is the
-// pinned one, and the release key's fingerprint it gives is firmware/keys/release.pub's.
+// pinned one, and the release key's fingerprint it gives is the project's, keys/project.pub's.
 func TestReleasingDoc(t *testing.T) {
 	doc := read(t, "../docs/releasing.md")
-	pub, err := os.ReadFile("../firmware/keys/release.pub")
+	pub, err := os.ReadFile("../keys/project.pub")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +228,34 @@ func TestReleasingDoc(t *testing.T) {
 	}
 	if cmds < 10 {
 		t.Errorf("releasing.md: %d commands", cmds)
+	}
+}
+
+// user-compose.sh: the release's compose.yaml, compose.user.yaml with the controller's image
+// by digest, and nothing else changed; anything but a pinned reference is refused.
+func TestUserComposeScript(t *testing.T) {
+	ref := "ghcr.io/skitzo2000/espdns-controller:0.0.4@sha256:" + strings.Repeat("ab", 32)
+	tmpl := read(t, "compose.user.yaml")
+	out, err := script(t, t.TempDir(), nil, "user-compose.sh", "compose.user.yaml", ref)
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if want := strings.Replace(tmpl, `image: "@ESPDNS_IMAGE@"`, "image: "+ref, 1); out != want {
+		t.Errorf("rendered:\n%s\nwant:\n%s", out, want)
+	}
+	for _, bad := range []string{"ghcr.io/skitzo2000/espdns-controller:0.0.4", "espdns-controller@sha256:" + strings.Repeat("ab", 32),
+		ref + "\nimage: x", ref + "|x", ""} {
+		if out, err := script(t, t.TempDir(), nil, "user-compose.sh", "compose.user.yaml", bad); err == nil {
+			t.Errorf("%q: rendered %q", bad, out)
+		}
+	}
+	if out, err := script(t, t.TempDir(), nil, "user-compose.sh", "compose.yaml", ref); err == nil || !strings.Contains(out, "found 0") {
+		t.Errorf("compose.yaml, no placeholder: %v %q", err, out)
+	}
+	for _, wf := range []string{"../.github/workflows/release.yml"} {
+		if w := read(t, wf); !strings.Contains(w, "scripts/release/user-compose.sh controller/compose.user.yaml") ||
+			!strings.Contains(w, "-include ../build/release/compose.yaml") {
+			t.Errorf("%s: the release doesn't carry compose.yaml", wf)
+		}
 	}
 }

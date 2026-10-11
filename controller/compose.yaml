@@ -4,10 +4,14 @@
 #
 #   cp .env.example .env      # once: ESPDNS_UID and ESPDNS_GID (id -u, id -g) are required
 #   mkdir -m 700 data         # once: made by you, so it is yours (docker would make it as root)
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d --no-build   # a release's published image
+#   docker compose up -d --build                             # or: built from this checkout
 #   docker compose logs -f
 #   docker compose down
 #
+# The published image: ESPDNS_IMAGE in .env, ghcr.io/skitzo2000/espdns-controller:<version>
+# (or the line of the release's espdns-<version>-controller-image.txt, by digest); --no-build
+# runs it as it is, and needs none of the build contexts below. Built from the checkout:
 # `docker compose up -d --build` again after a pull or an edit rebuilds the image and
 # restarts the controller on it. The CLI (espdns) is in the same image:
 #   docker compose run --rm -T --entrypoint /espdns espdns-controller <command> -data /data ...
@@ -26,9 +30,10 @@ services:
         # The repository's VERSION, linked into the binaries (the Dockerfile's COPY
         # --from=version): the repository's top, of which its .dockerignore lets in VERSION only
         version: ..
-        # The firmware's public keys, at /keys in the image (the Dockerfile's COPY --from=keys),
-        # which espdns release verify checks a release with: its .dockerignore lets in only them
-        keys: ../firmware/keys
+        # The project's release public key, /keys/project.pub in the image (the Dockerfile's
+        # COPY --from=keys), which espdns release import and fetch check a release with: its
+        # .dockerignore lets in only it
+        keys: ../keys
     image: ${ESPDNS_IMAGE:-espdns-controller}
     # A fixed name: docker logs/stop espdns-controller find it
     container_name: ${ESPDNS_CONTAINER:-espdns-controller}

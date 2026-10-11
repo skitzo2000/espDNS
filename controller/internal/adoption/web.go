@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
@@ -24,9 +25,11 @@ type Web struct {
 	Address  string `json:"address,omitempty"`
 	Gateway  string `json:"gateway,omitempty"`
 	Reserved bool   `json:"reserved,omitempty"`
-	// PrimaryDone: the zone primary isn't changed from here (a manual kind, no address or
-	// token), and the changes the dry run named were made by hand.
-	PrimaryDone bool `json:"primary_done,omitempty"`
+	// Static: the address as + Add node asks for it, never none (the config's): a fixed one
+	// (a.b.c.d/nn) with its gateway, always given (never the config's, which may be another
+	// network's), or dhcp only with Reserved (the router reserves its address for its MAC).
+	// A request without it may leave them out, as the CLI may.
+	Static bool `json:"static,omitempty"`
 	// AddToSettings: once adopted, its address goes into settings.json.
 	AddToSettings bool   `json:"add_to_settings,omitempty"`
 	DryRun        bool   `json:"dry_run,omitempty"`
@@ -48,7 +51,7 @@ var macRE = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
 
 // Request is the request the CLI's flags make for the same adoption, as make fleet-adopt
 // runs it: -data, -mdns 0, -host and -node, -config in the data directory, the settings'
-// zone primary and DNS peers, no flag that loosens the rule.
+// DNS peers, no flag that loosens the rule.
 func (w Web) Request(dataDir, catalog string) (Request, error) {
 	r := Request{DataDir: dataDir, Catalog: catalog, Wait: DefaultWait, DryRun: w.DryRun}
 	if w.Node == "" {
@@ -61,6 +64,29 @@ func (w Web) Request(dataDir, catalog string) (Request, error) {
 		return r, fmt.Errorf(`"config": %w`, err)
 	}
 	switch {
+	case w.Static && w.Address == "dhcp":
+		if !w.Reserved {
+			return r, errors.New(`"address": dhcp only once the node's address is reserved for its MAC in your router ` +
+				`("reserved"); else a fixed address with its prefix length (192.0.2.60/24) and its gateway`)
+		}
+	case w.Static:
+		p, err := netip.ParsePrefix(w.Address)
+		if err != nil || !p.Addr().Is4() || p.Bits() < 1 {
+			return r, fmt.Errorf(`"address": %q: a node added here gets a fixed address with its prefix length (192.0.2.60/24), `+
+				`or dhcp reserved for it in your router`, w.Address)
+		}
+		if w.Gateway == "" {
+			return r, fmt.Errorf(`"gateway": give the gateway for %s: the node's next hop, an address in its own network (%s)`,
+				w.Address, p.Masked())
+		}
+		if g, err := netip.ParseAddr(w.Gateway); err == nil && g.Is4() && !p.Masked().Contains(g) {
+			return r, fmt.Errorf(`"gateway": %s is not in %s, the node's own network: the gateway is its next hop, `+
+				`an address in its own network, whatever routes lie beyond it`, g, p.Masked())
+		}
+		if err := (&nodecfg.Network{Address: w.Address, Gateway: w.Gateway}).Check(); err != nil {
+			return r, fmt.Errorf("%w: the gateway is the node's next hop, another address in its own network (%s), "+
+				"whatever routes lie beyond it", err, p.Masked())
+		}
 	case w.Address == "", w.Address == "dhcp":
 	default:
 		if p, err := netip.ParsePrefix(w.Address); err != nil || !p.Addr().Is4() {
@@ -75,22 +101,19 @@ func (w Web) Request(dataDir, catalog string) (Request, error) {
 			return r, fmt.Errorf(`"gateway": %q is not an IPv4 address`, w.Gateway)
 		}
 	}
-	s, err := settings.Load(settings.Path(dataDir))
-	if err != nil {
+	if _, err := settings.Load(settings.Path(dataDir)); err != nil {
 		return r, err
 	}
 	r.Host, r.Node, r.Address, r.Gateway, r.Reserved = w.Node, w.NodeID, w.Address, w.Gateway, w.Reserved
 	r.Config = filepath.Join(configs.Path(dataDir), w.Config)
-	zp := s.ZonePrimary()
-	r.PrimaryKind, r.PrimaryURL, r.PrimaryDone, r.AddToSettings = zp.Kind, zp.URL, w.PrimaryDone, w.AddToSettings
+	r.AddToSettings = w.AddToSettings
 	return r, nil
 }
 
 // Key is the request's identity for a dry run: what the adoption does, without the choices
-// made only at the adoption itself (the dry run it follows, the changes made by hand, the
-// settings).
+// made only at the adoption itself (the dry run it follows, the settings).
 func (w Web) Key() string {
-	w.DryRun, w.After, w.PrimaryDone, w.AddToSettings = false, "", false, false
+	w.DryRun, w.After, w.AddToSettings = false, "", false
 	b, _ := json.Marshal(w)
 	return string(b)
 }

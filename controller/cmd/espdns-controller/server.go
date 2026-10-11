@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"net/http"
 	"slices"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
 	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/changes"
+	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/fleetlock"
 	"github.com/skitzo2000/espdns/controller/internal/inventory"
@@ -53,9 +53,13 @@ type server struct {
 	changes *changes.Store     // the pending changes (nil: the data directory's)
 	listed  func([]string)     // settings.json's nodes after a save from the browser (nil: polled within 10 s)
 	lookup  nodeLookup         // Add node's lookup at an address typed (nodes.Registry.Lookup)
+	refresh *refresher         // the scheduled blocklist refresh (nil: none runs; a test's)
 	// saveSettings stands in for settings.SaveIf in the settings page's save (nil: SaveIf; a
 	// test fails the write with it).
 	saveSettings func(path, version string, s settings.Settings, before, after func() error) error
+	// releaseURL is where Get firmware fetches releases from without settings.json's
+	// "release_url" ("": the project's, dist.DefaultForge).
+	releaseURL string
 }
 
 // handler is the whole controller over HTTP, outermost first: the security headers
@@ -70,18 +74,12 @@ func (s *server) handler() (http.Handler, []string) {
 	})
 	s.runner.Who = func(r *http.Request) string { return auth.User(r.Context()) }
 	s.runner.Routes(mux)
-	// The release key: whether there is one to sign with, and its fingerprint (never the key).
-	mux.HandleFunc("GET /api/key", func(w http.ResponseWriter, r *http.Request) {
-		out := map[string]any{"source": s.key.String()}
-		k, err := s.key.Key()
-		switch {
-		case err == nil:
-			out["present"], out["fingerprint"] = true, keys.Fingerprint(k)
-		default:
-			out["present"], out["error"], out["missing"] = false, err.Error(), errors.Is(err, keys.ErrNoKey)
-		}
-		writeJSON(w, out)
-	})
+	// The keys (keysapi.go): the release key's state and fingerprint (never the key), the
+	// recovery public key's, making the one and setting the other.
+	keysServer{dataDir: s.dataDir, key: s.key, nodes: s.nodes}.routes(mux)
+	// Rotate keys (rotation.go): a rotation prepared, its signed releases taken, discarded;
+	// the push is the job "key-rotate".
+	rotationServer{dataDir: s.dataDir, key: s.key}.routes(mux)
 	// Who holds the fleet lock now (a CLI rollout, a job), if anyone.
 	mux.HandleFunc("GET /api/lock", func(w http.ResponseWriter, r *http.Request) {
 		h, held, err := fleetlock.Held(fleetlock.Path(s.dataDir))
@@ -109,7 +107,15 @@ func (s *server) handler() (http.Handler, []string) {
 		slices.Reverse(es)
 		writeJSON(w, es)
 	})
+	if s.builder.keys == nil {
+		s.builder.keys = func() ([]byte, []byte, error) { return keys.Public(s.key, s.dataDir) }
+	}
 	s.builder.routes(mux)
+	forge := s.releaseURL
+	if forge == "" {
+		forge = dist.DefaultForge
+	}
+	firmwareServer{dataDir: s.dataDir, forge: forge}.routes(mux)
 	configsServer{dataDir: s.dataDir, catalog: s.catalog, nodes: s.nodes, auth: s.auth}.routes(mux)
 	zonesServer{dataDir: s.dataDir, nodes: s.nodes}.routes(mux)
 	inventoryServer{dataDir: s.dataDir, nodes: s.nodes, dns: s.zoneDNS}.routes(mux)
@@ -120,8 +126,9 @@ func (s *server) handler() (http.Handler, []string) {
 	changesServer{dataDir: s.dataDir, catalog: s.catalog, store: s.changes, nodes: s.nodes, runner: s.runner}.routes(mux)
 	nodeSettingsServer{dataDir: s.dataDir, catalog: s.catalog, nodes: s.nodes, store: s.changes, known: s.push.known}.routes(mux)
 	updatesServer{dataDir: s.dataDir, catalog: s.catalog, store: s.changes, nodes: s.nodes}.routes(mux)
+	fleetBlocking{dataDir: s.dataDir, store: s.changes, nodes: s.nodes, refresh: s.refresh, runner: s.runner}.routes(mux)
+	refreshServer{dataDir: s.dataDir, refresh: s.refresh, runner: s.runner}.routes(mux)
 	setupServer{dataDir: s.dataDir, auth: s.auth, key: s.key, listed: s.listed, saveIf: s.saveSettings}.routes(mux)
-	primaryCertServer{dataDir: s.dataDir}.routes(mux)
 	s.push.routes(mux)
 	s.adopt.routes(mux)
 	addNodeServer{adopt: s.adopt, lookup: s.lookup}.routes(mux)
@@ -129,7 +136,7 @@ func (s *server) handler() (http.Handler, []string) {
 	if s.observe == nil {
 		s.observe = observe.New(&fleet.Client{})
 	}
-	observeServer{store: s.observe}.routes(mux)
+	observeServer{store: s.observe, dataDir: s.dataDir, nodes: s.nodes}.routes(mux)
 	searchServer{dataDir: s.dataDir, nodes: s.nodes, changes: s.changes, log: s.observe}.routes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.Files))
 	return websec.Headers(jobs.LocalOnly(s.auth.Guard(mux.mux))), mux.patterns

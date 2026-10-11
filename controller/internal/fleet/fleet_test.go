@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,6 +297,38 @@ func TestRolloutFirmware(t *testing.T) {
 	}
 }
 
+// Firmware is checked before any node is touched, and again right before each push signs
+// it: its provenance (Firmware.Check), and the keys guards on each node's /status (a node in
+// setup mode, or on firmware from before the keys partition given a key-neutral build, is
+// refused). Nothing is pushed to any node when one is refused.
+func TestRolloutFirmwareGuards(t *testing.T) {
+	w := newWorld(t)
+	a, b := w.node(true), w.node(false)
+	ch := firmwareChange(t, "00000000000000aa")
+	ch.Firmware[0].Check = func([]byte) error { return errors.New("chip image esp32p4-rev1: its provenance doesn't check") }
+	if _, err := w.client().Rollout(context.Background(), fastPlan(a.host, b.host), ch); err == nil ||
+		!strings.Contains(err.Error(), "provenance") || len(w.pushes()) != 0 {
+		t.Fatal("broken provenance wasn't refused before any push:", err)
+	}
+	checks := 0
+	ch.Firmware[0].Check = func([]byte) error { checks++; return nil }
+	for _, c := range []struct{ src, want string }{{"-", "key-neutral"}, {"none", "setup mode"}, {"corrupt", "setup mode"}} {
+		b.keysSource = c.src
+		if _, err := w.client().Rollout(context.Background(), fastPlan(a.host, b.host), ch); err == nil ||
+			!strings.Contains(err.Error(), c.want) || len(w.pushes()) != 0 {
+			t.Fatalf("keys_source %q: %v, %v", c.src, err, w.pushes())
+		}
+	}
+	b.keysSource = ""
+	checks = 0
+	if _, err := w.client().Rollout(context.Background(), fastPlan(a.host, b.host), ch); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 4 { // each node before any is touched, then at each push
+		t.Errorf("provenance checked %d times, want 4", checks)
+	}
+}
+
 // After the reboot the checks wait while a service is still starting: a list loaded after
 // them would flush the cache their queries filled, and blocked names would go unchecked.
 func TestRolloutWaitsForServices(t *testing.T) {
@@ -426,48 +457,41 @@ func TestAdoptDryRun(t *testing.T) {
 	w := newWorld(t)
 	n := w.node(true)
 	n.unadopted, n.addr = true, "192.0.2.252/23"
-	var sets []url.Values
-	var gets int
-	tech := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		if r.Form.Get("token") != "tok" {
-			rw.Write([]byte(`{"status":"invalid-token","errorMessage":"bad token"}`))
-			return
-		}
-		switch r.URL.Path {
-		case "/api/zones/options/get":
-			gets++
-			rw.Write([]byte(`{"status":"ok","response":{"name":"` + r.Form.Get("zone") + `","zoneTransfer":"AllowOnlySpecifiedNameServers",` +
-				`"zoneTransferNameServers":["192.0.2.253"],"notify":"SpecifiedNameServers","notifyNameServers":["192.0.2.253"]}}`))
-		case "/api/zones/options/set":
-			sets = append(sets, r.Form)
-			rw.Write([]byte(`{"status":"ok","response":{}}`))
-		}
-	}))
-	defer tech.Close()
 	zones := []string{"home.example"}
 	cfg := &nodecfg.Config{Secondary: &nodecfg.Secondary{Primary: "192.0.2.254", Zones: &zones}}
+	var advice []string
 	a := Adopt{Host: n.host, ID: n.id, Address: netip.MustParsePrefix("192.0.2.252/23"),
 		Gateway: netip.MustParseAddr("192.0.2.1"), Config: cfg, DryRun: true,
-		Primary: &primary.Technitium{URL: tech.URL, Token: "tok", HTTP: tech.Client(), DryRun: true}}
+		Primary: primary.Config{Address: "192.0.2.254", Allows: []string{"198.51.100.0/24"}},
+		Advice:  func(s string) { advice = append(advice, s) }}
 	c := w.client()
 	var logs []string
 	c.Logf = func(f string, args ...any) { logs = append(logs, f) }
-	a.Primary.(*primary.Technitium).Logf = c.Logf
 	if err := c.Adopt(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
-	if len(w.pushes()) != 0 || len(sets) != 0 || gets != 1 {
-		t.Fatalf("dry run changed something: %v, %d sets, %d gets", w.pushes(), len(sets), gets)
+	if len(w.pushes()) != 0 {
+		t.Fatalf("dry run changed something: %v", w.pushes())
+	}
+	// Not in a network the primary allows: said once, with the node's network, not refused.
+	want := "Your zone primary must allow zone transfers from 192.0.2.252: allow its network (e.g. 192.0.2.0/23) there once."
+	if len(advice) != 1 || advice[0] != want {
+		t.Fatalf("advice %q, want %q", advice, want)
+	}
+	// In one: nothing said.
+	advice = nil
+	a.Primary.Allows = append(a.Primary.Allows, "192.0.2.0/23")
+	if err := c.Adopt(context.Background(), a); err != nil || len(advice) != 0 {
+		t.Fatal(err, advice)
 	}
 	if slices.ContainsFunc(logs, func(s string) bool { return strings.Contains(s, "reserve") }) {
 		t.Fatal("a static address asked for a reservation:", logs)
 	}
 	// A config on DHCP (another network) needs the reservation first.
-	a.DryRun, a.Primary.(*primary.Technitium).DryRun = false, false
+	a.DryRun = false
 	a.Address, a.Gateway, a.DHCP = netip.Prefix{}, netip.Addr{}, true
-	if err := c.Adopt(context.Background(), a); !errors.Is(err, ErrReservation) || len(w.pushes()) != 0 || len(sets) != 0 {
-		t.Fatal(err, w.pushes(), sets)
+	if err := c.Adopt(context.Background(), a); !errors.Is(err, ErrReservation) || len(w.pushes()) != 0 {
+		t.Fatal(err, w.pushes())
 	}
 	a.ID = "aa:bb:cc:dd:ee:ff"
 	a.Reserved = true
@@ -723,12 +747,12 @@ func TestFirmwareAddressCheck(t *testing.T) {
 		refuse string
 	}{
 		{st("firmware", "fallback"), marked("192.0.2.53"), ""},
-		{st("firmware", "fallback"), marked(""), "built into the firmware it runs"},
-		{st("firmware", "fallback"), marked("192.0.2.99"), "has 192.0.2.99 built in"},
-		{st("config", "fallback"), marked(""), "no board partition"},
-		{st("config", ""), marked(""), "no board partition"},
+		{st("firmware", "fallback"), marked(""), "from the firmware it runs"},
+		{st("firmware", "fallback"), marked("192.0.2.99"), "a different address (192.0.2.99)"},
+		{st("config", "fallback"), marked(""), "no address stored on the board"},
+		{st("config", ""), marked(""), "no address stored on the board"},
 		{st("config", "fallback"), marked(netip.AddrFrom4([4]byte{10, 0, 0, 40}).String()), ""}, // a config that moved it: its fallback stays the old one
-		{st("config", "fallback"), marked("192.0.2.40"), "a documentation"},                     // CI's, or an example's
+		{st("config", "fallback"), marked("192.0.2.40"), "an example address"},                  // CI's, or an example's
 		{st("config", "fallback"), marked("192.0.2.53"), ""},                                    // its own
 		{st("config", "partition"), marked(""), ""},                                             // the board partition's address is the fallback
 		{st("board", "partition"), marked(""), ""},
@@ -752,5 +776,36 @@ func TestFirmwareAddressCheck(t *testing.T) {
 	st0.Config = &release.ConfigStatus{AddressFrom: "firmware", IP: a.host + "/24"}
 	if _, _, err := ch.Prepare(context.Background(), a.host, st0); err == nil {
 		t.Fatal("firmware without the node's built-in address was not refused")
+	}
+}
+
+// A node whose board runs its image's sibling now (the catalog, BoardImage) is given the
+// sibling's app when the change has it, else its own image's; a node of another board on
+// the same image keeps its image's; without BoardImage, the image the node runs.
+func TestFirmwareForSibling(t *testing.T) {
+	octal, eth := Firmware{Image: "esp32s3-octal"}, Firmware{Image: "esp32s3-eth"}
+	catalog := func(b string) string {
+		return map[string]string{"ws-s3-eth": "esp32s3-eth", "xiao-s3-sense": "esp32s3-octal", "s3-quad": "esp32s3-quad"}[b]
+	}
+	ws := release.NodeStatus{Image: "esp32s3-octal", Board: "ws-s3-eth"}
+	xiao := release.NodeStatus{Image: "esp32s3-octal", Board: "xiao-s3-sense"}
+	for _, c := range []struct {
+		fw    []Firmware
+		board func(string) string
+		st    release.NodeStatus
+		want  string
+	}{
+		{[]Firmware{octal, eth}, catalog, ws, "esp32s3-eth"},
+		{[]Firmware{octal}, catalog, ws, "esp32s3-octal"},
+		{[]Firmware{eth}, catalog, xiao, ""},
+		{[]Firmware{octal, eth}, catalog, xiao, "esp32s3-octal"},
+		{[]Firmware{octal, eth}, nil, ws, "esp32s3-octal"},
+		{[]Firmware{eth}, catalog, release.NodeStatus{Image: "esp32s3-eth", Board: "ws-s3-eth"}, "esp32s3-eth"},
+		{[]Firmware{octal, eth}, catalog, release.NodeStatus{Image: "esp32s3-quad", Board: "s3-quad"}, ""},
+	} {
+		f, ok := Change{Kind: release.Firmware, Firmware: c.fw, BoardImage: c.board}.FirmwareFor(c.st)
+		if ok != (c.want != "") || f.Image != c.want {
+			t.Errorf("%s on %s, catalog %v: %q %v, want %q", c.st.Board, c.st.Image, c.board != nil, f.Image, ok, c.want)
+		}
 	}
 }

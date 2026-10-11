@@ -1,0 +1,58 @@
+/* The Zones page (zones.html, zones.js): what only it has, on top of shell.css. */
+.zones .r { grid-template-columns: minmax(160px, 1.5fr) minmax(150px, 1.3fr) 80px 1fr 236px 18px }
+.zones .r .name { font-family: var(--mono); font-size: .95em; overflow-wrap: anywhere }
+#add-zone { display: contents }
+@media (max-width: 760px) {
+  #primary-row > summary { grid-template-columns: 1fr 16px }
+  #primary-row > summary .val { grid-row: 2; grid-column: 1; text-align: left; max-width: none }
+}
+.state.warn .dot { background: var(--led-amber) }
+.state.bad .dot { background: var(--bad-solid) }
+.crumb { font-size: 13px; color: var(--muted); text-decoration: none; justify-self: start }
+.crumb:hover { color: var(--fg) }
+#view > div:empty { display: none }
+.zbody { display: grid; gap: 28px; min-width: 0 }
+h1.mono { font-family: var(--mono); font-size: 22px; overflow-wrap: anywhere }
+
+/* + Add zone: what the lookup found, and setting it up by hand */
+.zpanel .manual { border-top: 1px solid var(--line); padding-top: 10px }
+.zpanel .manual summary { cursor: pointer; font-size: 13.5px; color: var(--muted) }
+.zpanel .mopts { display: grid; gap: 8px; margin-top: 10px }
+.zpanel .mopt { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; font-size: 14px }
+.zpanel .mopt input[type=radio] { margin-top: 3px; accent-color: var(--orange) }
+.zpanel .mopt .t { width: 150px; padding: 4px 8px; margin-left: 4px }
+.zpanel .tried { margin: 0; padding-left: 18px }
+
+/* Records */
+.recs { width: 100%; border-collapse: collapse; font-size: 14px }
+.recs th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 8px 18px; border-bottom: 1px solid var(--line) }
+.recs td { padding: 8px 18px; border-bottom: 1px solid var(--line); vertical-align: top }
+.recs td.v { overflow-wrap: anywhere; min-width: 160px }
+.recs td.acts { white-space: nowrap; text-align: right }
+.recs td.acts .btn + .btn { margin-left: 6px }
+.recs tr:last-child td { border-bottom: none }
+.recs tr.pending td { background: var(--sky-soft) }
+.scroll { overflow-x: auto }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .recs tr.pending td { background: var(--hover) } }
+:root[data-theme="dark"] .recs tr.pending td { background: var(--hover) }
+@media (max-width: 760px) {
+  .recs th, .recs td { padding: 8px 12px }
+  .recs .hide-n { display: none }
+  .recs td.v { min-width: 120px }
+  .recs td.acts { white-space: normal; width: 1% }
+  .recs td.acts .btn { display: block; width: 100% }
+  .recs td.acts .btn + .btn { margin: 6px 0 0 }
+  .zones .r .chev { justify-self: end }
+}
+/* At phone width a zone's row is its name (with the arrow), then where it comes from and its
+   state, each on a line of its own: the name keeps the row's width. */
+@media (max-width: 760px) {
+  .zones .r > * { grid-column: 1 / -1 }
+  .zones .r > .name { grid-column: 1 }
+  .zones .r > .chev { grid-area: 1 / 2 }
+}
+
+textarea.t.zfile { min-height: 320px; font-family: var(--mono); font-size: 13px; line-height: 1.5; resize: vertical }
+.vers { display: grid }
+.vers .change:first-child { border-top: none }
+.lines { margin: 0; padding-left: 18px; font-size: 13px }

@@ -76,6 +76,7 @@ void app_main(void)
 
     power_init();       /* the clock holds (power.h); no scaling until the listeners are open */
     board_load();
+    ota_trust();     /* the keys partition (seeded on the first boot), before any release is checked */
     share_init();    /* the memory plan's board values, for the config check below */
     sd_start();      /* mounts while the settings load and the network comes up */
     settings_load(); /* node config over the board and firmware defaults; before anything uses it */

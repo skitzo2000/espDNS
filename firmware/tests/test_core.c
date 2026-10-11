@@ -31,8 +31,10 @@
 #include "forward.h"
 #include "fwdq.h"
 #include "health.h"
+#include "load.h"
 #include "reboot.h"
 #include "hzone.h"
+#include "keys.h"
 #include "mbedtls/sha256.h"
 #include "memplan.h"
 #include "release.h"
@@ -3204,6 +3206,15 @@ static void test_release(void)
     other.board_alt = "test-boar";
     CHECK(rel_verify(V_FW, &other, 0, UINT64_MAX, &m) != NULL);
 
+    /* a sibling image (the same chip and layout, built differently): its own name, or its
+     * sibling's, what a node that moved over the air has stored or is pushed */
+    other = t;
+    other.board = "esp32s3-eth";
+    other.sibling = V_BOARD;
+    CHECK(rel_verify(V_FW, &other, 0, UINT64_MAX, &m) == NULL);
+    other.sibling = "test-boar";
+    CHECK(rel_verify(V_FW, &other, 0, UINT64_MAX, &m) != NULL);
+
     /* recovery key, addressed to any node, so it also passes on another node */
     CHECK(rel_verify(V_BL, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_BLOCKLIST && m.key_id == 1);
     other = t;
@@ -3758,6 +3769,222 @@ static void test_board_defs(void)
 }
 
 
+/* ---- the UDP receive queue under load (load.h) ---- */
+
+/* n queries received at now_ms, every one dropped or none; the queue's fill as it says. */
+static void load_n(load_t *l, int n, bool dropped, int waiting, uint32_t now_ms)
+{
+    for (int i = 0; i < n; i++)
+        load_rx(l, dropped, waiting, now_ms);
+}
+
+typedef struct {
+    load_t *l;
+    int i;
+} load_arg_t;
+
+/* A worker shedding a thousand queries for their deadline. */
+static void *load_shedder(void *p)
+{
+    load_arg_t *a = p;
+    for (int k = 0; k < 1000; k++)
+        load_expired(a->l, 1000000u + (uint32_t)(10 * k + a->i));
+    return NULL;
+}
+
+static void test_load(void)
+{
+    static load_t l;
+    load_window_t w;
+    uint64_t full;
+    uint32_t expired;
+    load_init(&l);
+    load_get(&l, 0, &w);
+    CHECK(w.received == 0 && w.dropped == 0 && !load_overloaded(&w));
+
+    /* What the receive task counts reaches the window by LOAD_FLUSH_N queries... */
+    load_rx(&l, false, 0, 20000);
+    load_n(&l, LOAD_FLUSH_N - 2, false, 0, 20000);
+    load_get(&l, 20000, &w);
+    uint32_t base = w.received; /* the first, in a new bucket */
+    load_rx(&l, false, 0, 20000);
+    load_get(&l, 20000, &w);
+    CHECK(w.received == LOAD_FLUSH_N && w.dropped == 0 && base <= 1);
+    /* ...or LOAD_FLUSH_MS, or a receive timeout, or a new bucket. */
+    load_rx(&l, false, 0, 20001);
+    load_get(&l, 20001, &w);
+    CHECK(w.received == LOAD_FLUSH_N);
+    load_rx(&l, false, 0, 20000 + LOAD_FLUSH_MS);
+    load_get(&l, 20000 + LOAD_FLUSH_MS, &w);
+    CHECK(w.received == LOAD_FLUSH_N + 2);
+    load_rx(&l, false, 0, 20000 + LOAD_FLUSH_MS + 1);
+    load_idle(&l, 0, 20000 + LOAD_FLUSH_MS + 2);
+    load_get(&l, 20000 + LOAD_FLUSH_MS + 2, &w);
+    CHECK(w.received == LOAD_FLUSH_N + 3);
+    load_rx(&l, true, MP_UDP_QUEUE, 24999);
+    load_rx(&l, false, 0, 25000);
+    load_get(&l, 25000, &w);
+    CHECK(w.received == LOAD_FLUSH_N + 4 && w.dropped == 1);
+    load_idle(&l, 0, 25001);
+    load_get(&l, 25001, &w);
+    CHECK(w.received == LOAD_FLUSH_N + 5 && w.dropped == 1 && !load_overloaded(&w));
+
+    /* A tenth dropped, and a queue's worth: overloaded; a query fewer isn't. */
+    load_init(&l);
+    load_n(&l, 9 * LOAD_SHED_MIN, false, 0, 40000);
+    load_n(&l, LOAD_SHED_MIN - 1, true, MP_UDP_QUEUE, 40000);
+    load_idle(&l, MP_UDP_QUEUE, 40000);
+    load_get(&l, 40000, &w);
+    CHECK(w.received == 10 * LOAD_SHED_MIN - 1 && w.dropped == LOAD_SHED_MIN - 1 && !load_overloaded(&w));
+    load_rx(&l, true, MP_UDP_QUEUE, 40000);
+    load_idle(&l, MP_UDP_QUEUE, 40000);
+    load_get(&l, 40000, &w);
+    CHECK(w.dropped == LOAD_SHED_MIN && load_overloaded(&w));
+    /* More answered dilutes it: a node that drops one in twenty isn't overloaded. */
+    load_n(&l, 10 * LOAD_SHED_MIN, false, 0, 41000);
+    load_idle(&l, 0, 41000);
+    load_get(&l, 41000, &w);
+    CHECK(!load_overloaded(&w));
+
+    /* A flood: most dropped, bucket after bucket, then over: it clears once the window has
+     * passed (give or take a bucket). */
+    load_init(&l);
+    uint32_t t = 100000;
+    for (; t < 100000 + 20000; t += 10) {
+        load_n(&l, 10, false, MP_UDP_QUEUE, t);
+        load_n(&l, 20, true, MP_UDP_QUEUE, t);
+    }
+    load_get(&l, t, &w);
+    CHECK(load_overloaded(&w) && w.dropped > w.received / 2);
+    for (; t < 100000 + 20000 + LOAD_WINDOW_MS - LOAD_BUCKET_MS - 10; t += 10)
+        load_rx(&l, false, 0, t);
+    load_get(&l, t, &w);
+    CHECK(load_overloaded(&w)); /* the flood's last bucket still in */
+    for (; t < 100000 + 20000 + LOAD_WINDOW_MS + LOAD_BUCKET_MS; t += 10)
+        load_rx(&l, false, 0, t);
+    load_get(&l, t, &w);
+    CHECK(!load_overloaded(&w) && w.dropped == 0);
+
+    /* Long past, read for the first time since: the ms clock 2^31 on (24.8 days), where a
+     * signed difference with the time of the last would read as recent again. */
+    load_init(&l);
+    load_n(&l, 1000, true, MP_UDP_QUEUE, 300000);
+    load_idle(&l, MP_UDP_QUEUE, 300000);
+    load_get(&l, 300000, &w);
+    CHECK(w.dropped == 1000 && load_overloaded(&w));
+    load_get(&l, 300000 + 0x80000000u, &w);
+    CHECK(w.dropped == 0 && !load_overloaded(&w));
+    /* Read on (as health does) and then once the ms clock has come round to the same bucket
+     * (2^32 ms, 49.7 days): no drop since, none read. */
+    load_init(&l);
+    load_n(&l, 1000, true, MP_UDP_QUEUE, 600000);
+    load_idle(&l, MP_UDP_QUEUE, 600000);
+    load_get(&l, 600000 + LOAD_WINDOW_MS + LOAD_BUCKET_MS, &w);
+    CHECK(w.dropped == 0);
+    load_get(&l, 600000, &w);
+    CHECK(w.dropped == 0 && !load_overloaded(&w));
+    /* At the end of the ms clock (49.7 days), as anywhere. */
+    load_init(&l);
+    load_n(&l, 100, true, MP_UDP_QUEUE, UINT32_MAX - 1000);
+    load_idle(&l, MP_UDP_QUEUE, UINT32_MAX - 999);
+    load_get(&l, UINT32_MAX, &w);
+    CHECK(w.dropped == 100 && w.received == 100 && load_overloaded(&w));
+    /* Counted, then nothing handed on until the window has left its bucket (the receive task
+     * waited that long for a free item): not put in a newer bucket's place. */
+    load_init(&l);
+    load_n(&l, 5, true, MP_UDP_QUEUE, 700000);
+    load_idle(&l, 0, 700000 + 6 * LOAD_WINDOW_MS);
+    load_get(&l, 700000 + 6 * LOAD_WINDOW_MS, &w);
+    CHECK(w.received == 0 && w.dropped == 0);
+    /* Noted just after the reader read the clock, in the next bucket: now. */
+    load_init(&l);
+    load_n(&l, 3, false, 0, 3 * LOAD_BUCKET_MS);
+    load_idle(&l, 0, 3 * LOAD_BUCKET_MS);
+    load_get(&l, 3 * LOAD_BUCKET_MS - 1, &w);
+    CHECK(w.received == 3);
+
+    /* The queue's full time (/metrics): from the first query it had no place for until it has
+     * drained to LOAD_LOW_WATER, receive timeouts included; a total that stays. */
+    load_init(&l);
+    load_rx(&l, false, MP_UDP_QUEUE, 800000); /* full, but nothing dropped yet: not counted */
+    load_rx(&l, true, MP_UDP_QUEUE, 800010);
+    load_rx(&l, false, LOAD_LOW_WATER + 1, 800050);
+    load_idle(&l, LOAD_LOW_WATER + 1, 801000);
+    load_totals(&l, &full, &expired);
+    CHECK(full == 990);
+    load_rx(&l, false, LOAD_LOW_WATER, 801500); /* drained: full until now */
+    load_rx(&l, false, 0, 802000);
+    load_idle(&l, 0, 803000);
+    load_totals(&l, &full, &expired);
+    CHECK(full == 1490);
+    load_rx(&l, true, MP_UDP_QUEUE, 900000);
+    load_rx(&l, false, 0, 900100);
+    load_idle(&l, 0, 900200);
+    load_get(&l, 900000 + 3 * LOAD_WINDOW_MS, &w);
+    load_totals(&l, &full, &expired);
+    CHECK(full == 1590 && w.received == 0 && expired == 0);
+
+    /* Queries shed for their deadline: they count as dropped for the share, and a queue's
+     * worth in the window is overloaded on its own; a few aren't (the workers held up for a
+     * moment). */
+    load_init(&l);
+    load_n(&l, 9 * LOAD_SHED_MIN, false, 0, 50000);
+    load_idle(&l, 0, 50000);
+    for (int i = 0; i < LOAD_SHED_MIN / 2; i++)
+        load_expired(&l, 50000 + (uint32_t)i);
+    load_n(&l, LOAD_SHED_MIN / 2 - 1, true, MP_UDP_QUEUE, 50100);
+    load_idle(&l, 0, 50100);
+    load_get(&l, 51000, &w);
+    CHECK(w.expired == LOAD_SHED_MIN / 2 && w.dropped == LOAD_SHED_MIN / 2 - 1 && !load_overloaded(&w));
+    load_rx(&l, true, MP_UDP_QUEUE, 51000);
+    load_idle(&l, 0, 51000);
+    load_get(&l, 51000, &w);
+    CHECK(load_overloaded(&w));
+    load_init(&l);
+    load_n(&l, 100 * LOAD_EXPIRED_MIN, false, 0, 60000);
+    load_idle(&l, 0, 60000);
+    for (int i = 0; i < LOAD_EXPIRED_MIN - 1; i++)
+        load_expired(&l, 60000 + (uint32_t)i);
+    load_get(&l, 61000, &w);
+    CHECK(w.expired == LOAD_EXPIRED_MIN - 1 && w.dropped == 0 && !load_overloaded(&w));
+    load_expired(&l, 61000);
+    load_get(&l, 61000, &w);
+    CHECK(w.expired == LOAD_EXPIRED_MIN && load_overloaded(&w));
+    load_get(&l, 61000 + LOAD_WINDOW_MS + LOAD_BUCKET_MS, &w);
+    CHECK(w.expired == 0 && !load_overloaded(&w));
+    /* The total since boot doesn't leave with the window. */
+    load_totals(&l, &full, &expired);
+    CHECK(expired == LOAD_EXPIRED_MIN);
+
+    /* The deadline: at LOAD_DEADLINE_MS, not before; a query stamped just after the worker
+     * read the clock isn't late; across the ms clock's wrap. */
+    CHECK(!load_stale(10000, 10000 + LOAD_DEADLINE_MS - 1));
+    CHECK(load_stale(10000, 10000 + LOAD_DEADLINE_MS));
+    CHECK(!load_stale(10005, 10000));
+    CHECK(load_stale(UINT32_MAX - 500, LOAD_DEADLINE_MS - 500));
+    CHECK(!load_stale(UINT32_MAX - 500, LOAD_DEADLINE_MS - 502));
+
+    /* Sheds from four workers at once while the receive task counts and health reads: none
+     * lost. */
+    load_init(&l);
+    pthread_t th[4];
+    load_arg_t a[4];
+    for (int i = 0; i < 4; i++) {
+        a[i] = (load_arg_t){ &l, i };
+        CHECK(pthread_create(&th[i], NULL, load_shedder, &a[i]) == 0);
+    }
+    for (int k = 0; k < 10000; k++) {
+        load_rx(&l, k % 3 == 0, MP_UDP_QUEUE, 1000000u + (uint32_t)k);
+        if (k % 100 == 0)
+            load_get(&l, 1000000u + (uint32_t)k, &w);
+    }
+    load_idle(&l, 0, 1010000);
+    for (int i = 0; i < 4; i++)
+        pthread_join(th[i], NULL);
+    load_totals(&l, &full, &expired);
+    CHECK(expired == 4000);
+}
+
 /* ---- health ---- */
 
 /* A node answering with everything working. */
@@ -3781,7 +4008,7 @@ static void test_health(void)
     /* Each degraded source alone, with its reason; still answering. */
     static const uint32_t deg[] = { HR_SD, HR_BLOCKING, HR_ZONE_EXPIRED, HR_ZONE_REFRESH,
                                     HR_LOW_MEMORY, HR_BOARD, HR_UPSTREAM, HR_CONFIG, HR_OLDER_COPY,
-                                    HR_FWD_SLOW };
+                                    HR_FWD_SLOW, HR_OVERLOADED, HR_NO_KEYS };
     for (size_t i = 0; i < sizeof(deg) / sizeof(*deg); i++) {
         in = healthy_in();
         switch (deg[i]) {
@@ -3793,7 +4020,9 @@ static void test_health(void)
         case HR_BOARD: in.board_missing = true; break;
         case HR_UPSTREAM: in.fwd.fails = 9; in.fwd.since_ms = 10000; break;
         case HR_FWD_SLOW: in.fwd.shed = 1; break;
+        case HR_OVERLOADED: in.load = (load_window_t){ .received = 1000, .dropped = 50, .expired = 50 }; break;
         case HR_CONFIG: in.config_error = true; break;
+        case HR_NO_KEYS: in.no_keys = true; break;
         case HR_OLDER_COPY: in.older = SVC_BIT(SVC_BLOCKING); break;
         }
         h = health_compute(&in);
@@ -3858,6 +4087,32 @@ static void test_health(void)
     in = healthy_in();
     in.fwd = (health_fwd_t){ .fails = 9, .since_ms = 0, .ended = 9, .slow = 9 };
     CHECK(health_compute(&in).reasons == (HR_UPSTREAM | HR_FWD_SLOW));
+
+    /* Overloaded: a tenth of the UDP queries received in the window dropped, and a
+     * queue's worth; whatever services are on (the DNS service is always on). */
+    in = healthy_in();
+    in.load = (load_window_t){ .received = 100000, .dropped = 9999 };
+    CHECK(health_compute(&in).state == HEALTH_HEALTHY);
+    in.load.dropped = 10000;
+    h = health_compute(&in);
+    CHECK(h.state == HEALTH_DEGRADED && h.reasons == HR_OVERLOADED && health_answering(h.state));
+    health_json(&h, js, sizeof(js));
+    CHECK(!strcmp(js, "\"state\":\"degraded\",\"answering\":true,\"reasons\":[\"overloaded\"]"));
+    /* Few queries, most dropped: a moment's burst, under a queue's worth, isn't. */
+    in.load = (load_window_t){ .received = LOAD_SHED_MIN, .dropped = LOAD_SHED_MIN - 1 };
+    CHECK(health_compute(&in).state == HEALTH_HEALTHY);
+    in.load.dropped = LOAD_SHED_MIN;
+    in.enabled = SVC_BIT(SVC_DNS);
+    CHECK(health_compute(&in).reasons == HR_OVERLOADED);
+    /* A queue's worth shed for their deadline, however many were answered. */
+    in.load = (load_window_t){ .received = 1000000, .expired = LOAD_EXPIRED_MIN - 1 };
+    CHECK(health_compute(&in).reasons == 0);
+    in.load.expired = LOAD_EXPIRED_MIN;
+    CHECK(health_compute(&in).reasons == HR_OVERLOADED);
+    /* Overloaded and the forwarders slow (their sheds) at once: both listed. */
+    in.enabled = SVC_ALL;
+    in.fwd.shed = 3;
+    CHECK(health_compute(&in).reasons == (HR_OVERLOADED | HR_FWD_SLOW));
 
     /* Several reasons at once, all listed. */
     in = healthy_in();
@@ -5144,6 +5399,375 @@ static void test_cfg_reboot_vectors(void)
     free(text);
 }
 
+/* A hex string into out (at most cap bytes); the bytes written. */
+static size_t unhex(const char *hex, uint8_t *out, size_t cap)
+{
+    size_t n = strlen(hex) / 2;
+    CHECK(n <= cap);
+    for (size_t i = 0; i < n && i < cap; i++)
+        sscanf(hex + 2 * i, "%2hhx", &out[i]);
+    return n < cap ? n : cap;
+}
+
+/* A slot's 4 KB sector from a vector: its record, the rest 0xFF; "" an erased sector. */
+static void keys_sector(const char *hex, uint8_t sector[KEYS_SLOT_SIZE])
+{
+    memset(sector, 0xFF, KEYS_SLOT_SIZE);
+    unhex(hex, sector, KEYS_REC_LEN);
+}
+
+static const char *vec_key(const cJSON *keys, const cJSON *v, const char *field)
+{
+    return cJSON_GetObjectItem(keys, cJSON_GetObjectItem(v, field)->valuestring)->valuestring;
+}
+
+/* The keys partition (keys.h) against tools/keyspart.py's vectors (tests/keys_vectors.json):
+ * the same bytes packed, the same reasons for a bad record, the same slot picked. */
+static void test_keys(void)
+{
+    size_t len;
+    char *text = read_file("keys_vectors.json", &len);
+    CHECK(text);
+    cJSON *vec = cJSON_ParseWithLength(text, len);
+    CHECK(vec);
+    const cJSON *keys = cJSON_GetObjectItem(vec, "keys"), *fps = cJSON_GetObjectItem(vec, "fingerprints"), *v, *k;
+    uint8_t rec[KEYS_REC_LEN], want[KEYS_REC_LEN];
+    static uint8_t a[KEYS_SLOT_SIZE], b[KEYS_SLOT_SIZE];
+    keys_slot_t s, got;
+    char fp[17], why[160];
+    int which, n;
+
+    /* the test keys: points on the curve, fingerprinted as /status shows them */
+    cJSON_ArrayForEach(k, keys)
+    {
+        uint8_t pub[KEYS_PUB_LEN];
+        CHECK(unhex(k->valuestring, pub, sizeof(pub)) == KEYS_PUB_LEN && keys_point_ok(pub));
+        keys_fingerprint(pub, fp);
+        CHECK(strcmp(fp, cJSON_GetObjectItem(fps, k->string)->valuestring) == 0);
+    }
+
+    n = 0;
+    cJSON_ArrayForEach(v, cJSON_GetObjectItem(vec, "packs"))
+    {
+        const char *name = cJSON_GetObjectItem(v, "name")->valuestring;
+        const cJSON *ret = cJSON_GetObjectItem(v, "retired");
+        memset(&s, 0, sizeof(s));
+        memset(s.retired, 0xFF, KEYS_PUB_LEN);
+        s.generation = (uint32_t)cJSON_GetObjectItem(v, "generation")->valuedouble;
+        s.source = (uint8_t)cJSON_GetObjectItem(v, "source")->valueint;
+        s.seq = strtoull(cJSON_GetObjectItem(v, "seq")->valuestring, NULL, 10);
+        unhex(vec_key(keys, v, "release"), s.release, KEYS_PUB_LEN);
+        unhex(vec_key(keys, v, "recovery"), s.recovery, KEYS_PUB_LEN);
+        if (cJSON_IsString(ret)) {
+            s.flags = KEYS_FLAG_RETIRED;
+            unhex(vec_key(keys, v, "retired"), s.retired, KEYS_PUB_LEN);
+        }
+        keys_pack(&s, rec);
+        CHECK(unhex(cJSON_GetObjectItem(v, "record")->valuestring, want, sizeof(want)) == KEYS_REC_LEN);
+        if (memcmp(rec, want, KEYS_REC_LEN) != 0)
+            fprintf(stderr, "keys pack \"%s\": differs from keyspart.py\n", name);
+        CHECK(memcmp(rec, want, KEYS_REC_LEN) == 0);
+        CHECK(keys_parse(rec, &got) == NULL && memcmp(&got, &s, sizeof(s)) == 0);
+        n++;
+    }
+    CHECK(n >= 5);
+
+    n = 0;
+    cJSON_ArrayForEach(v, cJSON_GetObjectItem(vec, "parses"))
+    {
+        const char *name = cJSON_GetObjectItem(v, "name")->valuestring;
+        const cJSON *e = cJSON_GetObjectItem(v, "error");
+        CHECK(unhex(cJSON_GetObjectItem(v, "record")->valuestring, rec, sizeof(rec)) == KEYS_REC_LEN);
+        const char *err = keys_parse(rec, &got);
+        bool ok = cJSON_IsString(e) ? err && strcmp(err, e->valuestring) == 0 : err == NULL;
+        if (!ok)
+            fprintf(stderr, "keys parse \"%s\": got %s\n", name, err ? err : "valid");
+        CHECK(ok);
+        n++;
+    }
+    CHECK(n >= 20);
+
+    n = 0;
+    cJSON_ArrayForEach(v, cJSON_GetObjectItem(vec, "picks"))
+    {
+        const char *name = cJSON_GetObjectItem(v, "name")->valuestring;
+        const char *state = cJSON_GetObjectItem(v, "state")->valuestring;
+        keys_sector(cJSON_GetObjectItem(v, "a")->valuestring, a);
+        keys_sector(cJSON_GetObjectItem(v, "b")->valuestring, b);
+        which = -1;
+        keys_state_t st = keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why));
+        bool ok = strcmp(state, st == KEYS_OK        ? "ok"
+                                : st == KEYS_BLANK   ? "blank"
+                                : st == KEYS_FOREIGN ? "foreign"
+                                                     : "corrupt") == 0 &&
+                  cJSON_IsTrue(cJSON_GetObjectItem(v, "seed")) == (st == KEYS_BLANK || st == KEYS_FOREIGN);
+        if (st == KEYS_OK)
+            ok = ok && which == cJSON_GetObjectItem(v, "slot")->valueint &&
+                 got.generation == (uint32_t)cJSON_GetObjectItem(v, "generation")->valuedouble;
+        if (!ok)
+            fprintf(stderr, "keys pick \"%s\": state %d slot %d (%s)\n", name, st, which, why);
+        CHECK(ok);
+        if (st == KEYS_CORRUPT || st == KEYS_FOREIGN)
+            CHECK(why[0]);
+        n++;
+    }
+    CHECK(n >= 10);
+
+    /* an erased record in a sector that isn't erased: not blank, but no keys record either */
+    memset(a, 0xFF, sizeof(a));
+    memset(b, 0xFF, sizeof(b));
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why)) == KEYS_BLANK && why[0] == 0);
+    b[KEYS_SLOT_SIZE - 1] = 0xFE;
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why)) == KEYS_FOREIGN);
+    /* the magic alone, the rest erased: a damaged keys record, never seeded over */
+    memcpy(b, "EDKY", 4);
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why)) == KEYS_CORRUPT);
+    /* the why names a bad slot, and says nothing of an erased one beside a good one */
+    keys_sector(cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(vec, "packs"), 0), "record")->valuestring, a);
+    memset(b, 0xFF, sizeof(b));
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why)) == KEYS_OK && which == 0 && why[0] == 0);
+    b[0] = 0;
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, why, sizeof(why)) == KEYS_OK && which == 0 &&
+          strcmp(why, "slot B: not a keys record") == 0);
+    /* a slot shorter than a record is never valid */
+    CHECK(keys_pick(a, a, KEYS_REC_LEN - 1, &got, &which, NULL, 0) == KEYS_CORRUPT);
+    CHECK(keys_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
+
+    cJSON_Delete(vec);
+    free(text);
+}
+
+/* What a node does with its keys at boot (keys_decide), with and without a seed: a
+ * key-neutral build falls back on nothing (setup mode); a seed build seeds them. */
+static void test_keys_decide(void)
+{
+    static const struct {
+        bool part_ok;
+        keys_state_t st;
+        bool seed;
+        keys_use_t want;
+        const char *source;
+        bool setup;
+    } t[] = {
+        /* a valid slot wins, seed or not */
+        { true, KEYS_OK, false, KEYS_USE_SLOT, "partition", false },
+        { true, KEYS_OK, true, KEYS_USE_SLOT, "partition", false },
+        /* no keys record: seeded from the build's seed, else none */
+        { true, KEYS_BLANK, true, KEYS_USE_SEED, "seeded", false },
+        { true, KEYS_FOREIGN, true, KEYS_USE_SEED, "seeded", false },
+        { true, KEYS_BLANK, false, KEYS_USE_NONE, "none", true },
+        { true, KEYS_FOREIGN, false, KEYS_USE_NONE, "none", true },
+        /* a damaged keys record: never seeded over; the seed meanwhile, else none */
+        { true, KEYS_CORRUPT, true, KEYS_USE_CORRUPT_SEED, "corrupt", false },
+        { true, KEYS_CORRUPT, false, KEYS_USE_CORRUPT_NONE, "corrupt", true },
+        /* the partition can't be used: the seed, else none (whatever it would have held) */
+        { false, KEYS_OK, true, KEYS_USE_EMBEDDED, "embedded", false },
+        { false, KEYS_BLANK, true, KEYS_USE_EMBEDDED, "embedded", false },
+        { false, KEYS_OK, false, KEYS_USE_NONE, "none", true },
+        { false, KEYS_CORRUPT, false, KEYS_USE_NONE, "none", true },
+    };
+    for (size_t i = 0; i < sizeof(t) / sizeof(*t); i++) {
+        keys_use_t u = keys_decide(t[i].part_ok, t[i].st, t[i].seed);
+        bool ok = u == t[i].want && !strcmp(keys_use_source(u), t[i].source) && keys_use_setup(u) == t[i].setup;
+        if (!ok)
+            fprintf(stderr, "keys_decide case %zu: %d (%s)\n", i, u, keys_use_source(u));
+        CHECK(ok);
+    }
+    /* No keys is degraded, with its reason; it still answers. */
+    health_in_t in = healthy_in();
+    in.no_keys = true;
+    health_t h = health_compute(&in);
+    CHECK(h.state == HEALTH_DEGRADED && h.reasons == HR_NO_KEYS && health_answering(h.state));
+    char js[128];
+    health_json(&h, js, sizeof(js));
+    CHECK(!strcmp(js, "\"state\":\"degraded\",\"answering\":true,\"reasons\":[\"no keys\"]"));
+    CHECK(!strcmp(health_reason_name(HR_NO_KEYS), "no keys"));
+}
+
+/* The slot keys_node_write would write after cur for KEYS payload p and seq, packed into its
+ * sector (the other one of the two). */
+static void keys_rotate_sector(const keys_slot_t *cur, const uint8_t *p, uint64_t seq, keys_slot_t *next,
+                               uint8_t sector[KEYS_SLOT_SIZE])
+{
+    keys_rel_t r;
+    CHECK(keys_rel_parse(p, KEYS_REL_LEN, &r) == NULL);
+    CHECK(keys_next(cur, &r, seq, next) == NULL);
+    memset(sector, 0xFF, KEYS_SLOT_SIZE);
+    keys_pack(next, sector);
+}
+
+/* KEYS releases (keys.h, release.h REL_KEYS): what a node takes, how it writes the slot not
+ * in use, and the retired key on the stored-slot paths only. */
+static void test_keys_release(void)
+{
+    rel_trust_t t = { .keys = { V_KEY0, V_KEY1 }, .board = V_BOARD };
+    memcpy(t.node_id, V_NODE, 6);
+    rel_manifest_t m;
+    const char *why;
+
+    /* signed with the recovery key for this node: taken */
+    CHECK(rel_verify(V_KEYS, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_KEYS && m.key_id == 1);
+    CHECK(rel_keys_check(&m, &t) == NULL && m.payload_len == KEYS_REL_LEN && m.seq == 4000);
+    CHECK(strcmp(rel_kind_name(REL_KEYS), "keys") == 0 && REL_KEYS == 7);
+    /* with the release key: a valid signature, but never for KEYS */
+    CHECK(rel_verify(V_KEYS_REL0, &t, 0, UINT64_MAX, &m) == NULL && m.key_id == 0);
+    why = rel_keys_check(&m, &t);
+    CHECK(why && strstr(why, "recovery key"));
+    /* addressed to any node: refused */
+    CHECK(rel_verify(V_KEYS_ANY, &t, 0, UINT64_MAX, &m) == NULL);
+    why = rel_keys_check(&m, &t);
+    CHECK(why && strstr(why, "one node"));
+    /* another node, another chip image */
+    rel_trust_t other = t;
+    other.node_id[5] ^= 1;
+    CHECK(rel_verify(V_KEYS, &other, 0, UINT64_MAX, &m) != NULL);
+    other = t;
+    other.board = "other-board";
+    why = rel_verify(V_KEYS, &other, 0, UINT64_MAX, &m);
+    CHECK(why && strstr(why, "another chip image"));
+    other.sibling = V_BOARD; /* a sibling image's, as other kinds */
+    CHECK(rel_verify(V_KEYS, &other, 0, UINT64_MAX, &m) == NULL);
+    /* replay: the seq must be above the last KEYS seq */
+    CHECK(rel_verify(V_KEYS, &t, 4000, UINT64_MAX, &m) != NULL);
+    CHECK(rel_verify(V_KEYS, &t, 3999, UINT64_MAX, &m) == NULL);
+    /* not a KEYS release */
+    CHECK(rel_verify(V_FW, &t, 0, UINT64_MAX, &m) == NULL);
+    CHECK(rel_keys_check(&m, &t) != NULL);
+
+    /* the payload: the bytes tools/release.py made, and every malformed one refused */
+    keys_rel_t r, r2;
+    uint8_t p[KEYS_REL_LEN], q[KEYS_REL_LEN + 1];
+    CHECK(sizeof(V_KEYS_PAYLOAD) == KEYS_REL_LEN);
+    CHECK(keys_rel_parse(V_KEYS_PAYLOAD, KEYS_REL_LEN, &r) == NULL);
+    CHECK(r.flags == KEYS_REL_FLAG_RETIRE && !memcmp(r.release, V_KEY2, 65) && !memcmp(r.recovery, V_KEY3, 65));
+    keys_rel_pack(&r, p);
+    CHECK(memcmp(p, V_KEYS_PAYLOAD, KEYS_REL_LEN) == 0);
+    CHECK(keys_rel_parse(V_KEYS_PAYLOAD, KEYS_REL_LEN - 1, &r2) != NULL);
+    memcpy(q, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    q[KEYS_REL_LEN] = 0;
+    CHECK(keys_rel_parse(q, KEYS_REL_LEN + 1, &r2) != NULL);
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[3] = 'Y'; /* "EDKY": a slot record's magic, not a release's */
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "not a keys release"));
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[4] = 2;
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "version"));
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[6] = 0x03; /* an unknown flag */
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "flags"));
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[8 + 40] ^= 1; /* the release key off the curve */
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "release key"));
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[73 + 40] ^= 1;
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "recovery key"));
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    p[73] = 0x02; /* compressed: not taken */
+    CHECK(keys_rel_parse(p, KEYS_REL_LEN, &r2) != NULL);
+    memcpy(p, V_KEYS_PAYLOAD, KEYS_REL_LEN);
+    memcpy(p + 73, V_KEY2, 65); /* release == recovery */
+    CHECK((why = keys_rel_parse(p, KEYS_REL_LEN, &r2)) && strstr(why, "the same"));
+
+    /* The slot it writes: the node starts on slot A, generation 1 (K0, K1), seeded. */
+    static uint8_t a[KEYS_SLOT_SIZE], b[KEYS_SLOT_SIZE];
+    keys_slot_t cur = { .generation = 1, .source = KEYS_SRC_SEED }, next, got;
+    memcpy(cur.release, V_KEY0, 65);
+    memcpy(cur.recovery, V_KEY1, 65);
+    memset(cur.retired, 0xFF, 65);
+    memset(a, 0xFF, sizeof(a));
+    keys_pack(&cur, a);
+    memset(b, 0xFF, sizeof(b));
+    int which = -1;
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, NULL, 0) == KEYS_OK && which == 0);
+
+    /* a power cut after slot B is erased: A still wins, unchanged */
+    keys_rotate_sector(&cur, V_KEYS_PAYLOAD, 4000, &next, b);
+    static uint8_t half[KEYS_SLOT_SIZE];
+    memset(half, 0xFF, sizeof(half));
+    CHECK(keys_pick(a, half, KEYS_SLOT_SIZE, &got, &which, NULL, 0) == KEYS_OK && which == 0 && got.generation == 1);
+    /* ... or partway through the write (flash writes only clear bits: what is written so
+     * far, the rest erased): A still wins, the half record named in keys_error */
+    for (size_t n = 1; n < KEYS_REC_LEN; n += 17) {
+        memset(half, 0xFF, sizeof(half));
+        memcpy(half, b, n);
+        char w[160];
+        bool ok = keys_pick(a, half, KEYS_SLOT_SIZE, &got, &which, w, sizeof(w)) == KEYS_OK && which == 0 &&
+                  got.generation == 1 && !memcmp(got.release, V_KEY0, 65);
+        if (!ok)
+            fprintf(stderr, "keys power cut after %zu bytes: slot %d generation %lu\n", n, which,
+                    (unsigned long)got.generation);
+        CHECK(ok);
+    }
+    /* written whole: B wins, generation 2, source 3, the seq, K0 kept as the retired key */
+    CHECK(keys_pick(a, b, KEYS_SLOT_SIZE, &got, &which, NULL, 0) == KEYS_OK && which == 1);
+    CHECK(got.generation == 2 && got.source == KEYS_SRC_RELEASE && got.seq == 4000);
+    CHECK(!memcmp(got.release, V_KEY2, 65) && !memcmp(got.recovery, V_KEY3, 65));
+    CHECK(got.flags == KEYS_FLAG_RETIRED && !memcmp(got.retired, V_KEY0, 65));
+
+    /* The retired key, on the stored-slot paths only: a config, zones or list signed with K0
+     * before the rotation still loads at boot; a push signed with it is refused. */
+    rel_trust_t push = { .keys = { got.release, got.recovery }, .board = V_BOARD };
+    memcpy(push.node_id, V_NODE, 6);
+    rel_trust_t stored = push;
+    stored.retired = got.retired;
+    CHECK(rel_verify(V_FW, &stored, 0, UINT64_MAX, &m) == NULL);    /* stored slot (K0) */
+    CHECK(cfg_slot_check(V_CFG, V_CFG_PAYLOAD, sizeof(V_CFG_PAYLOAD), &stored, &m) == NULL);
+    CHECK(cfg_slot_check(V_CFG, V_CFG_PAYLOAD, sizeof(V_CFG_PAYLOAD), &push, &m) != NULL);
+    why = rel_verify(V_FW, &push, 999, UINT64_MAX, &m); /* a push signed with K0 */
+    CHECK(why && strstr(why, "bad signature"));
+    CHECK(rel_verify(V_FW_K2, &push, 0, UINT64_MAX, &m) == NULL);   /* the new key signs */
+    CHECK(rel_verify(V_FW_K2, &stored, 0, UINT64_MAX, &m) == NULL);
+    /* never for the recovery key: a release signed with K1 (key_id 1) fails with K3 in use,
+     * whatever the retired key is */
+    stored.retired = V_KEY1;
+    CHECK(rel_verify(V_BL, &stored, 0, UINT64_MAX, &m) != NULL);
+    CHECK(rel_verify(V_KEYS, &stored, 0, UINT64_MAX, &m) != NULL); /* the old recovery key */
+
+    /* A compromise rotation (no flag): no retired key, so what was stored with K0 fails at the
+     * next boot (until the controller re-pushes it). */
+    keys_rel_t comp = r;
+    comp.flags = 0;
+    CHECK(keys_next(&cur, &comp, 4000, &next) == NULL && next.flags == 0 && keys_blank(next.retired, 65));
+    stored = push;
+    stored.retired = (next.flags & KEYS_FLAG_RETIRED) ? next.retired : NULL;
+    CHECK(rel_verify(V_FW, &stored, 0, UINT64_MAX, &m) != NULL);
+    CHECK(cfg_slot_check(V_CFG, V_CFG_PAYLOAD, sizeof(V_CFG_PAYLOAD), &stored, &m) != NULL);
+    /* the release key kept as it is (a no-op rotation, or a new recovery key only): no
+     * retired key, flag or not */
+    keys_rel_t same = r;
+    memcpy(same.release, V_KEY0, 65);
+    memcpy(same.recovery, V_KEY1, 65);
+    CHECK(keys_next(&cur, &same, 4000, &next) == NULL && next.flags == 0 && next.generation == 2);
+    CHECK(!memcmp(next.release, V_KEY0, 65) && !memcmp(next.recovery, V_KEY1, 65));
+
+    /* Several rotations: each writes the slot not in use with the next generation, and the
+     * one written last wins; its retired key is the release key just replaced. */
+    static uint8_t sec[2][KEYS_SLOT_SIZE];
+    memcpy(sec[0], a, KEYS_SLOT_SIZE);
+    memset(sec[1], 0xFF, KEYS_SLOT_SIZE);
+    const uint8_t *rels[2] = { V_KEY0, V_KEY2 };
+    keys_slot_t now = cur;
+    int in_use = 0;
+    for (int i = 0; i < 6; i++) {
+        keys_rel_t x = { .flags = KEYS_REL_FLAG_RETIRE };
+        memcpy(x.release, rels[(i + 1) % 2], 65);
+        memcpy(x.recovery, i % 2 ? V_KEY1 : V_KEY3, 65);
+        uint8_t pl[KEYS_REL_LEN];
+        keys_rel_pack(&x, pl);
+        keys_rotate_sector(&now, pl, 5000 + (uint64_t)i, &next, sec[1 - in_use]);
+        CHECK(keys_pick(sec[0], sec[1], KEYS_SLOT_SIZE, &got, &which, NULL, 0) == KEYS_OK);
+        CHECK(which == 1 - in_use && got.generation == (uint32_t)(2 + i) && got.seq == 5000 + (uint64_t)i);
+        CHECK(got.flags == KEYS_FLAG_RETIRED && !memcmp(got.retired, now.release, 65));
+        now = got;
+        in_use = which;
+    }
+    /* a generation that would reach the invalid one: refused, nothing written */
+    now.generation = KEYS_GEN_INVALID - 1;
+    CHECK(keys_next(&now, &r, 9000, &next) != NULL);
+    now.generation = KEYS_GEN_INVALID - 2;
+    CHECK(keys_next(&now, &r, 9000, &next) == NULL && next.generation == KEYS_GEN_INVALID - 1);
+}
+
 static void test_sup(void)
 {
     static const uint32_t backoff[] = { 5000, 5000, 10000, 20000, 40000, 80000, 160000, 300000, 300000 };
@@ -5274,6 +5898,7 @@ int main(void)
     test_fwd_random_port();
     test_fwdq_select_backoff();
     test_health_upstream();
+    test_load();
     test_upq();
     test_upq_workers_silent();
     test_query_parse();
@@ -5290,6 +5915,9 @@ int main(void)
     test_place();
     test_cpuplan();
     test_cfg_reboot_vectors();
+    test_keys();
+    test_keys_decide();
+    test_keys_release();
     test_sup();
     test_hosted();
     test_reboot();

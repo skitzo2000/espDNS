@@ -43,14 +43,14 @@ type Adopt struct {
 	Config *nodecfg.Config
 	// Identify flickers the node's LED for this long first, to match it to the board.
 	Identify time.Duration
-	// Primary is the zone primary whose allow lists step 4 changes (internal/primary). One
-	// that isn't reached from here (Ready fails: a manual kind, no address or no token), or
-	// nil (any primary): Adopt says what to change by hand, and goes on only with ManualDone
-	// (a dry run always goes on).
-	Primary primary.Primary
-	// ManualDone: the changes step 4 names were made by hand on the primary (the CLI's
-	// -primary-done, the controller's "I've made the changes").
-	ManualDone bool
+	// Primary is the zone primary as settings.json names it (internal/primary): step 4
+	// says once, for a node carrying secondary zones, when its address is in none of the
+	// networks it allows zone transfers from (Advice). Nothing is changed on the primary,
+	// and nothing waits on it.
+	Primary primary.Config
+	// Advice, if set, hears what step 4 says to set up on the zone primary ("" when the
+	// node's address is in a network it allows, or it carries no secondary zones).
+	Advice func(string)
 	// Check, if set, checks the config with its network set from the address, against the
 	// node's /status, before anything is changed (internal/configs: the editor's and a
 	// config rollout's checks).
@@ -88,11 +88,6 @@ type AdoptResult struct {
 	// nodes are adopted.
 	Servers []string
 }
-
-// ErrManual: the zone primary isn't changed from here (a manual kind, or no API address or
-// token), and its lists aren't confirmed changed by hand.
-var ErrManual = errors.New("the zone primary's allow lists aren't changed from here, " +
-	"so make the changes above by hand on the primary, then confirm they are done")
 
 // ErrReservation: a config on DHCP needs the address reserved first.
 var ErrReservation = errors.New("a config on DHCP needs the node's address reserved in the DHCP server first, then adopt with it reserved")
@@ -221,34 +216,27 @@ func (c *Client) adopt(ctx context.Context, a Adopt, res *AdoptResult) error {
 		}
 	}
 
-	// 4. Allow list on the zone primary, for each secondary zone the node carries.
-	step(4, "the zone primary's allow lists")
+	// 4. The zone primary: set up once to allow zone transfers from the nodes' networks.
+	// Nothing is changed there; when the node's address is in none of the networks it
+	// allows, that is said, once.
+	step(4, "the zone primary")
 	if s := a.Config.Secondary; s != nil && s.Zones != nil && len(*s.Zones) > 0 {
-		driven := a.Primary != nil && a.Primary.Ready() == nil
-		if !driven {
-			for _, z := range *s.Zones {
-				c.logf("4. by hand: %s", ManualSteps(a.Primary, s.Primary, z, addr))
-			}
-			switch {
-			case a.DryRun:
-				c.logf("   (dry run: the adoption itself goes on only once these are confirmed done)")
-			case !a.ManualDone:
-				return fmt.Errorf("4. %w", ErrManual)
-			default:
-				c.logf("   confirmed done by hand")
-			}
+		bits := 0
+		if a.Address.IsValid() {
+			bits = a.Address.Bits()
 		}
-		for _, z := range *s.Zones {
-			if !driven {
-				break
-			}
-			c.logf("4. %s: allowing %s to transfer it and get its NOTIFYs", z, addr)
-			if err := a.Primary.Allow(ctx, z, addr); err != nil {
-				return fmt.Errorf("4. %s: %w", z, err)
+		ip, _ := netip.ParseAddr(addr)
+		if n, ok := a.Primary.Covers(ip); ok {
+			c.logf("4. the zone primary allows zone transfers from %s, which %s is in: nothing to set up there", n, addr)
+		} else {
+			adv := a.Primary.Uncovered(addr, bits)
+			c.logf("4. %s", adv)
+			if a.Advice != nil {
+				a.Advice(adv)
 			}
 		}
 	} else {
-		c.logf("4. no secondary zones: nothing to allow on a primary")
+		c.logf("4. no secondary zones: nothing to copy from a zone primary")
 	}
 
 	// 5. Config, with the address, to the node's current address.
@@ -328,16 +316,6 @@ func (c *Client) adopt(ctx context.Context, a Adopt, res *AdoptResult) error {
 		c.logf("7. adopt a second node, then hand out both as the clients' DNS servers")
 	}
 	return nil
-}
-
-// ManualSteps is the change to make by hand on the zone primary (at the address
-// primaryAddr, as the node config names it) for addr to transfer zone and get its NOTIFYs,
-// in p's terms; p nil: any primary's.
-func ManualSteps(p primary.Primary, primaryAddr, zone, addr string) string {
-	if p == nil {
-		return primary.ManualGeneric(primaryAddr, zone, addr)
-	}
-	return p.Manual(primaryAddr, zone, addr)
 }
 
 // Resolve fills in Address and Gateway from what the node, whose /status is st, runs on

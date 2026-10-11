@@ -1,6 +1,6 @@
-// Shared by the pages: the header (the top bar, the login, the fleet's warnings and the
-// running job), the fleet's nodes and their one name, the API helpers, and small formatting
-// helpers. Everything from a node (names, reasons, log lines) is hostile: text only.
+// Shared by the pages (under shell.js, which draws the top bar): the session, the API
+// helpers, the fleet's nodes and their one name, jobs, and small helpers. Everything from a
+// node (names, reasons, log lines) is hostile: text only.
 
 // ---- the session ------------------------------------------------------------------------
 // A session has two halves (internal/auth): the cookie, which the browser keeps for the host
@@ -45,27 +45,29 @@ function toLogin() {
   location.href = `login.html?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
 }
 
-// getJSON reads an API; a 401 (the session ended) goes to the login page. headers adds to
+// getJSON reads an API; a 401 (the session ended) goes to the login page. It throws an error
+// reply's "error", with its JSON as the error's body. headers adds to
 // the request's (X-Reauth).
 export async function getJSON(url, headers = {}) {
   const r = await api(url, { headers });
   if (r.status === 401) { toLogin(); throw new Error("log in first"); }
   if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).error || msg; } catch { /* not JSON */ }
-    throw new Error(`${url}: ${msg}`);
+    let j = {};
+    try { j = await r.json(); } catch { /* not JSON */ }
+    throw Object.assign(new Error(`${url}: ${(j && j.error) || r.statusText}`), { body: j || {} });
   }
   return r.json();
 }
 
 // post sends JSON with the session's token; a 401 goes to the login page. It returns the
-// reply, or throws its error. headers adds to the request's (X-Reauth).
+// reply, or throws its error (with the reply's JSON as the error's body). headers adds to
+// the request's (X-Reauth).
 export async function post(url, body, headers = {}) {
   const r = await api(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body || {}) });
   let j = {};
   try { j = await r.json(); } catch { /* not JSON */ }
   if (r.status === 401) { toLogin(); throw new Error(j.error || "log in first"); }
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { body: j });
   return j;
 }
 
@@ -197,7 +199,7 @@ export function el(tag, cls, text) {
   return e;
 }
 
-// ---- the fleet: /api/nodes, read every 5 s by the header -----------------------------------
+// ---- the fleet: /api/nodes, read every 5 s for the shell ----------------------------------
 
 const POLL = 5000;
 const fleet = { nodes: null, text: "", error: null, byRef: new Map(), listeners: new Set() };
@@ -257,49 +259,16 @@ export function nodeName(ref, fallback) {
 // nodeText is the name alone, for a sentence, an option or a dialog.
 export const nodeText = (ref, fallback) => nodeName(ref, fallback).name;
 
-// nodeLabel is the name with the host name and address under it, as an element kept up to
-// date as the nodes are read (a page can make it before the first read).
-export function nodeLabel(ref, fallback, opts = {}) {
-  const d = el(opts.inline ? "span" : "div", "nname");
-  if (typeof ref === "string") d.dataset.nref = ref;
-  if (fallback) d.dataset.nfall = fallback;
-  if (opts.inline) d.dataset.ninline = "1";
-  fillLabel(d, nodeName(ref, fallback));
-  return d;
-}
-
-function fillLabel(d, nm) {
-  const main = el("span", "nn", nm.name);
-  if (!nm.sub) { d.replaceChildren(main); return; }
-  d.replaceChildren(main, d.dataset.ninline ? " " : "", el("span", "sub", nm.sub));
-}
-
-function relabel() {
-  for (const d of document.querySelectorAll(".nname[data-nref]")) fillLabel(d, nodeName(d.dataset.nref, d.dataset.nfall));
-}
-
 // answering: a node that answers DNS queries now (read, and its health says it answers).
 export function answering(n) {
   if (!n.online || !n.status) return false;
   const h = n.status.health;
   return !(h && typeof h === "object" && h.answering === false);
 }
+// inService: one of your nodes (in settings.json) and not taken out of service: the nodes
+// that are sent changes and keep DNS answering.
+export const inService = n => n.source === "settings" && !n.out_of_service;
 export const wired = n => !!(n.status && n.status.net && n.status.net.kind === "ethernet");
-
-// A node's state in one word, the same on every page: "offline" when the controller can't
-// read it, else the health state its /status gives ("answering" on firmware from before
-// health states). stateClass is its colour: none for the normal states, warn for degraded,
-// bad for the rest (colour only when abnormal).
-// A state that isn't a string (a node's hostile or broken /status) is "unknown", coloured
-// as a problem, never shown as normal.
-const stateText = s => (s === undefined || s === null || s === "" ? "answering" : typeof s === "string" ? s : "unknown");
-export const stateWord = (online, state) => (!online ? "offline" : stateText(state));
-export function stateClass(online, state) {
-  if (!online) return "bad";
-  const s = stateText(state);
-  return ["healthy", "answering", "updating", "booting"].includes(s) ? "" : s === "degraded" ? "warn" : "bad";
-}
-export const statePill = (online, state) => el("span", `pill ${stateClass(online, state)}`, stateWord(online, state));
 
 async function pollNodes() {
   let changed = false;
@@ -315,13 +284,11 @@ async function pollNodes() {
       fleet.text = text;
       changed = true;
       indexNodes(fleet.nodes);
-      relabel();
     }
   } catch (e) {
     fleet.error = e;
     console.error(e);
   }
-  renderAlerts();
   for (const f of fleet.listeners) {
     try { f(fleet.nodes, { changed, error: fleet.error }); } catch (e) { console.error(e); }
   }
@@ -330,27 +297,8 @@ async function pollNodes() {
 // ---- jobs ------------------------------------------------------------------------------
 
 export const ended = s => ["done", "failed", "stopped"].includes(s);
-// A job's state as a pill's class: only a failure is coloured.
-export const jobPill = s => (s === "failed" ? "bad" : "");
-
 export function jobParams(j) {
   try { const p = JSON.parse((j.args || [])[0] || "{}"); return p && typeof p === "object" ? p : {}; } catch { return {}; }
-}
-
-// jobWhat is what a job does, in words: its kind and its target (a node by its one name).
-export function jobWhat(j) {
-  const p = jobParams(j);
-  const parts = [str(j.kind)];
-  if (typeof p.node === "string") parts.push(nodeText(p.node));
-  if (typeof p.seconds === "number") parts.push(`${p.seconds} s`);
-  if (typeof p.config === "string") parts.push(p.config);
-  if (typeof p.zone === "string") parts.push(p.zone);
-  if (j.kind === "rollout" && typeof p.kind === "string") {
-    parts.push(p.kind, `to ${Array.isArray(p.nodes) ? p.nodes.length : 0} node(s)`);
-    if (typeof p.file === "string") parts.push(p.file);
-  }
-  if (p.dry_run === true) parts.push("(dry run)");
-  return parts.join(" ");
 }
 
 // waitJob polls a job until it ends, and returns it.
@@ -362,107 +310,7 @@ export async function waitJob(id) {
   }
 }
 
-const busy = { job: null, queued: 0, lock: null };
-
-async function pollJobs() {
-  try {
-    const r = await api("api/jobs", { signal: AbortSignal.timeout(POLL * 3) });
-    if (!r.ok) throw new Error(r.statusText);
-    const js = await r.json();
-    const live = (Array.isArray(js) ? js : []).filter(j => !ended(j.state));
-    busy.job = live.find(j => j.state === "running") || live[live.length - 1] || null;
-    busy.queued = live.filter(j => j !== busy.job).length;
-    busy.lock = null;
-    if (!busy.job) {
-      const l = await api("api/lock", { signal: AbortSignal.timeout(POLL * 3) }).then(x => (x.ok ? x.json() : null));
-      if (l && l.held) busy.lock = str(l.text) || "another process";
-    }
-  } catch {
-    busy.job = null; busy.lock = null;
-  }
-  renderBusy();
-}
-
-// ---- the header ------------------------------------------------------------------------
-
-// The top bar's destinations; the pages under ⚙ (System) mark it, with System above their
-// title. Traffic holds the charts and the query log.
-const TOP = [["index.html", "Nodes"], ["zones.html", "Zones"], ["blocklists.html", "Blocklists"], ["traffic.html", "Traffic"], ["system.html", "System"]];
-const UNDER = { "nodes.html": "index.html", "querylog.html": "traffic.html", "jobs.html": "system.html", "backup.html": "system.html", "builder.html": "system.html",
-  "configs.html": "system.html", "push.html": "system.html", "adopt.html": "system.html" };
-
-let alertBox = null, busyBox = null;
-
-export function header(current) {
-  const top = UNDER[current] || current;
-  const h = el("header", "top");
-  const bar = el("div", "topbar");
-  const brand = el("a", "brand", "espDNS");
-  brand.href = "./";
-  const nav = el("nav");
-  nav.setAttribute("aria-label", "Main");
-  for (const [href, name] of TOP) {
-    const a = el("a");
-    a.href = href === "index.html" ? "./" : href;
-    if (href === "system.html") {
-      const g = el("span", "gear", "⚙");
-      g.setAttribute("aria-hidden", "true");
-      a.append(g, " ", name);
-    } else a.textContent = name;
-    if (href === top) a.setAttribute("aria-current", "page");
-    nav.append(a);
-  }
-  const who = el("div", "who");
-  bar.append(brand, nav, who);
-  alertBox = el("div", "alerts");
-  alertBox.setAttribute("role", "status");
-  busyBox = el("div", "busy");
-  busyBox.hidden = true;
-  h.append(bar, alertBox, busyBox);
-  document.body.prepend(h);
-  // A skip link, first in the tab order, past the top bar to the page.
-  const main0 = document.querySelector("main");
-  if (main0) {
-    if (!main0.id) main0.id = "content";
-    main0.tabIndex = -1;
-    const skip = el("a", "skip", "Skip to the page");
-    skip.href = `#${main0.id}`;
-    document.body.prepend(skip);
-  }
-  if (UNDER[current] === "system.html") {
-    const main = document.querySelector("main");
-    const c = el("a", "crumb", "System");
-    c.href = "system.html";
-    if (main) main.prepend(c);
-  }
-  session.then(s => {
-    if (s.logged_in) {
-      const out = el("button", "btn small", "Log out");
-      out.type = "button";
-      out.onclick = async () => {
-        try { await post("api/logout"); } catch { /* gone anyway */ }
-        loggedIn(null);
-        location.href = "login.html";
-      };
-      const u = el("span", "sub", s.user);
-      u.title = `Logged in as ${s.user}`;
-      who.append(u, out);
-    } else if (!s.password_set) {
-      who.append(el("span", "sub", "read-only"));
-      const b = el("div", "banner warn topbanner");
-      b.append("Read-only: no password is set, so the controller takes no actions. Set one with ",
-        el("code", "", "espdns passwd"), " (docs/getting-started.md, step 6), then log in.");
-      h.append(b);
-    } else if (s.error) {
-      h.append(el("div", "banner bad topbanner", `The login can't be used: ${s.error}`));
-    }
-  });
-  every(pollNodes);
-  every(pollJobs);
-}
-
-// watchNodes reads /api/nodes every 5 s for a page without this header (shell.js): onNodes
-// hears each read.
+// watchNodes reads /api/nodes every 5 s (shell.js starts it): onNodes hears each read.
 export function watchNodes() { every(pollNodes); }
 
 // every runs a poll now and every 5 s (or ms): one at a time (a slow controller doesn't
@@ -479,82 +327,7 @@ export function every(f, ms = POLL) {
   run();
 }
 
-let alertText = "";
-function renderAlerts() {
-  if (!alertBox) return;
-  const lines = [];
-  if (fleet.error) lines.push(["warn", "The controller isn't answering: what this page shows may be out of date."]);
-  const ns = fleet.nodes || [];
-  if (ns.length && !ns.some(answering)) {
-    lines.push(["bad", ns.length === 1 ? "No node is answering: the one node isn't answering DNS queries." : `No node is answering: none of the ${ns.length} nodes answers DNS queries.`]);
-  } else {
-    // A node never read since the controller started may be wired: it counts as one here.
-    const w = ns.filter(n => wired(n) || !n.status);
-    if (w.length && !w.some(answering)) lines.push(["bad", "No wired node is answering: only Wi-Fi nodes answer DNS queries."]);
-  }
-  const text = JSON.stringify(lines);
-  if (text === alertText) return;
-  alertText = text;
-  alertBox.replaceChildren(...lines.map(([cls, t]) => {
-    const d = el("div", `alert ${cls}`);
-    const a = el("a", "", t);
-    a.href = "./";
-    d.append(a);
-    return d;
-  }));
-}
-
-function renderBusy() {
-  if (!busyBox) return;
-  if (!busy.job && !busy.lock) { busyBox.hidden = true; busyBox.replaceChildren(); return; }
-  busyBox.hidden = false;
-  if (!busy.job) {
-    busyBox.replaceChildren(el("span", "busyk", "Fleet locked"), el("span", "busyt", busy.lock));
-    return;
-  }
-  const j = busy.job;
-  const a = el("a", "busylink");
-  a.href = `jobs.html#job=${encodeURIComponent(j.id)}`;
-  a.append(el("span", "busyk", j.state === "running" ? (j.stopping ? "Stopping" : "Running") : "Queued"),
-    el("span", "busyw", jobWhat(j)));
-  if (j.last) a.append(el("span", "busyt", str(j.last)));
-  if (busy.queued) a.append(el("span", "sub", `+${busy.queued} queued`));
-  busyBox.replaceChildren(a);
-}
-
-// ---- dialogs and formatting ------------------------------------------------------------
-
-// confirmDialog asks before a change to a node; resolves true to go on. lines are strings
-// or elements.
-export function confirmDialog(title, lines, go, goClass = "btn danger") {
-  return new Promise(resolve => {
-    const d = el("dialog", "confirm");
-    d.append(el("h2", "", title), ...lines.map(l => typeof l === "string" ? el("p", "", l) : l));
-    const row = el("div", "row");
-    const no = el("button", "btn", "Cancel"), yes = el("button", goClass, go);
-    no.type = yes.type = "button";
-    row.append(no, yes);
-    d.append(row);
-    const done = v => { d.close(); d.remove(); resolve(v); };
-    no.onclick = () => done(false);
-    yes.onclick = () => done(true);
-    d.addEventListener("cancel", e => { e.preventDefault(); done(false); });
-    document.body.append(d);
-    d.showModal();
-    no.focus();
-  });
-}
-
-export function secs(ms) {
-  return typeof ms !== "number" ? "–" : `${(ms / 1000).toFixed(2)} s`;
-}
-
-export function uptime(s) {
-  if (typeof s !== "number") return "–";
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
-}
-
+// ago is how long ago a time was, in words.
 export function ago(t) {
   if (!t || t.startsWith("0001")) return "never";
   const s = Math.max(0, Math.round((Date.now() - new Date(t)) / 1000));

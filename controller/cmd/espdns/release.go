@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,25 +13,29 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/release"
+	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
 // espdns release build -version 0.0.1 -images DIR -catalog DIR -out DIR [-include FILE ...]
 // espdns release sign -dir DIR -pub release.pub          (the release key on standard input)
 // espdns release verify -dir DIR -pub release.pub
-// espdns release import -dir DIR -pub release.pub -data /data
+// espdns release import -dir DIR -data /data [-pub /keys/project.pub]
+// espdns release fetch -data /data [-version v0.0.3] [-url https://github.com/skitzo2000/espdns] [-pub /keys/project.pub]
 //
 // A release's files (internal/dist, docs/releasing.md). build makes them from the exported
-// chip images and the board catalog, with SHA256SUMS, as CI does on a version tag; it uses
-// no key. sign signs SHA256SUMS with the release key, read from standard input (the PEM, or
-// base64 of it), never an argument or the environment; only a key that is -pub,
-// the firmware's built-in release key, is taken. verify checks the signature with -pub and
-// every file against SHA256SUMS. import does verify, then puts the release's chip images in
-// the data directory (firmware/images), where the builder and the Nodes page's updates
-// find them. In the controller's image the public keys are at /keys (release.pub,
-// recovery.pub), the ones its firmware's source has.
+// chip images, key-neutral, with SHA256SUMS, as CI does on a version tag (no factory images:
+// every catalog board's chip image must be there, for Install over USB); it uses no key. sign signs SHA256SUMS with a release key, read from standard input (the PEM, or
+// base64 of it), never an argument or the environment; only a key that is -pub is taken.
+// verify checks the signature with -pub and every file against SHA256SUMS. import checks
+// that SHA256SUMS is signed by the project's release key (-pub, /keys/project.pub in the
+// controller's image) or by your own (the controller's, in -data), refusing any other, and
+// every file, then puts the release's chip images in the data directory (firmware/images),
+// each with its provenance, where the builder and the Nodes page's updates find them. fetch
+// downloads a published release's chip images (from GitHub, or a mirror: -url, else
+// settings.json's "release_url"), checked with the project's key alone, and imports them.
 func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) < 1 {
-		return errors.New("usage: espdns release build|sign|verify|import [flags]")
+		return errors.New("usage: espdns release build|sign|verify|import|fetch [flags]")
 	}
 	sub, args := args[0], args[1:]
 	fl := flag.NewFlagSet("release "+sub, flag.ContinueOnError)
@@ -39,7 +44,7 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 		o := dist.Options{}
 		fl.StringVar(&o.Version, "version", "", "the version released, the repository's VERSION (required): every chip image must be it")
 		fl.StringVar(&o.Images, "images", "", "the exported chip images, <dir>/<image>/image.json (required)")
-		fl.StringVar(&o.Catalog, "catalog", "", "the board catalog (boards/; /catalog in the controller's image): a factory image for each (required)")
+		fl.StringVar(&o.Catalog, "catalog", "", "the board catalog (boards/; /catalog in the controller's image): every board's chip image must be in -images (required)")
 		fl.StringVar(&o.Out, "out", "", "where the release's files go, missing or empty (required)")
 		var inc listFlag
 		fl.Var(&inc, "include", "another file the release carries and SHA256SUMS lists (repeatable)")
@@ -59,22 +64,20 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%d files; not signed: espdns release sign\n", len(files))
 		return nil
-	case "sign", "verify", "import":
+	case "import", "fetch":
+		return releaseImport(sub, fl, args, stdout)
+	case "sign", "verify":
 	default:
-		return fmt.Errorf("unknown release command %q (build, sign, verify or import)", sub)
+		return fmt.Errorf("unknown release command %q (build, sign, verify, import or fetch)", sub)
 	}
 
 	dir := fl.String("dir", "", "the release's files, with its SHA256SUMS (required)")
-	pubFile := fl.String("pub", "", "the release public key the firmware is built with (firmware/keys/release.pub; /keys/release.pub in the controller's image) (required)")
-	data := ""
-	if sub == "import" {
-		fl.StringVar(&data, "data", "", "the controller's data directory (/data in Docker) (required)")
-	}
+	pubFile := fl.String("pub", "", "the public key of the release key that signs it, raw (keys/project.pub for the project's; /keys/project.pub in the controller's image) (required)")
 	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
-	if *dir == "" || *pubFile == "" || (sub == "import" && data == "") {
-		return fmt.Errorf("release %s: -dir and -pub are required%s", sub, map[bool]string{true: ", and -data"}[sub == "import"])
+	if *dir == "" || *pubFile == "" {
+		return fmt.Errorf("release %s: -dir and -pub are required", sub)
 	}
 	pub, err := os.ReadFile(*pubFile)
 	if err != nil {
@@ -106,29 +109,75 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%s: signed with the release key %s\n", filepath.Join(*dir, dist.SigFile), fp)
 		return nil
-	case "verify":
+	default: // verify
 		c, err := dist.Verify(*dir, pub)
 		if err != nil {
 			return err
 		}
 		report(stdout, c, fp)
 		return nil
-	default: // import
-		// Under the fleet lock, as every change to the data directory: never under a
-		// rollout or a job reading the chip images
-		_, end, err := begin(data, "release import", []string{"-dir", *dir}, false)
-		if err != nil {
-			return err
-		}
-		images := filepath.Join(data, "firmware", "images")
-		done, err := dist.Import(*dir, pub, images)
-		end(err)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "signed by the release key %s; chip images imported into %s: %s\n", fp, images, strings.Join(done, ", "))
-		return nil
 	}
+}
+
+// releaseImport is release import and release fetch: the release is taken if the project's
+// release key (-pub) or yours (the controller's, in -data) signed it (fetch: the project's
+// only), and its chip images go into the data directory with their provenance.
+func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer) error {
+	data := fl.String("data", "", "the controller's data directory (/data in Docker) (required)")
+	pubFile := fl.String("pub", dist.ProjectPub, "the project's release public key, raw (keys/project.pub at the top of the repository)")
+	dir, ver, forge := "", "", ""
+	if sub == "import" {
+		fl.StringVar(&dir, "dir", "", "the release's files, with its SHA256SUMS and SHA256SUMS.sig (required)")
+	} else {
+		fl.StringVar(&ver, "version", "", "the release, v0.0.3 (default: the newest published)")
+		fl.StringVar(&forge, "url", "", "the repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
+	}
+	if err := parseFlags(fl, args); err != nil {
+		return err
+	}
+	if *data == "" || (sub == "import" && dir == "") {
+		return fmt.Errorf("release %s: -data is required%s", sub, map[bool]string{true: ", and -dir"}[sub == "import"])
+	}
+	signers, err := dist.LoadSigners(*pubFile, *data)
+	if err != nil {
+		return err
+	}
+	if *pubFile != dist.ProjectPub && signers.Project == nil {
+		return fmt.Errorf("-pub %s: no such file", *pubFile)
+	}
+	if forge == "" && sub == "fetch" {
+		s, err := settings.Load(settings.Path(*data))
+		if err != nil {
+			return err
+		}
+		forge = s.ReleaseURL
+	}
+	// Under the fleet lock, as every change to the data directory: never under a rollout
+	// or a job reading the chip images
+	what := []string{"-dir", dir}
+	if sub == "fetch" {
+		what = []string{"-version", ver, "-url", forge}
+	}
+	_, end, err := begin(*data, "release "+sub, what, false)
+	if err != nil {
+		return err
+	}
+	images := filepath.Join(*data, "firmware", "images")
+	var imp dist.Imported
+	if sub == "import" {
+		imp, err = dist.Import(dir, signers, images)
+	} else {
+		imp, err = dist.Fetch(context.Background(), dist.FetchOptions{Forge: forge, Version: ver, ProjectPub: signers.Project,
+			Logf: func(f string, a ...any) { fmt.Fprintf(stdout, f+"\n", a...) }}, filepath.Join(*data, "firmware"), images)
+	}
+	end(err)
+	if err != nil {
+		return err
+	}
+	who := map[string]string{dist.SignerProject: "the project's release key", dist.SignerOwn: "your release key"}[imp.Signer.Who]
+	fmt.Fprintf(stdout, "version %s, signed by %s %s; chip images imported into %s: %s\n", imp.Signer.Version, who,
+		imp.Signer.Fingerprint, images, strings.Join(imp.Images, ", "))
+	return nil
 }
 
 func report(w io.Writer, c dist.Checked, fp string) {

@@ -199,12 +199,12 @@
  },
  {
   "name": "ws-s3-eth from the catalog, every service",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -318,12 +318,12 @@
  },
  {
   "name": "ws-s3-eth partition from before the plan's keys",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -545,12 +545,12 @@
  },
  {
   "name": "ws-s3-eth with only the listeners",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -1136,12 +1136,12 @@
  },
  {
   "name": "the controller: the chip unknown",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": -1,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -1255,12 +1255,12 @@
  },
  {
   "name": "a cache too small for its answers",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -1435,12 +1435,12 @@
  },
  {
   "name": "ws-s3-eth with a query log too big for what its PSRAM has left",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",
@@ -1554,12 +1554,12 @@
  },
  {
   "name": "the same with the query log off",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "chip_psram_kb": 8192,
   "board": {
    "name": "ws-s3-eth",
    "title": "Waveshare ESP32-S3-ETH",
-   "image": "esp32s3-octal",
+   "image": "esp32s3-eth",
    "flash_mb": 16,
    "psram_mb": 8,
    "tier": "tested",

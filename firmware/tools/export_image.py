@@ -7,8 +7,8 @@ Writes dist/images/<image>/ from build/<image>/:
     partitions-4mb.bin        flash layout for 4 MB
     ota_data_initial.bin
     app.bin                   the firmware
-    image.json                image name, chip, offsets, flash mode and frequency, version,
-                              build time and ELF SHA-256
+    image.json                image name, chip, offsets (with the board and keys partitions'),
+                              flash mode and frequency, version, build time and ELF SHA-256
 
 The builder joins these with a board partition (tools/boardpart.py format) into one image
 for a board. No board, site setting or secret is in any of it.
@@ -52,6 +52,8 @@ def main():
                     os.path.join(out, "partitions-4mb.bin")], check=True)
     offsets["partitions-4mb.bin"] = offsets["partitions-8mb.bin"]
     offsets["board"] = 0x12000
+    # Where the keys partition (tools/keyspart.py) goes: the builder writes the node's keys there
+    offsets["keys"] = 0x1b000
 
     d = app_desc(open(os.path.join(out, "app.bin"), "rb").read())
     fs = args["flash_settings"]

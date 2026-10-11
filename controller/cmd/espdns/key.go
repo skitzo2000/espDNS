@@ -17,31 +17,42 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
-// espdns key import -data /data [-key -] [-pub release.pub] -recovery-pub recovery.pub [-mdns 0] [-replace]
+// espdns key generate -data /data
+// espdns key import -data /data [-key -] [-pub release.pub] [-recovery-pub recovery.pub] [-mdns 0] [-replace]
 // espdns key status -data /data [-pub ...] [-mdns 0]
 //
-// The controller's release key: <data>/keys/release.pem, mode 0600 (internal/keys). import
-// reads it from standard input (the PEM, or base64 of it), never an
-// argument or the environment, and writes it only if the fleet trusts it: the firmware's
-// built-in release key (-pub), or a node in settings.json listing it in slot 0 of its
-// /status "keys" (a node found only over mDNS never vouches: any host can advertise one). A
-// key nothing trusts, or the recovery key, is refused; import needs -recovery-pub for that,
-// so the check never rests on which nodes happen to answer. status says whether the key is
-// there and usable, and who trusts it. Neither changes a node: they only read /status.
+// The controller's release key: <data>/keys/release.pem, mode 0600 (internal/keys).
+// generate makes a new one there, for a new fleet: never over a key there, and never while
+// settings.json lists a node (it trusts another key: import that one). import reads one from
+// standard input (the PEM, or base64 of it), never an argument or the environment, and
+// writes it only if the fleet trusts it: the firmware's built-in release key (-pub), or a node
+// in settings.json listing it in slot 0 of its /status "keys" (a node found only over mDNS
+// never vouches: any host can advertise one); with no node listed yet, any key but the
+// recovery key (a new fleet's first: keys.Trust). The recovery key is refused: -recovery-pub,
+// by default <data>/keys/recovery.pub (the first run's), is needed for that once a node is
+// listed, so the check never rests on which nodes happen to answer. status says whether the
+// key is there and usable, and who trusts it. None of them changes a node: they only read
+// /status.
 func cmdKey(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: espdns key import|status -data <dir> [flags]")
+		return errors.New("usage: espdns key generate|import|status|rotate -data <dir> [flags]")
 	}
 	sub, args := args[0], args[1:]
+	if sub == "generate" {
+		return keyGenerate(args)
+	}
+	if sub == "rotate" {
+		return keyRotate(args)
+	}
 	if sub != "import" && sub != "status" {
-		return fmt.Errorf("unknown key command %q (import or status)", sub)
+		return fmt.Errorf("unknown key command %q (generate, import, status or rotate)", sub)
 	}
 	fl := flag.NewFlagSet("key "+sub, flag.ExitOnError)
 	dataDir := dataFlag(fl)
 	settingsFile := fl.String("settings", "", "the settings file whose nodes are asked for the keys they trust (default: settings.json in -data)")
 	mdns := fl.Duration("mdns", 0, "browse mDNS this long for nodes besides the settings' (0: don't); a node found only so is reported, and refuses the recovery key, but never vouches for a key")
-	pub := fl.String("pub", "", "the release public key the firmware is built with (firmware/keys/release.pub, raw): a key that is it is trusted")
-	recPub := fl.String("recovery-pub", "", "the recovery public key (firmware/keys/recovery.pub): that key is never imported; import needs it")
+	pub := fl.String("pub", "", "your release public key, raw (e.g. your firmware/keys/release.pub): a key that is it is trusted")
+	recPub := fl.String("recovery-pub", "", "the recovery public key, raw (default: <data>/keys/recovery.pub, if there): that key is never imported; import needs it once a node is listed")
 	in := keyStdin
 	replace := false
 	if sub == "import" {
@@ -50,8 +61,19 @@ func cmdKey(args []string) error {
 	}
 	fl.Parse(args)
 	path := keys.Path(*dataDir)
+	if *recPub == "" {
+		if _, err := os.Stat(keys.RecoveryPath(*dataDir)); err == nil {
+			*recPub = keys.RecoveryPath(*dataDir)
+		}
+	}
 	if sub == "import" && *recPub == "" {
-		return errors.New("key import: -recovery-pub firmware/keys/recovery.pub is needed, so the recovery key is refused whatever the nodes say")
+		s, err := settings.Load(settingsPath(*settingsFile, *dataDir))
+		if err != nil {
+			return err
+		}
+		if len(s.Nodes) > 0 {
+			return errors.New("key import: -recovery-pub recovery.pub is needed (the recovery public key your nodes trust), so the recovery key is refused whatever the nodes say")
+		}
 	}
 
 	var k *ecdsa.PrivateKey
@@ -96,6 +118,34 @@ func cmdKey(args []string) error {
 		fmt.Printf("%s: already this key; nothing changed\n", path)
 	} else {
 		fmt.Printf("imported to %s (mode 0600): the controller signs with it from its next action\n", path)
+	}
+	return nil
+}
+
+// keyGenerate is espdns key generate: a new release key in <data>/keys/release.pem, for a
+// new fleet (the first run's Make your keys does the same from the browser).
+func keyGenerate(args []string) error {
+	fl := flag.NewFlagSet("key generate", flag.ExitOnError)
+	dataDir := dataFlag(fl)
+	settingsFile := fl.String("settings", "", "the settings file (default: settings.json in -data): with a node listed, no key is made")
+	fl.Parse(args)
+	if fi, err := os.Stat(*dataDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("-data %s: not a directory (make it before you start the controller: docs/getting-started.md)", *dataDir)
+	}
+	s, err := settings.Load(settingsPath(*settingsFile, *dataDir))
+	if err != nil {
+		return err
+	}
+	if len(s.Nodes) > 0 {
+		return fmt.Errorf("key generate: settings.json lists %d node(s), which trust a release key already: import that one (espdns key import); a new one would sign releases they all refuse", len(s.Nodes))
+	}
+	k, err := keys.Generate(keys.Path(*dataDir))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("made %s (mode 0600): release key fingerprint %s\n", keys.Path(*dataDir), keys.Fingerprint(k))
+	if _, err := keys.ReadRecovery(*dataDir); err != nil {
+		fmt.Println("next: the recovery key, made in your browser at the first run (Make your keys)")
 	}
 	return nil
 }

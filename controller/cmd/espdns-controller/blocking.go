@@ -550,6 +550,14 @@ func (c compileKind) compile(ctx context.Context, run *jobs.Run, l blocking.List
 		}
 	}()
 	req.Fetch, req.Logf = c.fetch, logf
+	// Every entry by its source, for "check a site" (blocking.WriteCompiled): the lists
+	// only, the overrides are read from their files.
+	var index []blocking.IndexEntry
+	if !l.IsOverrides() {
+		req.Each = func(src int, e blocklist.Entry) {
+			index = append(index, blocking.IndexEntry{Name: e.Name, Suffix: e.Suffix, Allow: e.Allow, Source: src})
+		}
+	}
 	res, err := blocklist.Run(cctx, req)
 	if res != nil {
 		for i := range res.Sources {
@@ -570,6 +578,11 @@ func (c compileKind) compile(ctx context.Context, run *jobs.Run, l blocking.List
 		return out, nil, errors.New(red.Replace(err.Error()))
 	}
 	c.logResult(run, res)
+	if res != nil && res.Written {
+		if err := blocking.WriteCompiled(c.dataDir, l, res, index, time.Now()); err != nil {
+			logf("the Blocking page's record of this compile wasn't written: %v", err)
+		}
+	}
 	return out, nil, nil
 }
 

@@ -32,6 +32,38 @@ BUILD     := build/$(BOARD)
 else
 BUILD     := build/$(IMAGE)
 endif
+# Keys (main/keys_node.h, docs/architecture.md, Signed releases and pins). A node trusts the keys in its
+# keys partition; an image is key-neutral (no public key in it) unless asked:
+#   KEYS_SEED=<dir>     builds in <dir>/release.pub and recovery.pub (relative: from firmware/,
+#                       so KEYS_SEED=keys is firmware/keys) as the seed a node writes into a
+#                       keys partition that holds no keys record. Default none: make build,
+#                       images, ota and bench-ota push to nodes that already have their keys
+#                       (a trial boot without keys rolls back). controller/'s fleet-firmware
+#                       passes firmware/keys when it has them, for the nodes in service.
+#                       firmware/keys is yours and git-ignored (make keys makes a pair there);
+#                       the project's public key is ../keys/project.pub, which signs its
+#                       releases and is never a node's.
+#   INSTALL_KEYS_SEED   the seed of the images for a new node (factory, boards, export-images),
+#                       default none: they are key-neutral, and the install writes the node's
+#                       keys partition (the controller's Install over USB; FACTORY_KEYS below).
+#   FACTORY_KEYS        the directory whose release.pub and recovery.pub make factory (and
+#                       boards) writes into the image's keys partition (tools/keyspart.py),
+#                       default keys (firmware/keys); empty: none (the node comes up in setup
+#                       mode, until its keys are written over USB).
+#   TEST_NO_KEYS=1      the test hook (DNS2_TEST_NO_KEYS): the node ignores its keys partition
+#                       and any seed, comes up in setup mode, and a trial boot rolls back by
+#                       itself within 90 s. Built in build/nokeys-<board or image>.
+KEYS_SEED         ?=
+INSTALL_KEYS_SEED ?=
+FACTORY_KEYS      ?= keys
+TEST_NO_KEYS      ?=
+ifneq ($(TEST_NO_KEYS),)
+BUILD     := build/nokeys-$(or $(BOARD),$(IMAGE))
+endif
+# The keys' files, made by `make keys` when they are keys/'s
+keys_files = $(if $(filter keys keys/ ./keys,$(1)),keys/release.pub keys/recovery.pub)
+INSTALL_SEED_FILES = $(call keys_files,$(INSTALL_KEYS_SEED))
+FACTORY_KEY_FILES  = $(call keys_files,$(FACTORY_KEYS))
 # Addresses. A node never asks DHCP for one on its own (a network may have no DHCP server):
 # it starts on the address in its node config, else in its board definition, else the one
 # its image was built with, else it has none. The project names no address anywhere.
@@ -82,6 +114,11 @@ ifeq ($(wildcard $(SITE_DEFAULTS)),)
 $(error SITE_DEFAULTS: no such file: $(SITE_DEFAULTS))
 endif
 endif
+ifneq ($(KEYS_SEED),)
+ifneq ($(words $(wildcard $(KEYS_SEED)/release.pub $(KEYS_SEED)/recovery.pub)),2)
+$(error KEYS_SEED=$(KEYS_SEED): no release.pub and recovery.pub there (relative to firmware/; make keys makes keys/))
+endif
+endif
 IMAGES    := $(notdir $(wildcard images/*))
 CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 
@@ -106,7 +143,8 @@ CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 MOUNT_DIRS = build dist managed_components secrets
 CONTAINER = mkdir -p $(MOUNT_DIRS) && chmod 700 secrets && docker run --rm -u $(shell id -u):$(shell id -g) \
          -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $(CURDIR)/../boards:/boards:ro -v $(CURDIR)/../VERSION:/VERSION:ro \
-         $(if $(SITE_DEFAULTS),-v $(abspath $(SITE_DEFAULTS)):/site/defaults.h:ro )-w /project
+         $(if $(SITE_DEFAULTS),-v $(abspath $(SITE_DEFAULTS)):/site/defaults.h:ro )$(if \
+         $(KEYS_SEED),-v $(abspath $(KEYS_SEED)):/seed:ro )-w /project
 SRC       = -v $(CURDIR):/project:ro
 NO_KEYS   = --mount type=tmpfs,destination=/project/secrets,readonly
 RW        = $(foreach d,$(1),-v $(CURDIR)/$(d):/project/$(d))
@@ -120,6 +158,7 @@ SIGN      = mkdir -p $(OTA_DIR) && $(CONTAINER) $(SRC) --network none $(call RW,
 KEYGEN    = $(CONTAINER) $(SRC) --network none $(call RW,keys secrets)
 BOARDS_DIR = /boards
 SITE_DEFAULTS_IN = $(if $(SITE_DEFAULTS),/site/defaults.h)
+KEYS_SEED_IN = $(if $(KEYS_SEED),/seed)
 # NATIVE=1: already inside the ESP-IDF container (CI, ../.github/workflows/ci.yml). The same
 # commands run without docker, with the catalog read from ../boards.
 ifeq ($(NATIVE),1)
@@ -132,12 +171,13 @@ KEYGEN     =
 IDF_IMAGE  =
 BOARDS_DIR = $(abspath $(CURDIR)/../boards)
 SITE_DEFAULTS_IN = $(if $(SITE_DEFAULTS),$(abspath $(SITE_DEFAULTS)))
+KEYS_SEED_IN = $(if $(KEYS_SEED),$(abspath $(KEYS_SEED)))
 endif
 TARGET = $(shell sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"/\1/p' images/$(IMAGE)/sdkconfig.defaults)
 IDF    = idf.py -B $(BUILD) -DIMAGE=$(IMAGE) -DBOARD=$(BOARD) -DBOARDS_DIR=$(BOARDS_DIR) -DIDF_TARGET=$(TARGET) \
          -DSTATIC_IP=$(STATIC_IP) -DSTATIC_NETMASK=$(if $(STATIC_IP),$(BUILT_NETMASK)) \
          -DSTATIC_GATEWAY=$(if $(STATIC_IP),$(BUILT_GATEWAY)) -DSITE_DEFAULTS=$(SITE_DEFAULTS_IN) \
-         -DSDKCONFIG=$(BUILD)/sdkconfig $(IDF_EXTRA)
+         -DKEYS_SEED=$(KEYS_SEED_IN) -DDNS2_TEST_NO_KEYS=$(TEST_NO_KEYS) -DSDKCONFIG=$(BUILD)/sdkconfig $(IDF_EXTRA)
 FETCHED = build/.components-$(TARGET)
 DEVICE = --device $(PORT) --group-add $(shell stat -c %g $(PORT) 2>/dev/null || echo 0)
 
@@ -148,7 +188,7 @@ need-host:
 
 # A build's sdkconfig is made from the defaults once; start it over when they change. The
 # components it uses are fetched first (FETCHED, below), so the build itself runs offline.
-build: keys/release.pub keys/recovery.pub $(if $(DOCKER),$(if $(IMAGE),$(FETCHED)))
+build: $(if $(DOCKER),$(if $(IMAGE),$(FETCHED)))
 	@$(need_image)$(call need_static)for f in sdkconfig.defaults images/$(IMAGE)/sdkconfig.defaults; do \
 	  if [ -f $(BUILD)/sdkconfig ] && [ $$f -nt $(BUILD)/sdkconfig ]; then echo "$$f changed: new sdkconfig"; rm -f $(BUILD)/sdkconfig; fi; done
 	$(DOCKER) $(IDF_IMAGE) $(IDF) build
@@ -179,21 +219,24 @@ components:
 	    -DIDF_TARGET=$$t -DSDKCONFIG=/tmp/components/sdkconfig reconfigure >/dev/null || exit 1; \
 	  touch build/.components-$$t; done
 
-# Every chip image (images/*), as CI builds them (no address built in)
-images: keys/release.pub keys/recovery.pub
+# Every chip image (images/*), as CI builds them (no address built in; key-neutral unless
+# KEYS_SEED= is given)
+images:
 	@for i in $(IMAGES); do echo "== $$i"; $(MAKE) -s build IMAGE=$$i BOARD= ADDRESS= STATIC_IP= || exit 1; done
 
 # Every chip image, exported for the controller's builder into dist/images/<image>/
-# (chip images carry no address: the builder writes the node's address into its board partition;
-# SITE_DEFAULTS, if set, are built in as into every image made here)
+# (chip images carry no address: the builder writes the node's address into its board partition,
+# and the node's keys into its keys partition; SITE_DEFAULTS, if set, are built in as into every
+# image made here; INSTALL_KEYS_SEED, a seed, only if given: key-neutral by default)
 # (built first, then exported: no docker run on a line with $(MAKE), which make -n would run)
-export-images: images
+export-images: $(INSTALL_SEED_FILES)
+	@$(MAKE) -s images KEYS_SEED='$(INSTALL_KEYS_SEED)'
 	@for i in $(IMAGES); do echo "== $$i"; $(DOCKER) $(IDF_IMAGE) python tools/export_image.py $$i | tail -1; done
 
 # A factory image for every catalog board given an address on the command line
 # (ADDRESS_<board>=a.b.c.d/nn, e.g. ADDRESS_ws-s3-eth=...), in dist/<board>/. One ADDRESS
 # for every board is refused: no two nodes may share an address.
-boards: keys/release.pub keys/recovery.pub
+boards: $(INSTALL_SEED_FILES) $(FACTORY_KEY_FILES)
 	@test -z "$(filter command line environment,$(origin ADDRESS))" || \
 	  { echo "make boards takes ADDRESS_<board>=a.b.c.d/nn per board, not one ADDRESS for all"; exit 1; }
 	@for b in $(CATALOG); do echo "== $$b"; \
@@ -210,16 +253,19 @@ print-idf-image:
 
 # dist/<board>/: the board's chip image (built without a fallback or an address) with its board
 # partition, which carries the node's address, as one whole-flash image for a new node, plus an
-# ESP Web Tools manifest.json
-factory: keys/release.pub keys/recovery.pub
+# ESP Web Tools manifest.json. Its keys partition holds FACTORY_KEYS's public keys (relative to
+# firmware/), as the controller's Install over USB writes the controller's; the app is
+# key-neutral unless INSTALL_KEYS_SEED is given.
+factory: $(INSTALL_SEED_FILES) $(FACTORY_KEY_FILES)
 	@test -n "$(ADDRESS)" || { echo "set ADDRESS=a.b.c.d/nn (and GATEWAY=), or ADDRESS=dhcp on a network with a DHCP server"; exit 1; }
-	$(MAKE) -s build IMAGE=$(IMAGE) BOARD= ADDRESS= STATIC_IP=
+	$(MAKE) -s build IMAGE=$(IMAGE) BOARD= ADDRESS= STATIC_IP= KEYS_SEED='$(INSTALL_KEYS_SEED)'
 	$(DOCKER) $(IDF_IMAGE) python tools/factory.py --board $(BOARDS_DIR)/$(BOARD).json --build build/$(IMAGE) \
-	  --address $(ADDRESS) $(if $(GATEWAY),--gateway $(GATEWAY))
+	  --address $(ADDRESS) $(if $(GATEWAY),--gateway $(GATEWAY)) $(if $(FACTORY_KEYS),--keys $(FACTORY_KEYS))
 
-# Release signing keys (ECDSA P-256). The public halves in keys/ are built into the
-# firmware and committed; the private halves in secrets/ are not. Created once: an
-# existing file is never overwritten. Move secrets/recovery.pem offline after backing it up.
+# Your signing keys (ECDSA P-256), for a node you install with make factory rather than the
+# controller. The public halves in keys/ are what a seed build (KEYS_SEED=keys) builds in and
+# make factory writes; keys/ and secrets/ are both git-ignored. Created once: an existing file
+# is never overwritten. Move secrets/recovery.pem offline after backing it up.
 keys: keys/release.pub keys/recovery.pub
 keys/%.pub:
 	mkdir -p keys secrets && chmod 700 secrets
@@ -325,7 +371,7 @@ bench-board-run: bench-board
 #   make bench-ota FILE=list.bin QUERIES=q.txt          (HOST and BOARD as for `make ota`)
 BENCH_BUILD = build/bench-$(or $(BOARD),$(IMAGE))
 bench-ota: OTA_DIR = $(BENCH_BUILD)/release
-bench-ota: need-host keys/release.pub keys/recovery.pub
+bench-ota: need-host
 	@test -n "$(FILE)" -a -n "$(QUERIES)" || { echo "set FILE= and QUERIES="; exit 1; }
 	$(MAKE) -s build BUILD=$(BENCH_BUILD) IDF_EXTRA=-DDNS2_BENCH_BLOCKLIST=1
 	$(call fleet_locked,sh -c '$(call ota_steps,$(BENCH_BUILD)/dns2.bin,--force --trial) && \

@@ -18,7 +18,6 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
-	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -253,6 +252,9 @@ func (p pushKind) run(ctx context.Context, run *jobs.Run, w rolling.Web) (any, e
 		return nil, err
 	}
 	res := rolloutResult{Kind: req.Kind.String(), DryRun: req.DryRun, Fingerprint: p.fingerprint(req)}
+	for _, h := range req.Skipped {
+		run.Logf("%s: skipped: out of service", h)
+	}
 	if !req.DryRun {
 		if err := p.dryRunFor(w.After, req); err != nil {
 			return nil, err
@@ -261,7 +263,7 @@ func (p pushKind) run(ctx context.Context, run *jobs.Run, w rolling.Web) (any, e
 	c := p.client()
 	c.Logf = run.Logf
 	if k, err := p.signer(); err == nil {
-		c.Pusher = &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(p.dataDir), Client: c.HTTP}
+		c.Pusher = p.pusher(k, c.HTTP)
 		run.Logf("signing with the release key %s", keys.Fingerprint(k))
 	} else if !req.DryRun {
 		return nil, err
@@ -399,7 +401,7 @@ func (p pushKind) finish(ctx context.Context, c *fleet.Client, t *tracker, req r
 	}
 	// Any node of the fleet left waiting for a reboot, changed in this run or before.
 	s, _ := settings.Load(settings.Path(p.dataDir))
-	for _, h := range s.Nodes {
+	for _, h := range s.InService() {
 		st, serr := c.Status(ctx, h)
 		if serr == nil && st.Reboot != nil && st.Reboot.Pending {
 			hints = append(hints, fmt.Sprintf("%s is left with a reboot pending (%s): reboot it from the Nodes page "+
@@ -556,6 +558,8 @@ type pushNode struct {
 	Reboot  []string `json:"reboot,omitempty"`
 	Config  string   `json:"config,omitempty"` // the config file it matches
 	Off     []string `json:"off,omitempty"`    // services off in its config
+	// OutOfService: a rollout skips it (settings.json "out_of_service").
+	OutOfService bool `json:"out_of_service,omitempty"`
 }
 
 func (p pushKind) routes(mux *routes) {
@@ -577,7 +581,7 @@ func (p pushKind) sources(w http.ResponseWriter, r *http.Request) {
 	files, _ := configs.List(p.dataDir)
 	var ns []pushNode
 	for _, h := range s.Nodes {
-		pn := pushNode{Host: h}
+		pn := pushNode{Host: h, OutOfService: s.IsOutOfService(h)}
 		if n, ok := known[h]; ok {
 			pn.ID, pn.Online = n.ID, n.Online
 			if st, ok := status(n); ok {

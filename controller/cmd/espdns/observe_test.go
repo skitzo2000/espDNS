@@ -104,6 +104,7 @@ func TestMetricsSummary(t *testing.T) {
 	n.LogQuery("192.0.2.10", "b.example", "A", "blocked", "NOERROR")
 	n.LogQuery("192.0.2.10", "c.example", "A", "servfail", "SERVFAIL")
 	n.SetShed(3)
+	n.SetQueueLoad(12500, 4)
 	m, err := (&fleet.Client{}).Metrics(context.Background(), host)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +116,8 @@ func TestMetricsSummary(t *testing.T) {
 		"blocklist seq 1, 1000 entries", "querylog running", "query log 3 of 100",
 		"forwarder 192.0.2.53: 1 asked, 1 failed (1 timed out)",
 		"upstream queries: 0 in flight to the forwarders, 0 to forward zones (each at most 16), peak 1 of 32",
-		"shed 3 (forwarders 3, zones 0), unanswered 1, TCP retries 0, select errors 0"} {
+		"shed 3 (forwarders 3, zones 0), unanswered 1, TCP retries 0, select errors 0",
+		"UDP queue full 12.5s since boot (more queries than the node can answer: the rest dropped), 4 shed past its deadline"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q in\n%s", want, s)
 		}

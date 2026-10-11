@@ -3,9 +3,8 @@
 // the pages are built from: the slide-out panel, the copyable address, the node's LED as a
 // dot and the toast. The pending changes are collected by the pages (POST /api/changes,
 // /api/updates) and sent by one Apply from the header's panel (the apply job, apply.go).
-// Zones, Blocking and Query log open the older pages until theirs are built.
 // Everything from a node or the controller is put in as text.
-import { api, getJSON, post, session, events, el, loggedIn, onNodes, watchNodes, every, answering, wired, ended, nodeText } from "./common.js";
+import { api, getJSON, post, session, events, el, loggedIn, onNodes, watchNodes, every, answering, wired, ended, nodeText, inService } from "./common.js";
 
 const PAGES = [["index.html", "Nodes"], ["zones.html", "Zones"], ["blocklists.html", "Blocking"], ["querylog.html", "Query log"]];
 const SVG = "http://www.w3.org/2000/svg";
@@ -58,6 +57,7 @@ const LEDTXT = {
   updating: "Its light: three quick blue blinks (updating)",
   identify: "Its light: white flicker (identify)",
   unknown: "Old firmware: its light doesn't follow espDNS's patterns yet",
+  out: "Out of service: the controller sends it nothing",
 };
 export function led(kind) {
   const k = Object.hasOwn(LEDTXT, kind) ? kind : "unknown";
@@ -136,7 +136,9 @@ export function panel(title, onClose) {
   const aside = h("aside", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-labelledby": "panel-title" },
     h("header", {}, h2, x), body, footer);
   const scrim = h("div", { class: "scrim" });
-  const key = e => { if (e.key === "Escape") { e.preventDefault(); p.close(); } };
+  // Esc closes the panel, unless a dialog over it (askPassword, the USB installer's) is open:
+  // Esc is that one's.
+  const key = e => { if (e.key === "Escape" && !document.querySelector("dialog[open], ewt-install-dialog")) { e.preventDefault(); p.close(); } };
   const p = {
     body, footer, aside,
     title: t => { h2.textContent = t; },
@@ -227,7 +229,8 @@ async function readRollout() {
   if (rollout.read) return;
   try { rollout.first = str(obj((await getJSON("api/settings")).settings).canary); rollout.read = true; } catch { /* the first listed */ }
 }
-const listedNodes = () => arr(fleetNodes).filter(n => n.source === "settings");
+// The nodes an apply changes and that keep DNS answering: in settings.json, in service.
+const listedNodes = () => arr(fleetNodes).filter(inService);
 
 function rolloutRow() {
   const ns = listedNodes();
@@ -388,8 +391,11 @@ function openApply() {
       });
       out.push(h("div", { class: "alert-box" }, h("p", {}, str(q.text)), h("div", { class: "row" }, b)));
     }
+    // The nodes out of service: skipped, said so.
+    const skipped = arr(fleetNodes).filter(n => n.source === "settings" && n.out_of_service);
+    if (skipped.length) out.push(h("p", { class: "hint" }, `Skipped: ${skipped.map(n => nodeText(n)).join(", ")} (out of service).`));
     if (run) out.push(h("p", { class: "hint" }, "You can close this; progress stays at the top of every page."));
-    else if (j.state === "done") out.push(h("p", {}, "Every node is answering with the new changes."));
+    else if (j.state === "done") out.push(h("p", {}, skipped.length ? "Every node in service is answering with the new changes." : "Every node is answering with the new changes."));
     else if (pr.outcome || j.error) out.push(h("p", {}, str(pr.outcome) || str(j.error)));
     if (!run && arr(pr.hints).length) out.push(h("ul", { class: "hint" }, arr(pr.hints).map(x => h("li", {}, str(x)))));
     after.replaceChildren(...out);
@@ -424,6 +430,209 @@ function renderBand(error) {
   bandBox.replaceChildren(...out);
 }
 
+// ---- the search -------------------------------------------------------------------------
+// searchBox is the top bar's one search (one search box answers
+// 'what's happening with X?'; GET /api/search, internal/search): typed into, it
+// asks the controller (debounced, an older answer dropped) and lists what it found by type,
+// the best first. "/" focuses it; arrows and Enter, or a click, go to a result's place; Esc
+// closes the list, then the box. On a phone it is an icon that opens it. Each result goes
+// to its place as the pages read it: a node to its page (node.html#<key>; one found and not
+// added opens there too, with its way to be set up), a zone or a record to its zone page
+// (zones.html#zone=), a device or a site to the query log's filter (?client=, ?name=), a
+// site to check or a rule to Blocking's Check a site (blocklists.html#check=), a list to
+// Blocking's lists (#list=), a pending change to the changes panel.
+function searchBox() {
+  const GROUPS = { node: "Nodes", zone: "Zones", record: "Records", device: "Devices", site: "Sites asked", check: "Check a site",
+    rule: "Allowed and blocked sites", list: "Blocklists", change: "Changes to apply" };
+  const PAGEFILE = { nodes: "./", zones: "zones.html", blocking: "blocklists.html", "query-log": "querylog.html" };
+  const e = encodeURIComponent;
+  const where = r => {
+    const k = str(r.key), z = str(r.zone);
+    switch (r.type) {
+      case "node": return `node.html#${e(k)}`;
+      case "zone": return `zones.html#zone=${e(k)}`;
+      case "record": return z ? `zones.html#zone=${e(z)}` : "zones.html";
+      case "device": return `querylog.html?client=${e(k)}`;
+      case "site": return `querylog.html?name=${e(k)}`;
+      case "check": return `blocklists.html#check=${e(k)}`;
+      case "rule": return `blocklists.html#check=${e(k)}`;
+      case "list": return `blocklists.html#list=${e(k)}`;
+      case "change": return null; // the changes panel
+    }
+    return Object.hasOwn(PAGEFILE, r.page) ? PAGEFILE[r.page] : null;
+  };
+  const glass = () => {
+    const s = document.createElementNS(SVG, "svg");
+    for (const [k, v] of Object.entries({ width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" })) s.setAttribute(k, v);
+    for (const [tag, at] of [["circle", { cx: 7, cy: 7, r: 5 }], ["path", { d: "M11 11l3.5 3.5", "stroke-linecap": "round" }]]) {
+      const p = document.createElementNS(SVG, tag);
+      for (const [k, v] of Object.entries({ ...at, stroke: "currentColor", "stroke-width": 1.6 })) p.setAttribute(k, v);
+      s.append(p);
+    }
+    return s;
+  };
+
+  const input = h("input", { id: "q", type: "search", placeholder: "Search a site, device or node", "aria-label": "Search a site, device or node",
+    autocomplete: "off", spellcheck: "false", maxlength: "253", role: "combobox", "aria-expanded": "false", "aria-controls": "q-res",
+    "aria-autocomplete": "list", "aria-keyshortcuts": "/", title: "Search (/)" });
+  const list = h("div", { class: "search-res", id: "q-res", role: "listbox", "aria-label": "Search results", hidden: true });
+  const opener = h("button", { class: "search-btn", type: "button", "aria-label": "Search", "aria-expanded": "false", title: "Search (/)" }, glass());
+  const box = h("div", { class: "search", role: "search" }, opener, h("div", { class: "search-box" }, glass(), input), list);
+
+  let timer = null, seq = 0, ctl = null, opts = [], active = -1;
+  const show = on => {
+    list.hidden = !on;
+    input.setAttribute("aria-expanded", on ? "true" : "false");
+    if (!on) setActive(-1);
+  };
+  const expand = on => {
+    box.classList.toggle("open", on);
+    opener.setAttribute("aria-expanded", on ? "true" : "false");
+  };
+  function setActive(i) {
+    if (opts[active]) { opts[active].classList.remove("on"); opts[active].setAttribute("aria-selected", "false"); }
+    active = i;
+    const o = opts[i];
+    if (o) {
+      o.classList.add("on");
+      o.setAttribute("aria-selected", "true");
+      input.setAttribute("aria-activedescendant", o.id);
+      o.scrollIntoView({ block: "nearest" });
+    } else input.removeAttribute("aria-activedescendant");
+  }
+  const note = (text, cls) => {
+    opts = [];
+    active = -1;
+    list.replaceChildren(h("div", { class: `search-note${cls ? ` ${cls}` : ""}`, role: "status" }, text));
+    show(true);
+  };
+  const clear = () => { opts = []; active = -1; list.replaceChildren(); show(false); };
+
+  // go goes to a result's place: the changes panel for a change; a page already open is
+  // loaded again, since the pages read their choice when they load.
+  function go(r) {
+    const to = where(r);
+    show(false);
+    input.blur();
+    expand(false);
+    if (r.type === "change") { openReview(); return; }
+    if (!to) return;
+    const u = new URL(to, location.href);
+    const same = u.pathname === location.pathname && u.search === location.search;
+    location.href = u.href;
+    // The same page: it reads its choice again (a hash alone isn't a load).
+    if (same) location.reload();
+  }
+
+  function render(q, a) {
+    const rs = arr(a.results), matched = obj(a.matched), out = [];
+    opts = [];
+    active = -1;
+    if (!rs.length) out.push(h("div", { class: "search-note", role: "status" }, `Nothing matches "${q}": no node, zone, record, device, site, list or change to apply.`));
+    // By type, the type of the best result first.
+    const by = new Map();
+    for (const r of rs) {
+      const t = str(r.type);
+      if (!by.has(t)) by.set(t, []);
+      by.get(t).push(r);
+    }
+    for (const [t, g] of by) {
+      const n = Number(matched[t]) || g.length, gid = `q-g-${t.replace(/[^a-z]/g, "")}`;
+      const items = g.map(r => {
+        const to = where(r);
+        const o = h(to ? "a" : "div", { class: "search-opt", id: `q-opt-${opts.length}`, role: "option", href: to, "aria-selected": "false" },
+          h("span", { class: "t" }, str(r.title) || str(r.key), r.pending && r.type !== "change" ? h("span", { class: "tag" }, "waiting to apply") : null),
+          str(r.text) ? h("span", { class: "d" }, str(r.text)) : null);
+        o.addEventListener("mousedown", ev => ev.preventDefault()); // the box keeps the focus
+        o.addEventListener("mousemove", () => { const i = opts.indexOf(o); if (i !== active) setActive(i); });
+        o.addEventListener("click", ev => {
+          if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button) return; // a new tab or window: the browser's
+          ev.preventDefault();
+          go(r);
+        });
+        opts.push(o);
+        return o;
+      });
+      out.push(h("div", { class: "search-grp", role: "group", "aria-labelledby": gid },
+        h("div", { class: "search-gh", id: gid }, h("span", {}, Object.hasOwn(GROUPS, t) ? GROUPS[t] : t), n > g.length ? h("span", {}, `${g.length} of ${n}`) : null),
+        items));
+    }
+    const foot = [];
+    if (a.more) foot.push("Only the best matches are shown: type more to narrow it down.");
+    if (a.partial) foot.push("The search ran out of time: not every place was searched.");
+    for (const p of arr(a.problems)) foot.push(h("div", { class: "bad" }, `Couldn't search ${str(p)}`));
+    if (foot.length) out.push(h("div", { class: "search-foot" }, foot.map(x => (typeof x === "string" ? h("div", {}, x) : x))));
+    list.replaceChildren(...out);
+    show(true);
+  }
+
+  async function run(q, mine) {
+    if (ctl) ctl.abort();
+    ctl = new AbortController();
+    try {
+      const r = await api(`api/search?q=${e(q)}`, { signal: ctl.signal });
+      let j = null;
+      try { j = await r.json(); } catch { j = null; }
+      if (mine !== seq) return;
+      if (r.status === 401) note("Your login has ended: log in again to search.", "bad");
+      else if (!r.ok || !j) note(str(obj(j).error) || `The search didn't answer (${r.status}).`, "bad");
+      else render(q, j);
+    } catch (err) {
+      if (mine !== seq || (err && err.name === "AbortError")) return;
+      note("The controller isn't answering, so nothing was searched.", "bad");
+    }
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim(), mine = ++seq;
+    if (!q) { if (ctl) ctl.abort(); clear(); return; }
+    timer = setTimeout(() => {
+      if (!opts.length) note("Searching…");
+      run(q, mine);
+    }, 200);
+  });
+  input.addEventListener("focus", () => { if (input.value.trim() && list.childNodes.length) show(true); });
+  input.addEventListener("keydown", ev => {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (list.hidden && list.childNodes.length) show(true);
+      if (!opts.length) return;
+      const d = ev.key === "ArrowDown" ? 1 : -1;
+      setActive(active < 0 ? (d > 0 ? 0 : opts.length - 1) : (active + d + opts.length) % opts.length);
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (opts.length && !list.hidden) opts[active < 0 ? 0 : active].click();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!list.hidden) { show(false); return; }
+      clearTimeout(timer);
+      seq++;
+      input.value = "";
+      clear();
+      input.blur();
+      expand(false);
+    }
+  });
+  opener.addEventListener("click", () => { expand(true); input.focus(); });
+  box.addEventListener("focusout", ev => {
+    if (box.contains(ev.relatedTarget)) return;
+    show(false);
+    if (!input.value.trim()) expand(false);
+  });
+  document.addEventListener("keydown", ev => {
+    if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey || openOne) return;
+    const t = ev.target;
+    if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+    ev.preventDefault();
+    expand(true);
+    input.focus();
+    input.select();
+  });
+  return box;
+}
+
 // ---- the shell --------------------------------------------------------------------------
 // shell draws the top bar for the page current (one of PAGES), the band and the skip link,
 // and starts reading the nodes and the pending changes every 5 s.
@@ -432,7 +641,7 @@ export function shell(current) {
     PAGES.map(([href, name]) => h("a", { href: href === "index.html" ? "./" : href, "aria-current": href === current ? "page" : null }, name)));
   changesBox = h("div", { class: "changes" });
   const who = h("div", { class: "who" });
-  const top = h("header", { class: "top" }, h("div", { class: "top-in" }, h("a", { class: "brand", href: "./" }, "espDNS"), nav, changesBox, who));
+  const top = h("header", { class: "top" }, h("div", { class: "top-in" }, h("a", { class: "brand", href: "./" }, "espDNS"), nav, searchBox(), changesBox, who, topArtie()));
   bandBox = h("div", { class: "bands" });
   const main = document.querySelector("main");
   if (main) { if (!main.id) main.id = "content"; main.tabIndex = -1; }
@@ -444,8 +653,11 @@ export function shell(current) {
       who.append(h("button", { class: "chip-btn", type: "button", "aria-label": `Account: ${s.user}`, onclick: () => openAccount(s.user) }, `${s.user} ▾`));
     } else if (!s.password_set) {
       who.append(h("span", { class: "chip-btn" }, "read-only"));
-      sessBand = h("div", { class: "band warn" }, h("div", { class: "band-in" }, h("strong", {}, "Read-only."),
-        h("span", {}, "No password is set, so the controller takes no actions. Set one with ", h("code", {}, "espdns passwd"), " (docs/getting-started.md, step 6), then log in.")));
+      // The setup page sets the password itself: no band there.
+      if (current !== "setup.html") {
+        sessBand = h("div", { class: "band warn" }, h("div", { class: "band-in" }, h("strong", {}, "Read-only."),
+          h("span", {}, "No password is set, so the controller takes no actions. ", h("a", { href: "setup.html" }, "Set one"), ", or use ", h("code", {}, "espdns passwd"), " (docs/developer.md).")));
+      }
     } else if (s.error) {
       sessBand = h("div", { class: "band bad" }, h("div", { class: "band-in" }, h("strong", {}, "The login can't be used."), h("span", {}, str(s.error))));
     }
@@ -457,18 +669,19 @@ export function shell(current) {
   watchNodes();
 }
 
-// The account: who is logged in, and logging out. Its password, the release key and backup,
-// and the recent changes come here.
-function openAccount(user) {
-  const p = panel(user);
-  const out = h("button", { class: "btn", type: "button" }, "Log out");
-  out.addEventListener("click", async () => {
-    out.disabled = true;
-    try { await post("api/logout"); } catch { /* gone anyway */ }
-    loggedIn(null);
-    location.href = "login.html";
-  });
-  p.footer.append(out);
+// The account panel (account.js): the password, keeping the controller safe (the release
+// key, a backup), the recent changes and logging out; loaded when first opened. open names a
+// row to open at once ("safe").
+function openAccount(user, open) {
+  import("./account.js").then(m => m.openAccount(user, open)).catch(e => toast(`Couldn't open the account: ${e.message}`));
+}
+export function openAccountPanel(open) {
+  session.then(s => { if (s.logged_in) openAccount(s.user, open); else toast("Log in first"); });
 }
 
-export { api, getJSON, post, session, events, el, nodeText, ended, answering, wired };
+export { api, getJSON, post, session, events, el, nodeText, ended, answering, wired, inService };
+
+// topArtie is the mascot, small, at the top bar's far end, opposite the brand.
+function topArtie() {
+  return h("img", { class: "top-artie", src: "img/artie.webp", width: 14, height: 24, alt: "", title: "Artie A. Record" });
+}

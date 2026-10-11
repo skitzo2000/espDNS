@@ -1,4 +1,4 @@
-# espDNS controller. Running it: Docker Compose (compose.yaml):
+# espDNS controller. Running it: Docker Compose (compose.yaml; docs/developer.md):
 # docker compose up -d --build, not make. `make run`: the native binary, for development only.
 # Static builds (CGO_ENABLED=0): no C compiler needed, on the host (Nix has none) or in Docker.
 # The CLI: `make build`, then ./espdns blocklist|push|pause (or, in the image,
@@ -14,7 +14,7 @@ DATA   ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/controller/data,$(CURDIR)/data)
 # worktree shares them, as it shares the data directory; none, the project's defaults, which
 # name no node, board or address. Set them with ?= so the command line and the environment
 # still win: the fleet (NODES, CANARY, FLEET_BOARDS, CONFIGS, below), where the secrets come
-# from (SECRET_RUN, PRIMARY_TOKEN_ENV, RELEASE_KEY_FILE, below). local.mk.example shows each;
+# from (SECRET_RUN, RELEASE_KEY_FILE, below). local.mk.example shows each;
 # local.mk.example. The firmware's own are in firmware/local.mk (fleet-firmware builds with them).
 LOCAL_MK ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/controller/local.mk,$(CURDIR)/local.mk)
 -include $(LOCAL_MK)
@@ -42,7 +42,7 @@ e2e:
 
 # Development only: the native binary in the foreground (the service: docker compose up -d)
 run: build data
-	./espdns-controller -data $(DATA) -listen $(LISTEN)
+	./espdns-controller -data $(DATA) -listen $(LISTEN) -project-pub ../keys/project.pub
 
 # Import the chip images exported by `make export-images` in firmware/
 firmware:
@@ -59,6 +59,13 @@ vendor-ewt:
 	@$(if $(and $(V),$(SHA512)),,echo "usage: make vendor-ewt V=<version> SHA512=sha512-<base64> (https://registry.npmjs.org/esp-web-tools/<version>, dist.integrity)"; exit 1)
 	scripts/vendor-esp-web-tools.sh '$(V)' '$(SHA512)'
 
+# Updates the vendored esptool-js (web/vendor/esptool-js/, Write keys only's flasher): the
+# version esp-web-tools' bundle was built with. Then make test and make e2e.
+.PHONY: vendor-etj
+vendor-etj:
+	@$(if $(and $(V),$(SHA512)),,echo "usage: make vendor-etj V=<version> SHA512=sha512-<base64> (https://registry.npmjs.org/esptool-js/<version>, dist.integrity)"; exit 1)
+	scripts/vendor-esptool-js.sh '$(V)' '$(SHA512)'
+
 # The image the CLI targets below run, built as compose.yaml builds it (one definition: its
 # build:, with the board catalog ../boards as its own context, at /catalog), named $(IMAGE).
 # Compose reads all of compose.yaml for a build too, so the uid and gid it requires are given
@@ -71,7 +78,7 @@ image:
 # by root, as docker would make it), and under umask 077, as everything make puts there: the
 # user's only (directories 0700, files 0600 or 0700), as the controller makes what it
 # writes, and makes what it finds open to group or others at start. A new one is empty: no settings.json (none is no nodes,
-# no DNS peers, a manual zone primary) and no node configs. The repo has no deployment's
+# no DNS peers, no zone primary) and no node configs. The repo has no deployment's
 # settings or configs to put there, only examples (../configs/example-*.json),
 # which make data never copies: write settings.json there, or start from the
 # example, and make the configs in the controller's editor (or by hand in $(DATA)/configs).
@@ -118,34 +125,20 @@ data:
 # read-only, what a rollout pushes (the firmware builds at /fleet/build, a blocklist
 # file, zone files). Secrets come from the environment at run time (exported, or put there
 # by SECRET_RUN, below), or a file, and go only to the targets that need them: the release key on the container's standard
-# input (-key -), never in its environment; the zone primary's token by `docker run -e NAME`.
+# input (-key -), never in its environment.
 # No secret is written to disk or built into the image. Rollouts are always coordinated:
 # canary first, one node at a time, a DNS peer or another node answering, stop on the
 # first failure, and only the nodes in settings.json count (-mdns 0). There is no knob here
 # for -force, -allow-single, -no-dns-checks, -reinstall, -soak or -recovery.
 # SECRET_RUN: the hook to a password manager, empty by default. A make function: $(call
 # SECRET_RUN,NAME ...) is a command prefix that runs the command after it with each named
-# environment variable set to its secret (ESPDNS_RELEASE_KEY, the PRIMARY_TOKEN_ENV below,
-# PASSWD_ENV, ESPDNS_BACKUP_PASSPHRASE), e.g. in local.mk
+# environment variable set to its secret (ESPDNS_RELEASE_KEY, PASSWD_ENV,
+# ESPDNS_BACKUP_PASSPHRASE), e.g. in local.mk
 #   SECRET_RUN = my-secrets-tool exec $(1) --
 # Empty: the command runs as it is, and each variable must already be in make's environment
-# (exported), or the target takes the secret from a file instead (RELEASE_KEY_FILE,
-# PRIMARY_TOKEN_FILE) or from standard input (passwd, backup, restore).
+# (exported), or the target takes the secret from a file instead (RELEASE_KEY_FILE) or from
+# standard input (passwd, backup, restore).
 SECRET_RUN ?=
-# The zone primary's API token, for a kind driven over an API (internal/primary:
-# technitium): the environment variable that holds it (exported, or set by SECRET_RUN).
-# Empty (the default): none is taken, and adoption uses the token make primary-import put in
-# the data directory, if any (a primary of the manual kind needs none). A deployment that
-# gives the token this way names the variable in local.mk (above).
-PRIMARY_TOKEN_ENV    ?=
-# The zone primary for adoption: settings.json's "primary", as the controller uses it
-# ({"kind": "manual"} for any primary, changed by hand; {"kind": "technitium", "url": ...}).
-# PRIMARY_KIND= (manual or technitium) and PRIMARY_URL= override it. A settings.json that
-# names none is manual: the project's default; no other address is ever assumed.
-# PRIMARY_DONE=1: the changes adoption names were made on the primary by hand.
-PRIMARY_KIND ?=
-PRIMARY_URL  ?=
-PRIMARY_DONE ?=
 # The release signing key (ECDSA P-256 PEM). Empty: from $ESPDNS_RELEASE_KEY (the PEM, or base64
 # of it; exported, or set by SECRET_RUN), piped to the CLI's standard input. A path: that file, mounted
 # read-only (../firmware/secrets/release.pem).
@@ -177,20 +170,17 @@ MUST_RESOLVE       ?=
 REPO     ?= $(abspath $(CURDIR)/..)
 FLEET    := -data /data
 # SECRET_RUN gets every secret a command needs at once: one password manager call
-TOKEN_ENV  = $(if $(PRIMARY_TOKEN_ENV),-e $(PRIMARY_TOKEN_ENV))
 ifeq ($(RELEASE_KEY_FILE),)
 # The key from the environment goes to the container on standard input: printenv writes it
 # into the pipe, and docker (with the command after it) runs without it in its environment.
 # The docker command is passed as sh's arguments ("$$@"), so it is not quoted again.
 KEY_PIPE   = sh -c 'printenv ESPDNS_RELEASE_KEY | env -u ESPDNS_RELEASE_KEY "$$@"' fleet-key
 WITH_KEY   = $(call SECRET_RUN,ESPDNS_RELEASE_KEY) $(KEY_PIPE)
-WITH_TOKEN_KEY = $(call SECRET_RUN,$(PRIMARY_TOKEN_ENV) ESPDNS_RELEASE_KEY) $(KEY_PIPE)
 KEY_STDIN  = -i
 KEY_MOUNT  =
 KEY_ARGS   = -key -
 else
 WITH_KEY   =
-WITH_TOKEN_KEY = $(if $(PRIMARY_TOKEN_ENV),$(call SECRET_RUN,$(PRIMARY_TOKEN_ENV)))
 KEY_STDIN  =
 KEY_MOUNT  = -v $(abspath $(RELEASE_KEY_FILE)):/run/secrets/release.pem:ro
 KEY_ARGS   = -key /run/secrets/release.pem
@@ -271,13 +261,21 @@ fleet-image: image data
 # Each target gets only the secrets it uses; only a rollout sees what it pushes
 fleet-rollout-dry fleet-rollout: EXTRA_MOUNTS = $(ROLLOUT_MOUNT)
 fleet-rollout-dry fleet-rollout fleet-reboot-pending fleet-revert: SECRET_ENV = $(KEY_STDIN)
-fleet-adopt-dry fleet-adopt: SECRET_ENV = $(KEY_STDIN) $(TOKEN_ENV)
+fleet-adopt-dry fleet-adopt: SECRET_ENV = $(KEY_STDIN)
 
 # The transitional per-board images the nodes run (firmware/build/<board>/dns2.bin), built
 # and copied into the data directory (fleet-firmware-data), where a rollout, from here or
-# the controller's Push page, pushes them from.
+# the controller's Push page, pushes them from. Each is built with FLEET_KEYS_SEED's keys as
+# its seed: a node in service whose keys partition holds no keys
+# record still gets its keys from it; one that has its keys (all of them, once on firmware
+# with the keys partition) keeps the partition's. The default is firmware/keys, your public
+# keys there (git-ignored: make -C firmware keys, or copied in), if it has them; else none,
+# and the builds are key-neutral, as FLEET_KEYS_SEED= makes them. These are your own builds:
+# a rollout pushes them as they are, with no release signature to check (docs/operations.md).
+FLEET_KEYS_SEED ?= $(if $(wildcard $(REPO)/firmware/keys/release.pub),$(REPO)/firmware/keys)
 fleet-firmware:
-	$(if $(NEED_BOARDS),$(error $(NEED_BOARDS)))for b in $(FLEET_BOARDS); do $(MAKE) -C $(REPO)/firmware build BOARD=$$b REQUIRE_STATIC_IP=1 || exit 1; done
+	$(if $(NEED_BOARDS),$(error $(NEED_BOARDS)))for b in $(FLEET_BOARDS); do $(MAKE) -C $(REPO)/firmware build BOARD=$$b REQUIRE_STATIC_IP=1 \
+	  KEYS_SEED='$(FLEET_KEYS_SEED)' || exit 1; done
 	@$(MAKE) --no-print-directory fleet-firmware-data
 
 # Copies each board's build (firmware/build/<board>/dns2.bin) to
@@ -403,32 +401,27 @@ fleet-revert: fleet-image fleet-key-check
 # Adoption: HOST=<its address now> (or NODE=<its ID>) CONFIG=<file in $(DATA)/configs>, and
 # optionally ADDRESS=a.b.c.d/nn [GATEWAY=...]. Without ADDRESS the address is the
 # config's network, else the one the node runs on now (its /status). RESERVED=1 only with
-# ADDRESS=dhcp, on a network with a DHCP server (never one in settings.json's no_dhcp). The zone primary
-# is settings.json's "primary" (above: PRIMARY_KIND, PRIMARY_URL): over its API
-# (technitium) with the token from PRIMARY_TOKEN_ENV, its allow lists are changed; by hand (manual, or no
-# token) adopt names the changes to make on it and stops, and PRIMARY_DONE=1 goes on once
-# they are made. ADD_TO_SETTINGS=1: once adopted, its address goes into settings.json. The
+# ADDRESS=dhcp, on a network with a DHCP server (never one in settings.json's no_dhcp). Nothing
+# is changed on the zone primary: adopt says once when the node's address is in none of the
+# networks settings.json's "primary" says it allows zone transfers from. ADD_TO_SETTINGS=1:
+# once adopted, its address goes into settings.json. The
 # controller's Adopt page builds the same adoption from the same request (internal/adoption).
-ADOPT_PRIMARY = $(if $(PRIMARY_KIND),-primary-kind $(PRIMARY_KIND)) $(if $(PRIMARY_URL),-primary-url $(PRIMARY_URL)) \
-	$(if $(PRIMARY_TOKEN_ENV),-primary-token-env $(PRIMARY_TOKEN_ENV)) $(if $(PRIMARY_DONE),-primary-done)
 ADOPT_ARGS = $(KEY_ARGS) $(FLEET) -mdns 0 $(if $(HOST),-host $(HOST)) $(if $(NODE),-node $(NODE)) \
 	$(if $(ADDRESS),-address $(ADDRESS)) $(if $(GATEWAY),-gateway $(GATEWAY)) \
-	-config /data/configs/$(CONFIG) $(if $(RESERVED),-reserved) $(ADOPT_PRIMARY) $(if $(ADD_TO_SETTINGS),-add-to-settings)
+	-config /data/configs/$(CONFIG) $(if $(RESERVED),-reserved) $(if $(ADD_TO_SETTINGS),-add-to-settings)
 ADOPT_CHECK = test -n "$(HOST)$(NODE)" -a -n "$(CONFIG)" || { echo "HOST= or NODE=, and CONFIG="; exit 1; }; \
 	$(if $(RESERVED),$(if $(filter dhcp,$(ADDRESS)),,echo "RESERVED=1 is only for ADDRESS=dhcp (a static address needs no reservation)"; exit 1;)) \
 	$(call check_files,$(DATA)/configs/$(CONFIG))
 
-fleet-adopt-dry fleet-adopt: SECRET_NAMES = $(PRIMARY_TOKEN_ENV)
-fleet-adopt-dry fleet-adopt: SECRET_ALT = leave PRIMARY_TOKEN_ENV empty to use the token make primary-import imported
-fleet-adopt-dry: fleet-image $(if $(PRIMARY_TOKEN_ENV),fleet-secret-check) fleet-key-check
+fleet-adopt-dry: fleet-image fleet-key-check
 	@$(ADOPT_CHECK)
-	$(WITH_TOKEN_KEY) $(FLEET_RUN) adopt $(ADOPT_ARGS) -dry-run
+	$(WITH_KEY) $(FLEET_RUN) adopt $(ADOPT_ARGS) -dry-run
 
-fleet-adopt: fleet-image $(if $(PRIMARY_TOKEN_ENV),fleet-secret-check) fleet-key-check
+fleet-adopt: fleet-image fleet-key-check
 	@$(ADOPT_CHECK)
-	$(WITH_TOKEN_KEY) $(FLEET_RUN) adopt $(ADOPT_ARGS)
+	$(WITH_KEY) $(FLEET_RUN) adopt $(ADOPT_ARGS)
 
-# ---- The controller's login, release key and zone primary token -------------------------
+# ---- The controller's login and release key ---------------------------------------------
 # Set the one login: its user name (your choice) and password, kept as an argon2id hash in
 # $(DATA)/auth.json (mode 0600), the password never an argument or in the container's
 # environment. Every session before ends. The user name: PASSWD_USER=<name> (printable, no
@@ -460,7 +453,7 @@ passwd: export ESPDNS_PASSWD_USER = $(value PASSWD_USER)
 DOCKER_TTY = $$( [ -t 0 ] && echo -t )
 PASSWD_RUN = docker run --rm -i $(1) --user $(shell id -u):$(shell id -g) -v '$(abspath $(DATA))':/data \
 	  --entrypoint /espdns $(IMAGE) passwd -data /data $(PASSWD_USER_ARG) $(if $(PASSWD_WAIT),-wait $(PASSWD_WAIT))
-.PHONY: passwd key-import key-status primary-import primary-status
+.PHONY: passwd key-import key-status
 ifeq ($(filter-out 0,$(PASSWD_FROM_ENV)),)
 passwd: fleet-image
 	$(call PASSWD_RUN,$(DOCKER_TTY))
@@ -477,11 +470,15 @@ endif
 
 # Import the release key into $(DATA)/keys/release.pem (mode 0600), where the controller
 # signs its actions with it: from $ESPDNS_RELEASE_KEY on the container's standard input as
-# the fleet targets get it, or RELEASE_KEY_FILE. Refused unless the firmware is
-# built with it (../firmware/keys/release.pub) or a node in settings.json trusts it, and
-# refused if it is the recovery key. It only reads the nodes' /status.
-KEY_TRUST_ARGS = $(FLEET) -mdns 0 -pub /fleet/keys/release.pub -recovery-pub /fleet/keys/recovery.pub
-key-import key-status: EXTRA_MOUNTS = -v $(REPO)/firmware/keys:/fleet/keys:ro
+# the fleet targets get it, or RELEASE_KEY_FILE. Refused unless it is your public key in
+# ../firmware/keys/release.pub (if you keep one there: it is git-ignored), a node in
+# settings.json trusts it, or no node is listed yet; and refused if it is the recovery key
+# (../firmware/keys/recovery.pub if there, else the data directory's keys/recovery.pub).
+# It only reads the nodes' /status.
+KEYS_DIR       = $(REPO)/firmware/keys
+KEY_TRUST_ARGS = $(FLEET) -mdns 0 $(if $(wildcard $(KEYS_DIR)/release.pub),-pub /fleet/keys/release.pub) \
+  $(if $(wildcard $(KEYS_DIR)/recovery.pub),-recovery-pub /fleet/keys/recovery.pub)
+key-import key-status: EXTRA_MOUNTS = $(if $(wildcard $(KEYS_DIR)/*.pub),-v $(KEYS_DIR):/fleet/keys:ro)
 key-import: SECRET_ENV = $(KEY_STDIN)
 key-import: fleet-image fleet-key-check
 	$(WITH_KEY) $(FLEET_RUN) key import $(KEY_ARGS) $(KEY_TRUST_ARGS)
@@ -490,31 +487,6 @@ key-import: fleet-image fleet-key-check
 key-status: fleet-image
 	$(FLEET_RUN) key status $(KEY_TRUST_ARGS)
 
-
-# Import the zone primary's API token (the technitium kind's) into $(DATA)/keys/primary.token
-# (mode 0600), where the controller's adoption and its Zone primary view use it: from the
-# environment variable PRIMARY_TOKEN_ENV names on the container's standard input,
-# as the release key goes to key-import (never its environment, an argument or a file but
-# that one), or PRIMARY_TOKEN_FILE. It doesn't call the primary.
-PRIMARY_TOKEN_FILE ?=
-primary-import: SECRET_ENV = -i
-ifeq ($(PRIMARY_TOKEN_FILE),)
-primary-import: SECRET_NAMES = $(PRIMARY_TOKEN_ENV)
-primary-import: SECRET_ALT = PRIMARY_TOKEN_FILE= to import it from a file
-primary-import: fleet-image $(if $(PRIMARY_TOKEN_ENV),fleet-secret-check)
-	@test -n '$(PRIMARY_TOKEN_ENV)' || { echo "PRIMARY_TOKEN_ENV= the environment variable that holds the token, or PRIMARY_TOKEN_FILE="; exit 1; }
-	$(call SECRET_RUN,$(PRIMARY_TOKEN_ENV)) sh -c 'printenv $(PRIMARY_TOKEN_ENV) | env -u $(PRIMARY_TOKEN_ENV) "$$@"' primary-token \
-	  $(FLEET_RUN) primary import $(FLEET)
-else
-primary-import: fleet-image
-	@test -f '$(abspath $(PRIMARY_TOKEN_FILE))' || { echo "PRIMARY_TOKEN_FILE: no such file: $(abspath $(PRIMARY_TOKEN_FILE))"; exit 1; }
-	$(FLEET_RUN) primary import $(FLEET) < '$(abspath $(PRIMARY_TOKEN_FILE))'
-endif
-
-# Which zone primary settings.json names, and is the imported token there and usable (mode
-# 0600, this user's)? Never prints it.
-primary-status: fleet-image
-	$(FLEET_RUN) primary status $(FLEET)
 
 # ---- Backup, restore, recovery (docs/operations.md, Backup and restore) -------------------
 # make backup OUT=<file>: the data directory in one encrypted file (age, to a passphrase),

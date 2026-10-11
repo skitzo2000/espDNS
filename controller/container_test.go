@@ -130,22 +130,66 @@ func TestVersionLinked(t *testing.T) {
 	}
 }
 
-// The image carries the firmware's public keys at /keys (espdns release verify checks a
-// release with /keys/release.pub), from firmware/keys, a context whose .dockerignore lets in
-// the two public keys only: never a private key, whatever is put there.
+// The image carries the project's release public key at /keys/project.pub (espdns release
+// import and fetch check a release with it), from keys/ at the top, a context whose
+// .dockerignore lets in that public key only: never a private key, whatever is put there.
+// The release workflows build with the same context.
 func TestPublicKeysInImage(t *testing.T) {
-	if !strings.Contains(read(t, "Dockerfile"), "COPY --from=keys release.pub recovery.pub /keys/") {
-		t.Error("Dockerfile: the public keys not copied from the keys context to /keys")
+	if !strings.Contains(read(t, "Dockerfile"), "COPY --from=keys project.pub /keys/") {
+		t.Error("Dockerfile: the project's public key not copied from the keys context to /keys")
 	}
-	if !regexp.MustCompile(`(?m)^keys: \.\./firmware/keys$`).MatchString(strings.Join(lines(t, "compose.yaml"), "\n")) {
-		t.Error("compose.yaml: no keys: ../firmware/keys build context")
+	if !regexp.MustCompile(`(?m)^ +keys: \.\./keys$`).MatchString(read(t, "compose.yaml")) {
+		t.Error("compose.yaml: no keys: ../keys build context")
 	}
-	if ign := lines(t, "../firmware/keys/.dockerignore"); len(ign) != 3 || ign[0] != "*" || ign[1] != "!release.pub" || ign[2] != "!recovery.pub" {
-		t.Errorf("../firmware/keys/.dockerignore: %q, want *, !release.pub and !recovery.pub only", ign)
+	if ign := lines(t, "../keys/.dockerignore"); len(ign) != 2 || ign[0] != "*" || ign[1] != "!project.pub" {
+		t.Errorf("../keys/.dockerignore: %q, want * and !project.pub only", ign)
 	}
-	for _, k := range []string{"release.pub", "recovery.pub"} {
-		if b, err := os.ReadFile("../firmware/keys/" + k); err != nil || len(b) != 65 || b[0] != 4 {
-			t.Errorf("firmware/keys/%s: not a raw P-256 public key (%v)", k, err)
+	if b, err := os.ReadFile("../keys/project.pub"); err != nil || len(b) != 65 || b[0] != 4 {
+		t.Errorf("keys/project.pub: not a raw P-256 public key (%v)", err)
+	}
+	for _, wf := range []string{"../.github/workflows/release.yml"} {
+		if w := read(t, wf); !strings.Contains(w, "--build-context keys=keys ") || strings.Contains(w, "firmware/keys") {
+			t.Errorf("%s: the controller image isn't built with --build-context keys=keys", wf)
 		}
+	}
+}
+
+// compose.user.yaml, the release's compose.yaml (scripts/release/user-compose.sh): what a
+// user downloads and runs with docker compose up -d, nothing else. compose.yaml's hardening
+// and limits, its image only (no build, no .env: nothing to set), its state in a named
+// volume, which starts as the image's /data (the Dockerfile: the runtime user's, 0700).
+func TestUserCompose(t *testing.T) {
+	user := strings.Join(lines(t, "compose.user.yaml"), "\n")
+	base := strings.Join(lines(t, "compose.yaml"), "\n")
+	def := regexp.MustCompile(`\$\{[A-Z_]+:-([^}]*)\}`) // compose.yaml's defaults, as user's literal values
+	for _, key := range []string{"name:", "restart:", "network_mode:", "cap_drop:", "security_opt:", "read_only:",
+		"- /tmp:", "mem_limit:", "GOMEMLIMIT:", "pids_limit:", "stop_grace_period:", "interval:", "timeout:", "start_period:", "retries:"} {
+		want := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `.*$`).FindString(base)
+		want = def.ReplaceAllString(want, "$1")
+		if want == "" || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(want)+`$`).MatchString(user) {
+			t.Errorf("compose.user.yaml: no %q (compose.yaml's)", want)
+		}
+	}
+	for what, re := range map[string]string{
+		"the release's image, filled in":     `(?m)^image: "@ESPDNS_IMAGE@"$`,
+		"a fixed container name":             `(?m)^container_name: espdns-controller$`,
+		"the dashboard on localhost":         `(?m)^command: \["-listen", "127\.0\.0\.1:8480"\]$`,
+		"its health checked at that address": `(?m)^test: \["CMD", "/espdns-controller", "-healthcheck", "-listen", "127\.0\.0\.1:8480"\]$`,
+		"state in ./data, a bind mount":      `(?m)^source: \./data\ntarget: /data\nbind:\ncreate_host_path: false$`,
+		"run as you, from .env":              `(?m)^user: "\$\{ESPDNS_UID:\?[^}]+\}:\$\{ESPDNS_GID:\?[^}]+\}"$`,
+	} {
+		if !regexp.MustCompile(re).MatchString(user) {
+			t.Errorf("compose.user.yaml: %s: no line matching %s", what, re)
+		}
+	}
+	for _, bad := range []string{"build:", "env_file", "privileged", "cap_add", "docker.sock", "/var/run/docker"} {
+		if strings.Contains(user, bad) {
+			t.Errorf("compose.user.yaml: %s", bad)
+		}
+	}
+	df := read(t, "Dockerfile")
+	if !strings.Contains(df, "RUN mkdir -p /rootfs/data && chmod 0700 /rootfs/data") ||
+		!strings.Contains(df, "COPY --from=build --chown=65532:65532 /rootfs/ /") {
+		t.Error("Dockerfile: /data isn't in the image as the runtime user's (65532), 0700: a Docker volume (the file's other choice) would be root's")
 	}
 }

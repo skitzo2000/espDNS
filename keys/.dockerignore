@@ -1,0 +1,5 @@
+# keys/ is the controller image's "keys" build context (controller/Dockerfile,
+# controller/compose.yaml), for the project's public key alone: an allowlist, so nothing
+# else gets in.
+*
+!project.pub

@@ -37,8 +37,8 @@ func fakeChips(t *testing.T, version string, images ...string) string {
 		boot := make([]byte, 64)
 		boot[0], boot[2], boot[3] = 0xE9, 2, 0x2F // magic, DIO, 4 MB / 80 MHz
 		files := map[string][]byte{
-			"bootloader.bin": boot, "partitions-8mb.bin": []byte("table 8 " + img),
-			"partitions-4mb.bin": []byte("table 4 " + img), "ota_data_initial.bin": bytes.Repeat([]byte{0xFF}, 8192),
+			"bootloader.bin": boot, "partitions-8mb.bin": fakeTable("8 " + img),
+			"partitions-4mb.bin": fakeTable("4 " + img), "ota_data_initial.bin": bytes.Repeat([]byte{0xFF}, 8192),
 			"app.bin": appImage(version, "", "the app of "+img),
 		}
 		for n, b := range files {
@@ -46,11 +46,11 @@ func fakeChips(t *testing.T, version string, images ...string) string {
 				t.Fatal(err)
 			}
 		}
-		chip := map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4": "esp32p4", "esp32s3-octal": "esp32s3",
+		chip := map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4": "esp32p4", "esp32s3-octal": "esp32s3", "esp32s3-eth": "esp32s3",
 			"esp32s3-quad": "esp32s3", "esp32": "esp32", "esp32c3": "esp32c3", "esp32c6": "esp32c6"}[img]
 		info := map[string]any{"image": img, "chip": chip, "chip_family": strings.ToUpper(strings.Replace(chip, "esp32", "ESP32-", 1)),
 			"offsets": map[string]int{"bootloader.bin": 0, "partitions-8mb.bin": 0x8000, "partitions-4mb.bin": 0x8000,
-				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000},
+				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000, "keys": 0x1b000},
 			"flash_mode": "dio", "flash_freq": "80m", "version": version, "built": "2026-10-07T00:00:00Z", "elf_sha256": "00"}
 		b, _ := json.Marshal(info)
 		if err := os.WriteFile(filepath.Join(d, "image.json"), b, 0o644); err != nil {
@@ -60,20 +60,36 @@ func fakeChips(t *testing.T, version string, images ...string) string {
 	return dir
 }
 
+// fakeTable is a partition table binary with the keys partition (as every table has it) and
+// a data partition named what the table is (so each image's tables differ), then the end.
+func fakeTable(what string) []byte {
+	entry := func(name string, sub byte, off, size uint32) []byte {
+		e := make([]byte, 32)
+		e[0], e[1], e[2], e[3] = 0xAA, 0x50, 1, sub
+		binary.LittleEndian.PutUint32(e[4:], off)
+		binary.LittleEndian.PutUint32(e[8:], size)
+		copy(e[12:28], name)
+		return e
+	}
+	t := append(entry("keys", 0x42, 0x1b000, 0x2000), entry(what, 0x40, 0x12000, 0x1000)...)
+	return append(t, bytes.Repeat([]byte{0xFF}, 32)...)
+}
+
 // appImage is an ESP app image as far as the release reads one: its header, the app
-// descriptor with the version, the firmware's built-in address mark (addr "": none), and text.
+// descriptor with the version, the firmware's built-in address mark (addr "": none), the
+// keys partition mark of a key-neutral build, and text.
 func appImage(version, addr, text string) []byte {
 	b := make([]byte, 32+256)
 	b[0] = 0xE9
 	binary.LittleEndian.PutUint32(b[32:], 0xABCD5432)
 	copy(b[32+16:], version)
 	copy(b[32+48:], "dns2")
-	b = append(b, "espdns:builtin-address="+addr+"\x00"...)
+	b = append(b, "espdns:builtin-address="+addr+"\x00espdns:keys=partition-v1\x00"...)
 	return append(b, text...)
 }
 
 // The catalog's chip images, and one more no board runs (it is released all the same)
-var catalogImages = []string{"esp32p4-rev1", "esp32s3-octal", "esp32c6"}
+var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32c6"}
 
 func catalogBoards(t *testing.T) []boards.Entry {
 	t.Helper()
@@ -103,8 +119,9 @@ func testKey(t *testing.T) *ecdsa.PrivateKey {
 	return k
 }
 
-// A release: every chip image's tarball, every catalog board's factory image and manifest,
-// the included files, and SHA256SUMS listing exactly those, in sha256sum's format.
+// A release: every chip image's tarball, the included files, and SHA256SUMS listing exactly
+// those, in sha256sum's format. No factory images: a new node is installed over USB from
+// the controller, which writes its keys.
 func TestBuild(t *testing.T) {
 	ref := filepath.Join(t.TempDir(), "espdns-0.0.4-controller-image.txt")
 	os.WriteFile(ref, []byte("registry.example.com/owner/espdns-controller:0.0.4@sha256:"+strings.Repeat("ab", 32)+"\n"), 0o644)
@@ -114,14 +131,11 @@ func TestBuild(t *testing.T) {
 	for _, img := range catalogImages {
 		want = append(want, ChipFile("0.0.4", img))
 	}
-	for _, e := range catalogBoards(t) {
-		want = append(want, FactoryFile("0.0.4", e.Board.Name), ManifestFile("0.0.4", e.Board.Name))
-	}
 	want = append(want, "espdns-0.0.4-controller-image.txt")
 	if got := files[:len(files)-1]; !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) || files[len(files)-1] != SumsFile {
 		t.Fatalf("files %v, want %v and SHA256SUMS", files, want)
 	}
-	if !slices.Contains(want, "espdns-0.0.4-image-esp32s3-octal.tar.gz") || !slices.Contains(want, "espdns-0.0.4-factory-ws-s3-eth.bin") {
+	if !slices.Contains(want, "espdns-0.0.4-image-esp32s3-eth.tar.gz") || !slices.Contains(want, "espdns-0.0.4-image-esp32s3-octal.tar.gz") || slices.ContainsFunc(files, func(f string) bool { return strings.Contains(f, "factory") || strings.HasSuffix(f, ".bin") }) {
 		t.Fatalf("names: %v", want)
 	}
 	sums, err := os.ReadFile(filepath.Join(out, SumsFile))
@@ -154,63 +168,6 @@ func TestBuild(t *testing.T) {
 	}
 }
 
-// Each factory image is the builder's assembly of its board with the address "dhcp", and its
-// manifest installs it, erasing first, as the builder's does.
-func TestBuildFactory(t *testing.T) {
-	out, _ := build(t, "0.0.4")
-	for _, e := range catalogBoards(t) {
-		name := e.Board.Name
-		bin, err := os.ReadFile(filepath.Join(out, FactoryFile("0.0.4", name)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The board partition at 0x12000: "EDBD", v1, the JSON with its CRC
-		part := bin[0x12000 : 0x12000+4096]
-		n := binary.LittleEndian.Uint32(part[8:])
-		if string(part[:4]) != "EDBD" || n > 4080 {
-			t.Fatalf("%s: no board partition at 0x12000: %x", name, part[:16])
-		}
-		var bd boards.Board
-		if err := json.Unmarshal(part[16:16+n], &bd); err != nil {
-			t.Fatalf("%s: board partition: %v", name, err)
-		}
-		if bd.Name != name || bd.Image != e.Board.Image || bd.Network == nil || bd.Network.Address != "dhcp" || bd.Network.Gateway != "" {
-			t.Errorf("%s: board partition says %+v %+v", name, bd, bd.Network)
-		}
-		if errs, _ := boards.Check(bd); len(errs) > 0 {
-			t.Errorf("%s: its board definition: %v", name, errs)
-		}
-		// The bootloader's flash size is the board's (16 MB: 4, 8 MB: 3, high nibble of byte 3)
-		if code := map[int]byte{8: 3, 16: 4}[e.Board.FlashMB]; bin[3]>>4 != code {
-			t.Errorf("%s: bootloader flash size code %d, want %d", name, bin[3]>>4, code)
-		}
-		if !bytes.Contains(bin[0x20000:], []byte("the app of "+e.Board.Image)) {
-			t.Errorf("%s: not its chip image's app", name)
-		}
-		var m struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-			Erase   bool   `json:"new_install_prompt_erase"`
-			Builds  []struct {
-				ChipFamily string `json:"chipFamily"`
-				Parts      []struct {
-					Path   string `json:"path"`
-					Offset int    `json:"offset"`
-				} `json:"parts"`
-			} `json:"builds"`
-		}
-		b, _ := os.ReadFile(filepath.Join(out, ManifestFile("0.0.4", name)))
-		if err := json.Unmarshal(b, &m); err != nil {
-			t.Fatal(err)
-		}
-		if m.Name != "espDNS "+name || m.Version != "0.0.4" || !m.Erase || len(m.Builds) != 1 ||
-			!strings.HasPrefix(m.Builds[0].ChipFamily, "ESP32") || len(m.Builds[0].Parts) != 1 ||
-			m.Builds[0].Parts[0].Path != FactoryFile("0.0.4", name) || m.Builds[0].Parts[0].Offset != 0 {
-			t.Errorf("%s: manifest %s", name, b)
-		}
-	}
-}
-
 // withApp is the catalog's chip images with esp32s3-octal's app replaced
 func withApp(t *testing.T, app []byte) string {
 	t.Helper()
@@ -239,6 +196,8 @@ func TestBuildRefused(t *testing.T) {
 		{Options{Version: "0.0.4", Images: withApp(t, appImage("0.0.3", "", "x")), Catalog: catalog}, `its app is version "0.0.3"`},
 		{Options{Version: "0.0.4", Images: withApp(t, appImage("0.0.4", "", "x")[:300]), Catalog: catalog}, "no built-in address mark"},
 		{Options{Version: "0.0.4", Images: withApp(t, []byte("not an image")), Catalog: catalog}, "not an ESP app image"},
+		{Options{Version: "0.0.4", Images: withApp(t, bytes.ReplaceAll(appImage("0.0.4", "", "x"), []byte("espdns:keys=partition-v1"), []byte("x"))), Catalog: catalog}, "doesn't read the keys partition"},
+		{Options{Version: "0.0.4", Images: withApp(t, append(appImage("0.0.4", "", "x"), "espdns:keys-seed=0123456789abcdef,fedcba9876543210\x00"...)), Catalog: catalog}, "carries a keys seed"},
 		{Options{Version: "0.0.4", Images: good, Catalog: catalog, Include: []string{filepath.Join(full, "left-over.bin"), filepath.Join(full, "left-over.bin")}}, "written twice"},
 	} {
 		if c.o.Out == "" {
@@ -352,7 +311,7 @@ func TestImport(t *testing.T) {
 	pub := release.PublicRaw(k)
 	data := t.TempDir()
 	images := filepath.Join(data, "firmware", "images")
-	if _, err := Import(out, pub, images); err == nil {
+	if _, err := Import(out, Signers{Project: pub}, images); err == nil {
 		t.Fatal("an unsigned release imported")
 	}
 	if _, err := os.Stat(images); !errors.Is(err, fs.ErrNotExist) {
@@ -364,9 +323,12 @@ func TestImport(t *testing.T) {
 	// One there before, with a stray file: replaced as a whole
 	os.MkdirAll(filepath.Join(images, "esp32c6"), 0o700)
 	os.WriteFile(filepath.Join(images, "esp32c6", "stale.bin"), []byte("old"), 0o600)
-	done, err := Import(out, pub, images)
-	if err != nil || !slices.Equal(slices.Sorted(slices.Values(done)), slices.Sorted(slices.Values(catalogImages))) {
+	imp, err := Import(out, Signers{Project: pub}, images)
+	if done := imp.Images; err != nil || !slices.Equal(slices.Sorted(slices.Values(done)), slices.Sorted(slices.Values(catalogImages))) {
 		t.Fatalf("imported %v, %v", done, err)
+	}
+	if imp.Signer.Who != SignerProject || imp.Signer.Version != "0.0.4" || imp.Signer.Fingerprint != release.Fingerprint(pub) {
+		t.Errorf("signer %+v", imp.Signer)
 	}
 	chips, err := image.List(images)
 	if err != nil || len(chips) != len(catalogImages) {
@@ -388,16 +350,21 @@ func TestImport(t *testing.T) {
 	}
 	// Nothing left beside the images: no old image moved aside, no unfinished import
 	ents, _ := os.ReadDir(images)
+	if mode(t, filepath.Join(images, "esp32c6", ProvenanceDir)) != 0o700 || mode(t, filepath.Join(images, "esp32c6", ProvenanceDir, SumsFile)) != 0o600 {
+		t.Error("provenance: not private")
+	}
 	for _, e := range ents {
 		if !slices.Contains(catalogImages, e.Name()) {
 			t.Errorf("left in %s: %s", images, e.Name())
 		}
 	}
-	// The builder assembles from what was imported
-	e, _ := boards.Find(catalogBoards(t), "ws-s3-eth")
-	c, _ := image.Open(filepath.Join(images, "esp32s3-octal"))
-	if _, err := Factory(c, e); err != nil {
-		t.Error("factory from the imported image:", err)
+	// The builder assembles from what was imported (Install over USB)
+	c, err := image.Open(filepath.Join(images, "esp32s3-octal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Assemble(8, []byte("EDBD"), nil); err != nil {
+		t.Error("assembled from the imported image:", err)
 	}
 }
 
@@ -432,7 +399,7 @@ func TestImportRefusesOddTarballs(t *testing.T) {
 		}
 		data := t.TempDir()
 		images := filepath.Join(data, "firmware", "images")
-		if _, err := Import(dir, release.PublicRaw(k), images); err == nil {
+		if _, err := Import(dir, Signers{Own: release.PublicRaw(k)}, images); err == nil {
 			t.Errorf("%s (%c): imported", entry.name, entry.typ)
 		}
 		var found []string
@@ -467,7 +434,7 @@ func TestImportRefusesAChangeAfterVerify(t *testing.T) {
 	b, _ := os.ReadFile(f)
 	os.WriteFile(f, append(b, 0), 0o644)
 	images := filepath.Join(t.TempDir(), "firmware", "images")
-	if _, err := importChecked(out, c, images); err == nil || !strings.Contains(err.Error(), "changed since it was checked") {
+	if _, err := importChecked(out, c, images, &Signer{}); err == nil || !strings.Contains(err.Error(), "changed since it was checked") {
 		t.Fatalf("a tarball changed after Verify: %v", err)
 	}
 	if _, err := os.Stat(images); !errors.Is(err, fs.ErrNotExist) {

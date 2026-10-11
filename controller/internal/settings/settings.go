@@ -15,11 +15,13 @@ import (
 	"io/fs"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
@@ -39,6 +41,13 @@ type Settings struct {
 	// .local name): a node refuses a request whose Host names anything else (421, against
 	// DNS rebinding; firmware/main/httpguard.h). An address always works.
 	Nodes []string `json:"nodes,omitempty"`
+	// OutOfService are nodes taken out of service (each one of Nodes): still listed, polled
+	// and shown with their last status, but sent nothing (no apply, rollout, refresh or
+	// config push changes them) and not counted for the last-healthy-node rule, so one that
+	// is off or broken doesn't hold up the others. Returning one to service brings it up to
+	// date first (docs/operations.md, Taking a node out of service). Empty: every node is in
+	// service.
+	OutOfService []string `json:"out_of_service,omitempty"`
 	// DNSPeers are resolvers clients use besides the nodes (the zone primary, 192.0.2.254, or
 	// addr:port for a DNS port other than 53): each counts as one answering peer while it
 	// resolves a forwarded name and answers its zones' SOA authoritatively (the CLI's
@@ -55,13 +64,13 @@ type Settings struct {
 	// controller's Adopt page. Empty (the default): none, and DHCP is offered wherever the
 	// node is, with its reservation.
 	NoDHCP []string `json:"no_dhcp,omitempty"`
-	// Primary is the zone primary the nodes copy their secondary zones from, as adoption
-	// and the controller's Zone primary view reach it (internal/primary):
-	// {"kind": "manual"} for any primary, its transfer and NOTIFY lists changed by hand;
-	// {"kind": "technitium", "url": "https://<host>:53443"} for Technitium's API (https
-	// only), with the token (keys/primary.token), and "cert_sha256", the fingerprint of
-	// its certificate pinned when it is self-signed (set by confirming it: SetPrimaryPin).
-	// Absent: none set up, treated as manual.
+	// Primary is the zone primary the nodes copy their secondary zones from
+	// (internal/primary): {"address": "192.0.2.254", "allows": ["192.0.2.0/24"], "zones":
+	// ["home.example"]}, its address, the networks it allows zone transfers from, as you
+	// set it up, and the zones to copy from it (a new node's config starts with them).
+	// Adoption says once when a node's address is in none of the networks. An older file's API fields
+	// ("kind", "url", "cert_sha256") are read and ignored, and dropped when it is written.
+	// Absent: none set up.
 	Primary *primary.Config `json:"primary,omitempty"`
 	// InternalSources is the internal allowlist: the hosts (a name or an IP address, no
 	// scheme or port) a blocklist URL source may be fetched from although it is inside
@@ -69,6 +78,45 @@ type Settings struct {
 	// that host only (internal/blocklist, fetch.go). Empty (the default): sources are https
 	// from public addresses only.
 	InternalSources []string `json:"internal_sources,omitempty"`
+	// BlocklistRefresh is how often the controller checks the blocklists it downloads
+	// (a list's URL sources) for a new version, and sends a changed one to the nodes:
+	// "off", or a time from 1h to 720h (30 days) as Go writes one ("6h", "24h", "168h").
+	// Empty (the default): DefaultRefresh, every day.
+	BlocklistRefresh string `json:"blocklist_refresh,omitempty"`
+	// ReleaseURL is the repository the project's releases are fetched from (espdns release
+	// fetch, the pages' Get firmware): https://<host>/<owner>/<repo>, a mirror
+	// of it; "" for the project's own, https://github.com/skitzo2000/espdns.
+	ReleaseURL string `json:"release_url,omitempty"`
+}
+
+// DefaultRefresh is how often downloaded blocklists are checked when blocklist_refresh
+// isn't set; MinRefresh and MaxRefresh bound a time set.
+const (
+	DefaultRefresh = 24 * time.Hour
+	MinRefresh     = time.Hour
+	MaxRefresh     = 30 * 24 * time.Hour
+)
+
+// Refresh is how often downloaded blocklists are checked (blocklist_refresh); 0: off.
+func (s Settings) Refresh() time.Duration {
+	d, _ := ParseRefresh(s.BlocklistRefresh)
+	return d
+}
+
+// ParseRefresh reads a blocklist_refresh value: "" the default, "off" 0, else a time
+// from MinRefresh to MaxRefresh.
+func ParseRefresh(v string) (time.Duration, error) {
+	switch v {
+	case "":
+		return DefaultRefresh, nil
+	case "off":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < MinRefresh || d > MaxRefresh {
+		return DefaultRefresh, fmt.Errorf("%q: \"off\", or a time from %v to %v (\"6h\", \"24h\", \"168h\")", v, MinRefresh, MaxRefresh)
+	}
+	return d, nil
 }
 
 // Path is the settings file in dataDir.
@@ -121,15 +169,14 @@ func refuse(field, format string, a ...any) error {
 }
 
 // Check refuses an empty or repeated entry, and an address that isn't one. The error is a
-// *FieldError. A zone primary at a plain http address is let through
-// (primary.Config.CheckSaved: paused, never reached), so a settings.json written before
-// https was required still loads; POST /api/settings refuses one (primary.Config.Check).
+// *FieldError.
 func (s Settings) Check() error {
 	for _, l := range []struct {
 		name string
 		v    []string
 		addr bool
-	}{{"nodes", s.Nodes, true}, {"dns_peers", s.DNSPeers, true}, {"dns_peer_zones", s.DNSPeerZones, false}} {
+	}{{"nodes", s.Nodes, true}, {"out_of_service", s.OutOfService, true}, {"dns_peers", s.DNSPeers, true},
+		{"dns_peer_zones", s.DNSPeerZones, false}} {
 		for i, v := range l.v {
 			switch {
 			case strings.TrimSpace(v) != v || v == "" || strings.ContainsAny(v, " \t/"):
@@ -163,18 +210,45 @@ func (s Settings) Check() error {
 			return refuse("internal_sources", "%s twice", h)
 		}
 	}
+	if _, err := ParseRefresh(s.BlocklistRefresh); err != nil {
+		return refuse("blocklist_refresh", "%v", err)
+	}
+	if s.ReleaseURL != "" {
+		u, err := url.Parse(s.ReleaseURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil ||
+			len(strings.Split(strings.Trim(u.Path, "/"), "/")) != 2 {
+			return refuse("release_url", "%q is not a repository's page, https://<host>/<owner>/<repo>", s.ReleaseURL)
+		}
+	}
 	if s.Canary != "" && !slices.Contains(s.Nodes, s.Canary) {
 		return refuse("canary", "%s is not one of the nodes", s.Canary)
 	}
+	for _, a := range s.OutOfService {
+		if !slices.Contains(s.Nodes, a) {
+			return refuse("out_of_service", "%s is not one of the nodes", a)
+		}
+	}
 	if s.Primary != nil {
-		// A plain http address already in the file is let through (the primary paused, the
-		// controller still starting); a save through POST /api/settings refuses one.
-		if err := s.Primary.CheckSaved(); err != nil {
+		if err := s.Primary.Check(); err != nil {
 			return &FieldError{Field: "primary", Err: err}
 		}
 	}
 	return nil
 }
+
+// InService are the nodes in service: Nodes, in their order, but those out of service.
+func (s Settings) InService() []string {
+	var out []string
+	for _, a := range s.Nodes {
+		if !slices.Contains(s.OutOfService, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// IsOutOfService says whether addr is a node taken out of service.
+func (s Settings) IsOutOfService(addr string) bool { return slices.Contains(s.OutOfService, addr) }
 
 // NoDHCPAt is the network in no_dhcp that addr is on, if any: a node there gets a static
 // address, never DHCP.
@@ -187,8 +261,7 @@ func (s Settings) NoDHCPAt(addr netip.Addr) (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
-// ZonePrimary is the zone primary set up ("primary"); the zero Config when there is none
-// (adoption then treats it as manual).
+// ZonePrimary is the zone primary set up ("primary"); the zero Config when there is none.
 func (s Settings) ZonePrimary() primary.Config {
 	if s.Primary != nil {
 		return *s.Primary
@@ -197,7 +270,8 @@ func (s Settings) ZonePrimary() primary.Config {
 }
 
 // mu orders this process's writes of the file: an edit from the browser (SaveIf) and an
-// adoption's (AddNode, MoveNode) each read the file and write it whole, one at a time.
+// adoption's (AddNode, MoveNode), a node taken out of service or removed (SetOutOfService,
+// RemoveNode) each read the file and write it whole, one at a time.
 var mu sync.Mutex
 
 // ErrChanged: the file is no longer the version an edit was made on.
@@ -231,9 +305,9 @@ func Read(path string) (s Settings, version string, exists bool, err error) {
 
 // SaveIf writes s to path (Save) if the file is still the version an edit was made on
 // (Version; "" for none), else ErrChanged. before and after, each if not nil, run with the
-// version checked and no other write of the file in between (what must change with it: the
-// zone primary's token): before ahead of the write, its error stopping it; after once the
-// file is written, its error returned with the file saved.
+// version checked and no other write of the file in between: before ahead of the write,
+// its error stopping it; after once the file is written, its error returned with the file
+// saved.
 func SaveIf(path, version string, s Settings, before, after func() error) error {
 	if err := s.Check(); err != nil {
 		return err
@@ -262,31 +336,6 @@ func SaveIf(path, version string, s Settings, before, after func() error) error 
 	return nil
 }
 
-// ErrNoPrimaryAPI: settings.json names no zone primary reached over an API, or another
-// address than the one whose certificate was confirmed.
-var ErrNoPrimaryAPI = errors.New("settings.json names no zone primary at that API address")
-
-// SetPrimaryPin pins the zone primary's certificate (its SHA-256 fingerprint, as
-// primary.Fingerprint writes it), or takes the pin away (pin ""), in the settings file,
-// written whole; only while its "primary" is still the API at url (the address the
-// certificate was read from), else ErrNoPrimaryAPI. The caller has shown the fingerprint
-// and had it confirmed (the confirm step: trust on first confirm).
-func SetPrimaryPin(path, url, pin string) error {
-	mu.Lock()
-	defer mu.Unlock()
-	s, err := Load(path)
-	if err != nil {
-		return err
-	}
-	if s.Primary == nil || s.Primary.URL == "" || s.Primary.URL != url {
-		return ErrNoPrimaryAPI
-	}
-	p := *s.Primary
-	p.CertSHA256 = pin
-	s.Primary = &p
-	return Save(path, s)
-}
-
 // MoveNode changes a node's address in the settings file's nodes, in its place (and as the
 // canary, if it is the canary), written whole; false if from isn't there. If to is listed
 // already, from is only taken out.
@@ -308,6 +357,65 @@ func MoveNode(path, from, to string) (bool, error) {
 	}
 	if s.Canary == from {
 		s.Canary = to
+	}
+	if j := slices.Index(s.OutOfService, from); j >= 0 {
+		if slices.Contains(s.OutOfService, to) {
+			s.OutOfService = slices.Delete(s.OutOfService, j, j+1)
+		} else {
+			s.OutOfService[j] = to
+		}
+	}
+	if err := Save(path, s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// SetOutOfService takes addr, one of the settings file's nodes, out of service (out), or
+// returns it to service, and writes the file whole; false if it was so already. The file is
+// read again here, as AddNode does.
+func SetOutOfService(path, addr string, out bool) (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	s, err := Load(path)
+	if err != nil {
+		return false, err
+	}
+	if !slices.Contains(s.Nodes, addr) {
+		return false, fmt.Errorf("%s is not in settings.json", addr)
+	}
+	if s.IsOutOfService(addr) == out {
+		return false, nil
+	}
+	if out {
+		s.OutOfService = append(s.OutOfService, addr)
+	} else {
+		s.OutOfService = slices.DeleteFunc(s.OutOfService, func(a string) bool { return a == addr })
+	}
+	if err := Save(path, s); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RemoveNode takes addr out of the settings file's nodes (out of service too, and as the
+// canary if it is: the first node changed goes first then), written whole; false if it
+// isn't there.
+func RemoveNode(path, addr string) (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	s, err := Load(path)
+	if err != nil {
+		return false, err
+	}
+	if !slices.Contains(s.Nodes, addr) {
+		return false, nil
+	}
+	gone := func(a string) bool { return a == addr }
+	s.Nodes = slices.DeleteFunc(s.Nodes, gone)
+	s.OutOfService = slices.DeleteFunc(s.OutOfService, gone)
+	if s.Canary == addr {
+		s.Canary = ""
 	}
 	if err := Save(path, s); err != nil {
 		return false, err
@@ -339,6 +447,9 @@ func AddNode(path, addr string) (bool, error) {
 func Save(path string, s Settings) error {
 	if err := s.Check(); err != nil {
 		return err
+	}
+	if s.Primary != nil && s.Primary.IsZero() {
+		s.Primary = nil // an older file's {"kind": "manual"}: nothing left to write
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

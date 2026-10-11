@@ -20,6 +20,7 @@
 #include "forward.h"
 #include "fwdq.h"
 #include "health.h"
+#include "load.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -82,6 +83,7 @@ struct udp_item {
     flight_waiter_t fw; /* first: the item is what a parked query is (flight.h) */
     struct sockaddr_in from;
     uint32_t t0_ms; /* parked: when its worker took it, for its time to answer */
+    uint32_t rx_ms; /* when it was received: past LOAD_DEADLINE_MS in the queue, it is shed */
     uint16_t len;
     uint8_t buf[UDP_MAX_QUERY];
 };
@@ -414,6 +416,8 @@ _Static_assert(sizeof(dns_builder_t) + sizeof(worker_t) <= MP_BUILDER, "the plan
 
 static QueueHandle_t s_udp_q;    /* received queries, for the workers; NULL: take the finished flights */
 static QueueHandle_t s_udp_free; /* the pool's free items: receiving allocates nothing */
+static load_t s_load;            /* received and dropped, for health and /metrics (load.h) */
+static bool s_load_ok;           /* set up: it may be read */
 static int s_rx_watch = -1, s_acc_watch = -1;
 
 /* Answers one UDP query (it) with w's buffers, its answer built in out (MP_UDP_OUT), and
@@ -478,8 +482,15 @@ static void udp_worker(void *arg)
             upq_woken(&s_upq);
         /* The finished flights first: their queries came before this one. */
         take_flights(w);
-        if (it)
+        if (it && load_stale(it->rx_ms, now_ms())) {
+            /* Waited past its deadline: its client has asked again or given up, and answering it
+             * late only delays the queries behind it. Shed, unanswered and without work. */
+            STAT(dropped);
+            load_expired(&s_load, now_ms());
+            xQueueSend(s_udp_free, &it, 0);
+        } else if (it) {
             answer_item(w, it, w->out);
+        }
         power_release(POWER_DNS);
     }
 }
@@ -511,17 +522,25 @@ static void udp_rx(void *arg)
 #endif
         supervisor_kick(s_rx_watch);
         if (!it) {
-            if (xQueueReceive(s_udp_free, &it, pdMS_TO_TICKS(SUP_LISTENER_CHECKIN_MS)) != pdTRUE)
+            if (xQueueReceive(s_udp_free, &it, pdMS_TO_TICKS(SUP_LISTENER_CHECKIN_MS)) != pdTRUE) {
+                load_idle(&s_load, (int)uxQueueMessagesWaiting(s_udp_q), now_ms());
                 continue;
+            }
             supervisor_kick(s_rx_watch); /* a check-in before each wait, never two waits apart */
         }
         socklen_t fl = sizeof(it->from);
         ssize_t n = recvfrom(s_udp, it->buf, sizeof(it->buf), 0, (struct sockaddr *)&it->from, &fl);
-        if (n <= 0)
-            continue; /* the receive timeout: check in, and keep the item */
+        if (n <= 0) {
+            /* The receive timeout: check in, keep the item, and hand on the counts (load.h). */
+            load_idle(&s_load, (int)uxQueueMessagesWaiting(s_udp_q), now_ms());
+            continue;
+        }
         STAT(udp);
         it->len = (uint16_t)n;
-        if (xQueueSend(s_udp_q, &it, 0) == pdTRUE)
+        it->rx_ms = now_ms();
+        bool in = xQueueSend(s_udp_q, &it, 0) == pdTRUE;
+        load_rx(&s_load, !in, (int)uxQueueMessagesWaiting(s_udp_q), now_ms());
+        if (in)
             it = NULL;
         else
             STAT(dropped); /* every worker busy and the queue full: the item is reused */
@@ -637,6 +656,8 @@ void server_start(void)
 {
     /* Everything the service uses from here on, taken now from its share (memplan.h): the
      * cache, the workers' buffers and the UDP pool. The query path allocates nothing. */
+    load_init(&s_load);
+    __atomic_store_n(&s_load_ok, true, __ATOMIC_RELEASE);
     const mp_board_t *mb = share_board();
     mp_pool_t pool = mp_data_pool(mb);
     size_t cache_bytes = (size_t)mb->cache_kb * 1024;
@@ -748,6 +769,23 @@ void server_upstream(health_fwd_t *f)
     flight_counts(&s_upq.fl, &c);
     f->busy = c.busy;
     f->busy_since_ms = c.busy_since_ms;
+}
+
+void server_load(load_window_t *w)
+{
+    *w = (load_window_t){ 0 };
+    if (__atomic_load_n(&s_load_ok, __ATOMIC_ACQUIRE))
+        load_get(&s_load, now_ms(), w);
+}
+
+bool server_load_totals(uint64_t *full_ms, uint32_t *expired)
+{
+    *full_ms = 0;
+    *expired = 0;
+    if (!__atomic_load_n(&s_load_ok, __ATOMIC_ACQUIRE))
+        return false;
+    load_totals(&s_load, full_ms, expired);
+    return true;
 }
 
 bool server_forward_stats(upq_stats_t *s)

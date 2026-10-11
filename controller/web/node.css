@@ -1,0 +1,54 @@
+/* The node page (node.html, node.js), on shell.css: the crumb back to Nodes, the state and
+   actions at the top, what's wrong in a bordered panel, the settings as joined
+   hide-and-expand rows, the facts as a two-column list with meters, and the details. */
+.nodepage { gap: 26px }
+.crumb { font-size: 13px; color: var(--muted); text-decoration: none; justify-self: start; margin-bottom: -12px }
+.crumb:hover { color: var(--fg) }
+.nodepage .head .lead { gap: 8px }
+.nodepage .head .lead > p { max-width: 72ch }
+.big-state { font-weight: 600 }
+.node-acts { display: grid; gap: 6px; justify-items: end }
+.node-acts .hint { max-width: 36ch; text-align: right }
+@media (max-width: 760px) { .node-acts { justify-items: start; width: 100% } .node-acts .hint { text-align: left } }
+
+.panel.alert { border: 2px solid var(--warn-line); background: var(--warn-bg) }
+.panel.alert > b:first-child { color: var(--warn) }
+
+/* The settings: the rows joined into one list */
+.exs { display: grid }
+.exs details.ex + details.ex { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0 }
+.exs details.ex:has(+ details.ex) { border-bottom-left-radius: 0; border-bottom-right-radius: 0 }
+.exs details.ex.pending > summary .val { color: var(--fg) }
+/* A row's name stays on one line at phone width; its value gives way (ellipsis). */
+.nodepage details.ex > summary b { white-space: nowrap }
+.tag { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); white-space: nowrap; font-weight: 400 }
+.exs .tag { border-color: var(--orange); color: var(--fg) }
+.pending-note { border-left: 4px solid var(--orange); margin-bottom: 12px; display: grid; gap: 4px }
+.save-row { margin-top: 14px }
+#settings > .hint { margin-bottom: 10px }
+
+/* Facts: a two-column list; a meter */
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; font-size: 14px; margin: 0 }
+.kv dt { color: var(--muted) }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+.kv a { color: var(--fg) }
+.meter { height: 6px; background: var(--hover); border-radius: 3px; overflow: hidden; border: 1px solid var(--line); max-width: 280px }
+.meter i { display: block; height: 100%; background: var(--sky) }
+.pool { display: grid; gap: 4px; margin-bottom: 6px }
+@media (max-width: 520px) { .kv { grid-template-columns: 1fr; gap: 2px } .kv dd { margin-bottom: 8px } }
+
+/* Details for troubleshooting */
+details.panel > summary { cursor: pointer; color: var(--muted); font-size: 14px }
+details.panel[open] > summary { margin-bottom: 14px }
+details.sub-raw > summary { cursor: pointer; color: var(--muted); font-size: 13.5px }
+pre.raw { font: 12.5px/1.5 var(--mono); background: var(--bg); padding: 12px; border-radius: var(--r); overflow: auto; margin: 10px 0 0; max-height: 280px; white-space: pre }
+.nogap-s { gap: 6px }
+code { font-family: var(--mono); font-size: .92em }
+.nodepage .mini { align-content: start }
+.nodepage label.f { align-content: start }
+
+/* A config file written or corrected here (its settings can't be read without it) */
+textarea.t.cfgtext { font-family: var(--mono); font-size: 13px; line-height: 1.5; min-height: 220px; resize: vertical; width: 100% }
+
+/* The actions keep to the right when the head wraps them under the name. */
+.node-acts { margin-left: auto }

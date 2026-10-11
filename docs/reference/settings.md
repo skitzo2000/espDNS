@@ -1,6 +1,6 @@
 # Controller settings
 
-The controller reads three kinds of settings:
+The controller reads three sets of settings:
 
 1. [`settings.json`](#settingsjson) in the data directory: the deployment's nodes, DNS peers
    and zone primary. The controller and the `espdns` CLI both read it.
@@ -11,15 +11,13 @@ Back to the [reference index](README.md).
 
 ## settings.json
 
-Path: `<data>/settings.json` (`/data/settings.json` in the container). You can edit it on the
-dashboard's Settings page, which writes it whole. You can also edit the file by hand.
-
-Rules for the whole file:
+Path: `<data>/settings.json` (`/data/settings.json` in the container). Edit it on the
+dashboard's Settings page (which writes it whole) or by hand.
 
 - Every field is optional. A missing file means "no settings" (all fields empty).
-- Unknown fields are refused. A misspelt field is an error, never a silent default.
+- Unknown fields are refused: a misspelt field is an error, never a silent default.
 - The file must hold exactly one JSON object.
-- The controller reads it again every 10 seconds. A change applies without a restart. A file
+- The controller rereads it every 10 seconds, so a change applies without a restart. A file
   that no longer parses leaves the node list as it was.
 - The file is written with mode `0600`.
 
@@ -32,7 +30,7 @@ Rules for the whole file:
   "dns_peer_zones": ["home.arpa"],
   "canary": "192.0.2.53",
   "no_dhcp": ["192.0.2.0/24"],
-  "primary": { "kind": "manual" }
+  "primary": { "address": "192.0.2.1", "allows": ["192.0.2.0/24"], "zones": ["home.arpa"] }
 }
 ```
 
@@ -40,13 +38,16 @@ Rules for the whole file:
 
 | Field | Type | Meaning | Checks |
 |-------|------|---------|--------|
-| `nodes` | list of strings | The nodes in service. The controller polls each one, even if mDNS doesn't find it. The Push page, an apply and the node actions (all but identify) change only these nodes. The CLI counts them as peers for the last-healthy-node rule. Each entry is `host` or `host:port` (for an HTTP port other than 80). | Not empty, no spaces, tabs or `/`, no leading or trailing space. No duplicates. A `host:port` must have a port. |
+| `nodes` | list of strings | Your nodes. The controller polls each one, even if mDNS doesn't find it. An apply changes only these nodes, those in `out_of_service` aside, and the node actions (all but identify) take only these. The CLI counts them (`out_of_service` aside) as peers for the last-healthy-node rule. Each entry is `host` or `host:port` (for an HTTP port other than 80). | Not empty, no spaces, tabs or `/`, no leading or trailing space. No duplicates. A `host:port` must have a port. |
+| `out_of_service` | list of strings | Nodes taken out of service: still listed, polled and shown, but an apply, a rollout, a refresh and a config push skip them, and they don't count for the last-healthy-node rule. A key rotation isn't prepared while one is here. The node page's **Take out of service** and **Return to service** set it (returning brings the node up to date first: [operations.md](../operations.md#taking-a-node-out-of-service)). Empty: every node is in service. | Each must be one of `nodes`. No duplicates. |
 | `dns_peers` | list of strings | Other resolvers your clients use besides the nodes (for example the zone primary). Each counts as one answering peer while it resolves a forwarded name and answers its zones' SOA authoritatively. Entry is `host` or `host:port` (for a DNS port other than 53). | Same as `nodes`. |
 | `dns_peer_zones` | list of strings | The zones the DNS peers must answer for. Empty: the secondary zones of the node about to change. | Not empty, no spaces, tabs or `/`. No duplicates. |
-| `canary` | string | The node the Push page and an apply change first, unless you choose another. Empty: the first node changed. | Must be one of `nodes`. |
+| `canary` | string | The node an apply changes first, unless you choose another. Empty: the first node changed. | Must be one of `nodes`. |
 | `no_dhcp` | list of strings | IPv4 networks with no DHCP server, each as its network address with prefix length (`192.0.2.0/24`). A node on one of these is never given a DHCP config by adoption. Empty: none. | Must parse as an IPv4 prefix. Must be the network address itself (`192.0.2.0/24`, not `192.0.2.5/24`). No duplicates. |
-| `primary` | object | The zone primary. See [primary](#primary). Absent: none set up, treated as `manual`. | See below. |
+| `primary` | object | The zone primary. See [primary](#primary). Absent: none set up. | See below. |
+| `release_url` | string | The repository Get firmware and `espdns release fetch` download the project's releases from: a mirror of it, `https://git.example.com/<owner>/espdns`. Empty or absent: `https://github.com/skitzo2000/espdns`. A release is taken only if the project's key signed it, wherever it comes from. See [Releasing](../releasing.md#using-a-release). | An `http` or `https` URL with a host and `/<owner>/<repo>`. |
 | `internal_sources` | list of strings | The internal allowlist: hosts (a name or an IP address, no scheme or port) a blocklist URL source may be fetched from over plain http or at an inside (private, loopback, link-local) address. Such a fetch goes to that host only. Empty: URL sources are https from public addresses only. See [Blocking](../blocking.md#lists-hosted-inside-your-network). | Each must be a host name or an IP address. |
+| `blocklist_refresh` | string | How often the controller checks the blocklists it downloads (a list's URL sources) for a new version, and sends a changed one to the nodes: `"off"`, or a time such as `"6h"`, `"12h"`, `"24h"`, `"168h"`. Empty or absent: every day (`"24h"`). The Blocking page's **Check for new versions** sets it. See [Blocking](../blocking.md#keep-the-lists-up-to-date). | `"off"`, or a Go duration from `1h` to `720h` (30 days). |
 
 A host given by name in `nodes` must be a name the node answers to: the `name` in its node
 config, or its `.local` mDNS name. A node refuses any other `Host` (HTTP 421). An IP address
@@ -55,35 +56,35 @@ always works.
 ### primary
 
 ```json
-{ "kind": "manual" }
+{ "address": "192.0.2.1", "allows": ["192.0.2.0/24"], "zones": ["home.arpa"] }
 ```
 
-```json
-{ "kind": "technitium", "url": "https://192.0.2.1:53443", "cert_sha256": "<fingerprint>" }
-```
+The zone primary the nodes copy their secondary zones from. Any standards-compliant primary
+works (BIND, Knot, PowerDNS, Windows DNS, Technitium and others): each node copies a zone by
+AXFR/IXFR, checks its SOA for changes, and takes the primary's NOTIFYs if it sends them.
+
+Set the primary up once to allow zone transfers (and, if you like, NOTIFY) from your nodes'
+networks; adding a node then changes nothing there. The controller never changes the
+primary. It only sends it DNS queries (a zone lookup's SOA query, or an AXFR when you open a
+copied zone).
 
 | Field | Meaning | Checks |
 |-------|---------|--------|
-| `kind` | `manual` or `technitium`. These are the only two kinds in this version. | Required. Must be a known kind. |
-| `url` | The primary's API address. Only for a kind driven over an API (`technitium`). | Required for `technitium`. Refused for `manual`. For `technitium`: `https://`, a host, no user, no path, no query, no fragment. A plain `http://` address already in the file still loads, but the primary is **paused**: nothing is sent to it and the token never is. Saving one is refused. |
-| `cert_sha256` | The SHA-256 fingerprint of the primary's certificate, pinned when it is self-signed. Set it by confirming the certificate (the dashboard's Zone primary section, or [`espdns primary cert` and `primary pin`](cli.md#primary)), not by hand. | Optional. With a pin, only that certificate is accepted. Without one, only a certificate the system's roots trust. |
+| `address` | The primary's address, as a node config's `secondary.primary` names it. | An IPv4 address. |
+| `allows` | The networks the primary allows zone transfers from, as you set it up. When a node's address is in none of them, adoption says once what to allow there; it never stops on it. The Zones page names the nodes outside them. | Each an IPv4 network with its prefix length, as its network address (`192.0.2.0/24`). No duplicates. |
+| `zones` | The zones to copy from the primary. A new node's config starts with them; the node configs say what each node copies. | Each a zone name in lower case, without the final dot. No duplicates. |
 
-What each kind does:
+All three are optional. Edit them on the Zones page (Zone primary) or in the first run.
 
-- **`manual`** works with any standards-compliant primary: BIND, Knot, PowerDNS, Windows
-  DNS, Technitium or another. The controller does not read or change the primary. When a
-  node needs to be on a zone's transfer and NOTIFY lists, adoption tells you the exact change
-  to make by hand. You then confirm it was made.
-- **`technitium`** drives Technitium DNS Server's HTTP API. Adoption adds the node to each
-  zone's transfer and NOTIFY lists itself. It needs an API token. Store the token with
-  `espdns primary import` (see [cli.md](cli.md#primary)), or on the Settings page. The token
-  is kept in `<data>/keys/primary.token`, mode `0600`, and never appears in a reply or a log.
-  Without a URL or a token, the controller falls back to describing the change by hand.
+An older controller's `settings.json` may have `"kind"`, `"url"` and `"cert_sha256"` here,
+from when it drove a primary's API. They're accepted and ignored: the controller logs once at
+startup that they're unused, takes the IP address in `"url"` (if it is one) as `address` when
+none is given, and drops them the next time it writes the file.
 
 ## Controller flags
 
-The controller binary (`/espdns-controller` in the image) takes these flags. The image's
-entrypoint already sets `-data /data -catalog /catalog`. `compose.yaml` sets `-listen` from
+Flags of the controller binary (`/espdns-controller` in the image). The image's entrypoint
+already sets `-data /data -catalog /catalog`; `compose.yaml` sets `-listen` from
 `ESPDNS_LISTEN`.
 
 | Flag | Default | Meaning |
@@ -91,6 +92,7 @@ entrypoint already sets `-data /data -catalog /catalog`. `compose.yaml` sets `-l
 | `-listen` | `127.0.0.1:8480` | Address for the dashboard and API. Must be a loopback address (`127.0.0.1`, `[::1]` or `localhost`) with any port. The controller refuses to start on any other address. |
 | `-data` | `data` (image: `/data`) | The data directory. |
 | `-catalog` | `../boards` (image: `/catalog`) | The shipped board catalog. |
+| `-project-pub` | `/keys/project.pub` | The project's release public key: a release whose `SHA256SUMS` it signed (or your release key signed) is imported. No node trusts it. |
 | `-browse-mdns` | `true` | Browse mDNS for nodes besides `settings.json`'s. `false`: poll only the listed nodes. |
 | `-check-mdns` | `3s` | How long a `check` job browses mDNS for extra nodes. `0`: don't. |
 | `-healthcheck` | `false` | Only check that a controller answers on `-listen`, then exit 0 (yes) or 1 (no). The container's health check uses it. |
@@ -109,28 +111,30 @@ and edit it.
 | `ESPDNS_MEM_LIMIT` | `2g` | The container's memory limit. Compiling a blocklist needs about 220 bytes per domain at its peak. |
 | `ESPDNS_GOMEMLIMIT` | `1800MiB` | The Go runtime's soft memory limit. Keep it about nine tenths of `ESPDNS_MEM_LIMIT`. |
 | `ESPDNS_PIDS_LIMIT` | `256` | The container's process and thread limit. |
-| `ESPDNS_IMAGE` | `espdns-controller` | The image name. |
+| `ESPDNS_IMAGE` | `espdns-controller` | The image to run. A release's published image, `ghcr.io/skitzo2000/espdns-controller:<version>` (or the line of its `espdns-<version>-controller-image.txt`, by digest), runs with `docker compose pull` and `docker compose up -d --no-build`. `docker compose up -d --build` builds from the checkout and tags the image with this name. |
 | `ESPDNS_CONTAINER` | `espdns-controller` | The container name. |
 
 ## The data directory
 
 Everything the controller keeps lives here. Directories are mode `0700` and files `0600`,
-whatever the umask. At start the controller tightens anything it finds open to group or
+whatever the umask; at start the controller tightens anything it finds open to group or
 others.
 
 | Path | What it is |
 |------|------------|
 | `settings.json` | [Deployment settings](#settingsjson). |
 | `auth.json` | The login: the user name and an argon2id hash of the password. |
-| `keys/release.pem` | The release signing key (`espdns key import`). |
-| `keys/primary.token` | The zone primary's API token (`espdns primary import`). |
+| `keys/release.pem` | The release signing key (`espdns key import` or `key generate`, or the first run's Make your keys). |
+| `keys/recovery.pub` | The recovery key's public half, the 65-byte point (the first run's Make your keys). The private half is never here. |
+| `keys/release.next.pem`, `keys/release.prev.pem` | During a key rotation, its new release key; after one, the release key it replaced. |
+| `keys/rotation/<id>/` | A key rotation: each node's KEYS release, unsigned and signed, and `plan.json`. |
 | `configs/<name>.json` | [Node configs](node-config.md). |
 | `zones/<zone>.zone` | Hosted zones (RFC 1035 master files). |
 | `blocking/lists.json` | The blocklist definitions: what each list is compiled from. |
 | `blocking/sources/` | Local list sources, allow lists and overrides. |
 | `lists/` | Compiled blocklist and overrides files. |
 | `boards/` | Your own board definitions. |
-| `firmware/images/<image>/` | Chip images (`espdns release import`). |
+| `firmware/images/<image>/` | Chip images (`espdns release import` or `fetch`, Get firmware), each with its `provenance/`: the signed `SHA256SUMS`, its signature, the image's tarball and who signed it, checked again before every update. |
 | `firmware/builds/<board>/` | Per-board firmware builds for rollouts. |
 | `changes/` | Pending changes, waiting for one apply. |
 | `fleet.lock` | The fleet lock: one fleet change at a time. |

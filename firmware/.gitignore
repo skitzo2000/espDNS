@@ -15,3 +15,8 @@ tests/test_defaults
 tests/test_observe
 tests/test_http
 tests/test_zones
+tests/test_w5500
+# Your public keys (make keys): a seed for your own builds
+# (KEYS_SEED=keys) and make factory's keys. Not the project's: that is keys/project.pub at
+# the top, which signs the project's releases (docs/releasing.md).
+/keys/

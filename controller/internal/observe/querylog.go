@@ -89,23 +89,45 @@ func mask(client *string, mode string) *string {
 type Filter struct {
 	Node   string // the node's key, exactly
 	Client string // in the client address
+	Device string // the client address, exactly
 	Name   string // in the name, either case
-	Result string // exactly
+	Result string // exactly; several, comma-separated, for any of them
 	QType  string // exactly, either case
-	After  uint64 // only entries read after this ID (follow)
-	Run    string // the run After is from (LogView.Run): another run's is taken as 0
-	Limit  int    // the newest this many (default 200, at most 1000)
+	// Text is in the name (either case) or in the client address, or the client is one of
+	// TextClients (the devices whose names have it: the Query log page's one box).
+	Text        string
+	TextClients map[string]bool
+	After       uint64 // only entries read after this ID (follow)
+	Run         string // the run After is from (LogView.Run): another run's is taken as 0
+	Limit       int    // the newest this many (default 200, at most 1000)
 }
 
 func (f Filter) match(e *Entry) bool {
-	if e.ID <= f.After || f.Node != "" && e.Node != f.Node || f.Result != "" && e.Result != f.Result ||
+	if e.ID <= f.After || f.Node != "" && e.Node != f.Node || f.Result != "" && !oneOf(e.Result, f.Result) ||
 		f.QType != "" && !strings.EqualFold(e.QType, f.QType) {
 		return false
 	}
 	if f.Client != "" && (e.Client == nil || !strings.Contains(*e.Client, f.Client)) {
 		return false
 	}
+	if f.Device != "" && (e.Client == nil || *e.Client != f.Device) {
+		return false
+	}
+	if f.Text != "" && !strings.Contains(strings.ToLower(e.QName), strings.ToLower(f.Text)) &&
+		(e.Client == nil || !strings.Contains(*e.Client, f.Text) && !f.TextClients[*e.Client]) {
+		return false
+	}
 	return f.Name == "" || strings.Contains(strings.ToLower(e.QName), strings.ToLower(f.Name))
+}
+
+// oneOf says whether v is one of list's comma-separated values.
+func oneOf(v, list string) bool {
+	for _, x := range strings.Split(list, ",") {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // LogView is a read of the buffer.
@@ -160,6 +182,7 @@ type Top struct {
 	Newest  *time.Time `json:"newest"`
 	Queried []TopName  `json:"queried"`
 	Blocked []TopName  `json:"blocked"` // result blocked or overridden
+	Clients []TopName  `json:"clients"` // the devices that asked most, by address (those whose node keeps it)
 	Blocks  int        `json:"blocks"`  // blocked entries counted (both)
 }
 
@@ -238,4 +261,105 @@ func sortAsked(m map[string]*Asked) []Asked {
 		return out[i].Value < out[j].Value
 	})
 	return out
+}
+
+// Asker is one device that asked for a name, in the buffer.
+type Asker struct {
+	// Client is its address as the node kept it; nil: the node doesn't keep it.
+	Client  *string   `json:"client"`
+	Queries int       `json:"queries"`
+	Blocked int       `json:"blocked"`
+	Last    time.Time `json:"last"`
+	Nodes   []string  `json:"nodes"` // the keys of the nodes it asked through, the most recent first
+
+	lastID uint64 // its newest entry's: the order read, among entries of the same time
+}
+
+// Askers is who asked for one name, over the span the buffer holds.
+type Askers struct {
+	Name    string     `json:"name"`
+	Askers  []Asker    `json:"askers"`  // the most recent first, at most the max asked for
+	More    int        `json:"more"`    // devices past those
+	Queries int        `json:"queries"` // the name's entries
+	Held    int        `json:"held"`    // entries in the buffer
+	Cap     int        `json:"cap"`
+	Oldest  *time.Time `json:"oldest"`
+	Nodes   []LogNode  `json:"nodes"`
+}
+
+// AskersMax is how many devices Askers lists by default.
+const AskersMax = 10
+
+// Askers lists the devices that asked for name (exactly, either case, with or without the
+// final dot): a row a client address (the entries without one in a row of their own), the
+// most recent first, at most max (default AskersMax). It is one pass over the buffer.
+func (s *Store) Askers(name string, max int) Askers {
+	if max <= 0 {
+		max = AskersMax
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := Askers{Name: name, Askers: []Asker{}, Held: len(s.log.buf), Cap: LogCap}
+	type acc struct {
+		Asker
+		at map[string]time.Time // the last time through each node
+	}
+	by := map[string]*acc{}
+	s.log.each(func(e *Entry) {
+		if v.Oldest == nil || e.At.Before(*v.Oldest) {
+			t := e.At
+			v.Oldest = &t
+		}
+		if strings.TrimSuffix(strings.ToLower(e.QName), ".") != name {
+			return
+		}
+		v.Queries++
+		k := "\x00" // the entries without an address
+		if e.Client != nil {
+			k = *e.Client
+		}
+		a := by[k]
+		if a == nil {
+			a = &acc{Asker: Asker{Client: e.Client}, at: map[string]time.Time{}}
+			by[k] = a
+		}
+		a.Queries++
+		if Blocks(e.Result) {
+			a.Blocked++
+		}
+		if e.At.After(a.Last) || e.At.Equal(a.Last) && e.ID > a.lastID {
+			a.Last, a.lastID = e.At, e.ID
+		}
+		if t, ok := a.at[e.Node]; !ok || e.At.After(t) {
+			a.at[e.Node] = e.At
+		}
+	})
+	all := make([]Asker, 0, len(by))
+	for _, a := range by {
+		for n := range a.at {
+			a.Nodes = append(a.Nodes, n)
+		}
+		sort.Slice(a.Nodes, func(i, j int) bool {
+			ti, tj := a.at[a.Nodes[i]], a.at[a.Nodes[j]]
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return a.Nodes[i] < a.Nodes[j]
+		})
+		all = append(all, a.Asker)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].Last.Equal(all[j].Last) {
+			return all[i].Last.After(all[j].Last)
+		}
+		return all[i].lastID > all[j].lastID
+	})
+	if len(all) > max {
+		v.More = len(all) - max
+		all = all[:max]
+	}
+	v.Askers = append(v.Askers, all...)
+	v.Nodes = s.logNodes()
+	return v
 }

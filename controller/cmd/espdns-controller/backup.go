@@ -73,8 +73,8 @@ func (b backupServer) info(w http.ResponseWriter, r *http.Request) {
 	}
 	var parts []part
 	for _, e := range ents {
-		if e.Name() == TmpDir {
-			continue // the controller's own, empty but while a backup is sent
+		if e.Name() == TmpDir || e.Name() == backup.LastFile {
+			continue // the controller's own: empty but while a backup is sent; when one last was
 		}
 		p := part{Name: e.Name(), Included: true}
 		switch {
@@ -98,6 +98,9 @@ func (b backupServer) info(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Name < parts[j].Name })
 	out := map[string]any{"data_dir": b.dataDir, "parts": parts, "format": backup.Format, "min_passphrase": minPassphrase}
+	if t := backup.Last(b.dataDir); !t.IsZero() {
+		out["last"] = t
+	}
 	if h, held, err := fleetlock.Held(fleetlock.Path(b.dataDir)); err == nil && held {
 		out["lock"] = h.String()
 	}
@@ -191,7 +194,13 @@ func (b backupServer) download(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Backup-Summary", fmt.Sprintf("%d files, %d directories, %d bytes", s.Files, s.Dirs, s.Bytes))
 	log.Printf("backup: %s downloaded %s (%d files, %d directories, %d bytes before encryption, to %s; firmware %v)",
 		who, name, s.Files, s.Dirs, s.Bytes, how, body.Firmware)
-	if _, err := io.Copy(w, f); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("backup: sending %s: %v", name, err)
+	if _, err := io.Copy(w, f); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("backup: sending %s: %v", name, err)
+		}
+		return
+	}
+	if err := backup.Done(b.dataDir); err != nil {
+		log.Printf("backup: sent %s, but its time not kept: %v", name, err)
 	}
 }

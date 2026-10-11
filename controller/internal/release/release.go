@@ -37,10 +37,11 @@ const (
 	Blocklist
 	Overrides
 	Control
+	Keys // new keys for one node's keys partition, signed with its recovery key (KeysPayload)
 )
 
 var kindNames = [...]string{Firmware: "firmware", Config: "config", Zones: "zones", Blocklist: "blocklist",
-	Overrides: "overrides", Control: "control"}
+	Overrides: "overrides", Control: "control", Keys: "keys"}
 
 // String is the kind's name, as /status names it under "seq".
 func (k Kind) String() string {
@@ -132,7 +133,7 @@ func Verify(pub, header []byte) bool {
 }
 
 // VerifySig checks a signature Sign made over data (r || s) with a public key as the
-// firmware has it built in (65 bytes, uncompressed: firmware/keys/release.pub).
+// keys partition holds it (65 bytes, uncompressed, as keys/project.pub).
 func VerifySig(pub, data, sig []byte) bool {
 	if len(sig) != SigLen {
 		return false

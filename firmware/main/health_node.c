@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hosted.h"
+#include "keys_node.h"
 #include "led.h"
 #include "net.h"
 #include "ota.h"
@@ -45,6 +46,7 @@ health_t health_now(void)
     in.address = net_ip() != 0;
     in.updating = ota_busy();
     in.board_missing = !strcmp(board_source(), "none");
+    in.no_keys = keys_node_setup();
     in.sd_slot = board.sd.kind != BOARD_SD_NONE;
     sd_state_t sd = sd_state();
     in.sd_mounted = sd == SD_MOUNTED;
@@ -59,6 +61,7 @@ health_t health_now(void)
     reg_unlock();
     server_upstream(&in.fwd);
     in.fwd_stalled = supervisor_fwd_stalled();
+    server_load(&in.load);
     in.heap_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     in.config_error = settings_error() != NULL;
     in.config_trial = settings_on_trial();

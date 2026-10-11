@@ -178,7 +178,7 @@ func zoneTemplate(zone string, listed []string, now time.Time) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "; %s: a hosted zone, served by the nodes it is pushed to (the Push page, kind zones).\n", zone)
+	fmt.Fprintf(&b, "; %s: a hosted zone, served by every node once it is applied.\n", zone)
 	b.WriteString("$TTL 3600\n")
 	fmt.Fprintf(&b, "@       IN SOA  ns1.%s. hostmaster.%s. (\n", zone, zone)
 	fmt.Fprintf(&b, "                %d ; serial: raise it with every change\n", now.Year()*1000000+int(now.Month())*10000+now.Day()*100+1)

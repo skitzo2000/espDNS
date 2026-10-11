@@ -3,6 +3,7 @@
   "dns_peers": ["192.0.2.254"],
   "canary": "192.0.2.52",
   "no_dhcp": ["192.0.2.0/24"],
-  "primary": { "kind": "manual" },
-  "internal_sources": ["192.0.2.10"]
+  "primary": { "address": "192.0.2.254", "allows": ["192.0.2.0/24"], "zones": ["home.example"] },
+  "internal_sources": ["192.0.2.10"],
+  "blocklist_refresh": "12h"
 }

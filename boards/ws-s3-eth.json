@@ -1,7 +1,7 @@
 {
   "name": "ws-s3-eth",
   "title": "Waveshare ESP32-S3-ETH",
-  "image": "esp32s3-octal",
+  "image": "esp32s3-eth",
   "flash_mb": 16,
   "psram_mb": 8,
   "tier": "tested",

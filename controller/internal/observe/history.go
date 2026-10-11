@@ -70,6 +70,8 @@ type Point struct {
 	Expired  uint32     // upstream queries that ended with no answer
 	TCPRetry uint32     // truncated answers asked again over TCP
 	SelErr   uint32     // the forward loop's select() errors
+	QFull    float32    // seconds the UDP receive queue was full (the node dropped what came)
+	QExpired uint32     // queries shed unanswered: past the UDP queue's deadline
 	Hits     uint32     // cache hits
 	Misses   uint32     // cache misses
 	BusyDNS  float32    // seconds the full clock was held answering queries
@@ -90,6 +92,8 @@ type raw struct {
 	expired  map[string]float64
 	tcpRetry float64
 	selErr   float64
+	qFull    float64
+	qExpired float64
 	hits     float64
 	misses   float64
 	busy     map[string]float64
@@ -122,6 +126,9 @@ type Gauges struct {
 	FwdInflight *float64 `json:"fwd_inflight"`
 	FwdZones    *float64 `json:"fwd_inflight_zones"`
 	FwdPeak     *float64 `json:"fwd_inflight_peak"`
+	// The UDP receive queue under load: seconds it was full since boot (the
+	// node dropped what came meanwhile); nil before the firmware counted it.
+	QueueFull *float64 `json:"udp_queue_full_s"`
 }
 
 func ptr(m fleet.Metrics, name string, kv ...string) *float64 {
@@ -213,6 +220,8 @@ func readRaw(m fleet.Metrics) raw {
 	r.expired = m.ByLabel("espdns_fwd_expired_total", "group")
 	r.tcpRetry, _ = m.Value("espdns_fwd_tcp_retries_total")
 	r.selErr, _ = m.Value("espdns_fwd_select_errors_total")
+	r.qFull, _ = m.Value("espdns_udp_queue_full_seconds_total")
+	r.qExpired, _ = m.Value("espdns_udp_queue_expired_total")
 	r.hits, _ = m.Value("espdns_cache_hits_total")
 	r.misses, _ = m.Value("espdns_cache_misses_total")
 	r.busy = m.ByLabel("espdns_cpu_busy_seconds_total", "hold")
@@ -240,6 +249,7 @@ func readRaw(m fleet.Metrics) raw {
 	g.FwdInflight = ptr(m, "espdns_fwd_inflight", "group", "default")
 	g.FwdZones = ptr(m, "espdns_fwd_inflight", "group", "zones")
 	g.FwdPeak = ptr(m, "espdns_fwd_inflight_peak")
+	g.QueueFull = ptr(m, "espdns_udp_queue_full_seconds_total")
 	return r
 }
 
@@ -322,6 +332,8 @@ func point(prev raw, pt time.Time, cur raw, at time.Time) (Point, bool) {
 	p.Expired = sat(sumDelta(prev.expired, cur.expired, rb))
 	p.TCPRetry = sat(Delta(prev.tcpRetry, cur.tcpRetry, rb))
 	p.SelErr = sat(Delta(prev.selErr, cur.selErr, rb))
+	p.QFull = float32(Delta(prev.qFull, cur.qFull, rb))
+	p.QExpired = sat(Delta(prev.qExpired, cur.qExpired, rb))
 	p.Hits = sat(Delta(prev.hits, cur.hits, rb))
 	p.Misses = sat(Delta(prev.misses, cur.misses, rb))
 	if v, ok := cur.busy["dns"]; ok {
@@ -373,6 +385,8 @@ type Totals struct {
 	Expired  uint64
 	TCPRetry uint64
 	SelErr   uint64
+	QFull    float64
+	QExpired uint64
 	Hits     uint64
 	Misses   uint64
 	BusyDNS  float64
@@ -395,6 +409,8 @@ func (t *Totals) add(p *Point) {
 	t.Expired += uint64(p.Expired)
 	t.TCPRetry += uint64(p.TCPRetry)
 	t.SelErr += uint64(p.SelErr)
+	t.QFull += float64(p.QFull)
+	t.QExpired += uint64(p.QExpired)
 	t.Hits += uint64(p.Hits)
 	t.Misses += uint64(p.Misses)
 	t.BusyDNS += float64(p.BusyDNS)
@@ -420,6 +436,8 @@ func (t *Totals) merge(o Totals) {
 	t.Expired += o.Expired
 	t.TCPRetry += o.TCPRetry
 	t.SelErr += o.SelErr
+	t.QFull += o.QFull
+	t.QExpired += o.QExpired
 	t.Hits += o.Hits
 	t.Misses += o.Misses
 	t.BusyDNS += o.BusyDNS

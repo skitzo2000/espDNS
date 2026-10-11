@@ -236,6 +236,24 @@ class OtaPushTest(unittest.TestCase):
         self.assertIn("node runs chip image esp32p4-rev1", err)
         self.assertEqual(self.sign("--key", self.pem)[1].strip(), "nothing to sign")
 
+    def test_a_sibling_image_is_signed_for_the_image_the_node_runs(self):
+        # esp32s3-eth over esp32s3-octal (firmware/CMakeLists.txt, siblings): the name the
+        # node checks is the image it runs
+        self.node = Node(keys=[self.fp, "00" * 8])
+        err, out = run("prepare", "--dir", self.dir, "--host", self.node.host, "--image", self.image,
+                       "--image-name", "esp32s3-eth")
+        self.assertIsNone(err, out)
+        self.assertIn("moving it to its sibling esp32s3-eth", out)
+        err, out = self.sign("--key", self.pem, image_name="esp32s3-eth")
+        self.assertIsNone(err, out)
+        m = read(os.path.join(self.dir, ota_push.RELEASE))[:128]
+        self.assertEqual(m[16:32].rstrip(b"\0"), b"esp32s3-octal")
+        # not any other image of the chip
+        with tempfile.TemporaryDirectory() as d:
+            err, _ = run("prepare", "--dir", d, "--host", self.node.host, "--image", self.image,
+                         "--image-name", "esp32s3-quad")
+        self.assertIn("node runs chip image esp32s3-octal", err)
+
     def test_sign_signs_its_own_image_not_the_plans(self):
         # A plan naming another image (and its hash) gets that image refused: sign reads
         # only the --image it is given, and that one is not what the plan was made for

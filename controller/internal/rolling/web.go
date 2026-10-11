@@ -56,6 +56,9 @@ type Web struct {
 	// EmptyZones (zones, no Zones): the nodes serve no hosted zone (the CLI's -empty). Never
 	// from the Push page's JSON: an apply sets it when its changes delete every zone file.
 	EmptyZones bool `json:"-"`
+	// Returning (Request.Returning) is the node out of service this push may change: the one
+	// being returned to service. Never from the Push page's JSON.
+	Returning string `json:"-"`
 }
 
 // ParseWeb reads a Push page request, unknown fields refused.
@@ -77,7 +80,7 @@ func ParseWeb(raw []byte) (Web, error) {
 func (w Web) Request(dataDir, catalog string) (Request, error) {
 	r := Request{DataDir: dataDir, Catalog: catalog, Soak: DefaultSoak, DryRun: w.DryRun, Files: NewFiles()}
 	kind, err := release.ParseKind(w.Kind)
-	if err != nil || kind == release.Control {
+	if err != nil || kind == release.Control || kind == release.Keys {
 		return r, errors.New(`"kind": firmware, config, blocklist, overrides or zones`)
 	}
 	r.Kind = kind
@@ -88,15 +91,26 @@ func (w Web) Request(dataDir, catalog string) (Request, error) {
 	if len(w.Nodes) == 0 {
 		return r, errors.New(`"nodes": choose the nodes to change`)
 	}
+	r.Returning = w.Returning
 	for i, n := range w.Nodes {
 		switch {
 		case !slices.Contains(s.Nodes, n):
 			return r, fmt.Errorf("%s is not in settings.json: a rolling push changes only the nodes listed there", n)
 		case slices.Contains(w.Nodes[:i], n):
 			return r, fmt.Errorf("%s twice in \"nodes\"", n)
+		case s.IsOutOfService(n) && n != w.Returning:
+			r.Skipped = append(r.Skipped, n)
+			continue
 		}
+		r.Hosts = append(r.Hosts, n)
 	}
-	r.Hosts = slices.Clone(w.Nodes)
+	if len(r.Hosts) == 0 {
+		return r, fmt.Errorf("%s: out of service: nothing to change (return a node to service to bring it up to date)",
+			strings.Join(r.Skipped, ", "))
+	}
+	if w.Canary != "" && s.IsOutOfService(w.Canary) && w.Canary != w.Returning {
+		w.Canary = "" // skipped: the first node in service goes first
+	}
 	if w.Canary != "" {
 		if !slices.Contains(w.Nodes, w.Canary) {
 			return r, fmt.Errorf("the canary %s is not one of the nodes changed (it never adds a node)", w.Canary)
@@ -155,7 +169,7 @@ func (w Web) Request(dataDir, catalog string) (Request, error) {
 			r.Images = append(r.Images, spec)
 		}
 	case release.Config:
-		for _, n := range w.Nodes {
+		for _, n := range r.Hosts {
 			name, ok := w.Configs[n]
 			if !ok {
 				return r, fmt.Errorf("configs: no config for %s", n)

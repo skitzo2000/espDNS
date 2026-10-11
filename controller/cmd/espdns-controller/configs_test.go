@@ -467,8 +467,12 @@ func TestConfigPushMove(t *testing.T) {
 		t.Fatalf("%+v\n%s", j, logText(j))
 	}
 	if got := n.took(); len(got) != 2 || got[1] != "reboot" || !strings.Contains(logText(j), "confirmed") ||
-		!strings.Contains(logText(j), "settings.json still lists") {
+		!strings.Contains(logText(j), "settings.json lists it at 192.0.2.9 now") {
 		t.Fatalf("took %v\n%s", got, logText(j))
+	}
+	// Listed at its new address, in its place.
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Equal(s.Nodes, []string{"192.0.2.9", peer.addr}) {
+		t.Errorf("settings.json nodes %v", s.Nodes)
 	}
 	if p, _ := configs.LoadPushed(e.dir, n.id()); p == nil || p.Host != "192.0.2.9" {
 		t.Errorf("recorded %+v", p)
@@ -616,6 +620,27 @@ func TestConfigsAPI(t *testing.T) {
 	if h, _ := configs.History(dir, "w.json"); len(h) != 1 {
 		t.Errorf("history %v", h)
 	}
+	// Delete (+ Add node's "Delete this name"): a config no node uses, against its hash (a
+	// stale one is a conflict), kept in its history.
+	nf, err := configs.Read(dir, "n.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, b := do("POST", "/api/configs/n.json/delete", `{"hash":"`+got.Hash+`"}`); code != 409 {
+		t.Errorf("delete, stale hash: %d %s", code, b)
+	}
+	if code, b := do("POST", "/api/configs/n.json/delete", `{"hash":"`+nf.Hash+`"}`); code != 200 || !strings.Contains(b, `"deleted":true`) {
+		t.Errorf("delete: %d %s", code, b)
+	}
+	if _, err := os.Stat(filepath.Join(configs.Path(dir), "n.json")); !os.IsNotExist(err) {
+		t.Errorf("n.json still there: %v", err)
+	}
+	if h, _ := configs.History(dir, "n.json"); len(h) != 1 {
+		t.Errorf("n.json's history %v", h)
+	}
+	if code, _ := do("POST", "/api/configs/n.json/delete", `{"hash":"`+nf.Hash+`"}`); code != 404 {
+		t.Errorf("delete, gone: %d", code)
+	}
 	// Not JSON: refused, as the jobs' POSTs.
 	r := httptest.NewRequest("POST", "http://127.0.0.1:8480/api/configs/n.json", strings.NewReader(`{}`))
 	r.Header.Set("Content-Type", "text/plain")
@@ -731,5 +756,51 @@ func TestConfigsListMatches(t *testing.T) {
 	}
 	if len(out.Nodes) != 1 || out.Nodes[0].Config == nil || *out.Nodes[0].Config != "node-a.json" {
 		t.Errorf("nodes: %+v", out.Nodes)
+	}
+}
+
+// A config a node uses isn't deleted: one a node runs (its name and address), and one an
+// adoption or a push gave a node (its record); one no node uses is.
+func TestConfigsDeleteInUse(t *testing.T) {
+	dir := t.TempDir()
+	net := `"network":{"address":"192.0.2.53/24","gateway":"192.0.2.1"}`
+	hash := map[string]string{}
+	for name, text := range map[string]string{"node-a.json": `{"name":"node-a",` + net + `}`, "given.json": `{"name":"given"}`,
+		"spare.json": `{"name":"spare","network":{"address":"192.0.2.253/23","gateway":"192.0.2.1"}}`} {
+		f, err := configs.Save(dir, name, []byte(text), "")
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		hash[name] = f.Hash
+	}
+	if err := configs.RecordPushed(dir, configs.Pushed{NodeID: "02:00:00:00:00:60", Host: "192.0.2.60", File: "given.json", Seq: 1,
+		Payload: []byte(`{"name":"given"}`), By: "controller"}); err != nil {
+		t.Fatal(err)
+	}
+	st := map[string]any{"node_id": "02:00:00:00:00:53", "config": map[string]any{"source": "node", "seq": 1, "name": "node-a",
+		"address": "static", "ip": "192.0.2.53/24"}}
+	c := configsServer{dataDir: dir, nodes: func() []nodes.Node {
+		return []nodes.Node{{Addr: "192.0.2.53", ID: "02:00:00:00:00:53", Online: true, Status: st}}
+	}}
+	del := func(name string) (int, string) {
+		r := httptest.NewRequest("POST", "/api/configs/"+name+"/delete", strings.NewReader(`{"hash":"`+hash[name]+`"}`))
+		r.SetPathValue("name", name)
+		w := httptest.NewRecorder()
+		c.delete(w, r)
+		return w.Code, w.Body.String()
+	}
+	if code, b := del("node-a.json"); code != 409 || !strings.Contains(b, "192.0.2.53 runs node-a.json") {
+		t.Errorf("node-a.json: %d %s", code, b)
+	}
+	if code, b := del("given.json"); code != 409 || !strings.Contains(b, "was given given.json") {
+		t.Errorf("given.json: %d %s", code, b)
+	}
+	if code, b := del("spare.json"); code != 200 {
+		t.Errorf("spare.json: %d %s", code, b)
+	}
+	for name, want := range map[string]bool{"node-a.json": true, "given.json": true, "spare.json": false} {
+		if _, err := configs.Read(dir, name); (err == nil) != want {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

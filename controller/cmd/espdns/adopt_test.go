@@ -5,8 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"errors"
-	"net/http/httptest"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +17,6 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/adoption"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
-	"github.com/skitzo2000/espdns/controller/internal/faketech"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
@@ -27,22 +25,17 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
-const techToken = "0123456789abcdef-test-token"
-
-// adoptWorld is a data directory (settings.json with a node in service and the Technitium
-// API, a config, the Technitium token imported), a fake network with that node and one to
-// adopt, and a fake Technitium.
+// adoptWorld is a data directory (settings.json with a node in service and the zone primary,
+// which allows zone transfers from 203.0.113.0/24, a config), and a fake network with that
+// node and one to adopt.
 type adoptWorld struct {
 	data, catalog string
 	lan           *fakenode.Lan
 	node, peer    *fakenode.Node
-	tech          *faketech.Server
-	turl          string
 	key           *ecdsa.PrivateKey
 }
 
 func newAdoptWorld(t *testing.T) *adoptWorld {
-	t.Setenv(envPrimaryToken, "")
 	w := &adoptWorld{data: t.TempDir(), catalog: t.TempDir(), lan: fakenode.NewLan()}
 	t.Cleanup(w.lan.Close)
 	w.key, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -57,20 +50,12 @@ func newAdoptWorld(t *testing.T) *adoptWorld {
 			w.node = n
 		}
 	}
-	w.tech = faketech.New(techToken, "home.example", "lab.example")
-	ts := httptest.NewTLSServer(w.tech) // its own certificate, pinned below
-	t.Cleanup(ts.Close)
-	w.turl = ts.URL
 	if err := settings.Save(settings.Path(w.data), settings.Settings{Nodes: []string{"203.0.113.51"}, DNSPeers: []string{"203.0.113.254"},
-		DNSPeerZones: []string{"home.example"}, Primary: &primary.Config{Kind: primary.KindTechnitium, URL: w.turl,
-			CertSHA256: primary.Fingerprint(ts.Certificate())}}); err != nil {
+		DNSPeerZones: []string{"home.example"}, Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}}); err != nil {
 		t.Fatal(err)
 	}
 	put(t, filepath.Join(configs.Path(w.data), "n2.json"), []byte(`{"name": "dns2", "forwarders": ["9.9.9.9"], `+
 		`"secondary": {"primary": "203.0.113.254", "zones": ["home.example", "lab.example"]}}`))
-	if _, err := keys.ImportToken(keys.TokenPath(w.data), techToken, false); err != nil {
-		t.Fatal(err)
-	}
 	return w
 }
 
@@ -83,18 +68,18 @@ func (w *adoptWorld) client() *fleet.Client {
 // adoptView is what an adoption does, without its hooks: what two builds are compared on.
 type adoptView struct {
 	Host, ID, Address, Gateway string
-	DHCP, Reserved, ManualDone bool
+	DHCP, Reserved             bool
 	Payload                    string
 	Identify, Wait             time.Duration
 	Peers                      []string
 	DNSPeers                   []fleet.DNSPeer
 	AllowSingle, Force, DryRun bool
 	Checks                     fleet.Checks
-	Kind, TURL, TToken         string
-	TDry, CheckSet             bool
+	CheckSet                   bool
 	ConfigName, Primary        string
 	Zones                      []string
-	Why                        string
+	ZonePrimary                string
+	Allows                     []string
 }
 
 func viewOf(t *testing.T, b adoption.Built) adoptView {
@@ -104,13 +89,10 @@ func viewOf(t *testing.T, b adoption.Built) adoptView {
 		t.Fatal(err)
 	}
 	v := adoptView{Host: a.Host, ID: a.ID, Address: a.Address.String(), Gateway: a.Gateway.String(), DHCP: a.DHCP,
-		Reserved: a.Reserved, ManualDone: a.ManualDone, Payload: string(p), Identify: a.Identify, Wait: a.ConfirmWait,
+		Reserved: a.Reserved, Payload: string(p), Identify: a.Identify, Wait: a.ConfirmWait,
 		Peers: a.Peers, DNSPeers: a.DNSPeers, AllowSingle: a.AllowSingle, Force: a.Force, DryRun: a.DryRun, Checks: a.Checks,
-		CheckSet: a.Check != nil, ConfigName: b.ConfigName, Primary: b.Primary, Zones: b.Zones, Kind: b.PrimaryKind,
-		Why: b.PrimaryWhy}
-	if tc, ok := a.Primary.(*primary.Technitium); ok {
-		v.TURL, v.TToken, v.TDry = tc.URL, tc.Token, tc.DryRun
-	}
+		CheckSet: a.Check != nil, ConfigName: b.ConfigName, Primary: b.Primary, Zones: b.Zones,
+		ZonePrimary: a.Primary.Address, Allows: a.Primary.Allows}
 	return v
 }
 
@@ -118,46 +100,50 @@ func viewOf(t *testing.T, b adoption.Built) adoptView {
 // the same adoption make the same request, and it builds into the same adoption: the same
 // node and ID, the same address and gateway (or DHCP with its reservation), the same
 // config payload and checks, the same peers and DNS peers for the rule, the same zone
-// primary (Technitium's API with the same token: the environment's in the CLI, the controller's
-// copy on the page, here one token; or the manual kind), the same manual confirmation. So
-// the page adopts as the Makefile does, not with a copy of it.
+// primary from settings.json (its address and the networks it allows). So the page adopts
+// as the CLI does, not with a copy of it.
 func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 	w := newAdoptWorld(t)
 	id := w.node.ID()
 	cfg := filepath.Join(configs.Path(w.data), "n2.json")
 	base := []string{"-key", "-", "-data", w.data, "-mdns", "0", "-host", "203.0.113.52", "-node", id, "-config", cfg,
 		"-catalog", w.catalog}
-	tech := primary.Config{Kind: primary.KindTechnitium, URL: w.turl}
-	manual := primary.Config{Kind: primary.KindManual}
-	newFlags := []string{"-primary-kind", "technitium", "-primary-url", w.turl}
+	set := primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}
+	var none primary.Config
+	var newFlags []string
 	for _, tc := range []struct {
 		name string
 		set  primary.Config
 		cli  []string
 		web  string
 	}{
-		{"the address it runs on, dry run", tech, append(slices.Clone(newFlags), "-dry-run"),
+		{"the address it runs on, dry run", set, append(slices.Clone(newFlags), "-dry-run"),
 			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","dry_run":true}`},
-		{"a new address and gateway", tech, append(slices.Clone(newFlags), "-address", "203.0.113.60/24", "-gateway", "203.0.113.1"),
+		{"a new address and gateway", set, append(slices.Clone(newFlags), "-address", "203.0.113.60/24", "-gateway", "203.0.113.1"),
 			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","address":"203.0.113.60/24","gateway":"203.0.113.1"}`},
-		{"added to settings, done by hand", tech, append(slices.Clone(newFlags), "-add-to-settings", "-primary-done"),
-			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","add_to_settings":true,"primary_done":true}`},
-		{"DHCP, reserved (on no network in no_dhcp)", tech, append(slices.Clone(newFlags), "-address", "dhcp", "-reserved", "-dry-run"),
+		{"added to settings", set, append(slices.Clone(newFlags), "-add-to-settings"),
+			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","add_to_settings":true}`},
+		{"DHCP, reserved (on no network in no_dhcp)", set, append(slices.Clone(newFlags), "-address", "dhcp", "-reserved", "-dry-run"),
 			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","address":"dhcp","reserved":true,"dry_run":true}`},
-		{"the manual kind, dry run", manual, []string{"-primary-kind", "manual", "-dry-run"},
+		{"+ Add node: DHCP, reserved in the router", set, append(slices.Clone(newFlags), "-address", "dhcp", "-reserved", "-dry-run"),
+			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","address":"dhcp","reserved":true,"static":true,"dry_run":true}`},
+		{"+ Add node: a fixed address and its gateway", set, append(slices.Clone(newFlags), "-address", "203.0.113.60/24", "-gateway", "203.0.113.1", "-dry-run"),
+			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","address":"203.0.113.60/24","gateway":"203.0.113.1","static":true,"dry_run":true}`},
+		{"no zone primary set up, dry run", none, []string{"-dry-run"},
 			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","dry_run":true}`},
-		{"the manual kind, done by hand", manual, []string{"-primary-kind", "manual", "-primary-done", "-add-to-settings"},
-			`{"node":"203.0.113.52","node_id":"` + id + `","config":"n2.json","add_to_settings":true,"primary_done":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := settings.Load(settings.Path(w.data))
 			s.Primary = &tc.set
+			if tc.set.IsZero() {
+				s.Primary = nil
+			}
 			if err := settings.Save(settings.Path(w.data), s); err != nil {
 				t.Fatal(err)
 			}
-			cliReq, _, tf, err := adoptRequest(append(slices.Clone(base), tc.cli...))
-			if err != nil || tf != (tokenFrom{}) {
-				t.Fatal(err, tf)
+			cliReq, _, err := adoptRequest(append(slices.Clone(base), tc.cli...))
+			if err != nil {
+				t.Fatal(err)
 			}
 			web, err := adoption.ParseWeb([]byte(tc.web))
 			if err != nil {
@@ -171,17 +157,11 @@ func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 				t.Fatalf("requests differ:\nCLI %+v\npage %+v", cliReq, webReq)
 			}
 			ctx := context.Background()
-			cliB, err := adoption.Build(ctx, w.client(), cliReq, cliToken(tokenFrom{}, w.data), func(string, ...any) {})
+			cliB, err := adoption.Build(ctx, w.client(), cliReq, func(string, ...any) {})
 			if err != nil {
 				t.Fatal(err)
 			}
-			webB, err := adoption.Build(ctx, w.client(), webReq, func() (string, error) {
-				t, err := keys.DataTokenSource{DataDir: w.data}.Token()
-				if errors.Is(err, keys.ErrNoToken) {
-					return "", nil
-				}
-				return t, err
-			}, func(string, ...any) {})
+			webB, err := adoption.Build(ctx, w.client(), webReq, func(string, ...any) {})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,11 +169,7 @@ func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 			if !reflect.DeepEqual(cv, wv) {
 				t.Fatalf("adoptions differ:\nCLI %+v\npage %+v", cv, wv)
 			}
-			want := adoptView{Kind: "technitium", TToken: techToken, TURL: w.turl}
-			if tc.set.Kind == primary.KindManual {
-				want = adoptView{Kind: "manual", Why: "the zone primary is of kind manual: any primary, its lists changed by hand"}
-			}
-			if cv.Kind != want.Kind || cv.TToken != want.TToken || cv.TURL != want.TURL || cv.Why != want.Why ||
+			if cv.ZonePrimary != tc.set.Address || !slices.Equal(cv.Allows, tc.set.Allows) ||
 				!slices.Equal(cv.Peers, []string{"203.0.113.51"}) || len(cv.DNSPeers) != 1 || !cv.CheckSet ||
 				cv.Wait != adoption.DefaultWait || !slices.Equal(cv.Checks.Forwarded, []string{"example.com"}) {
 				t.Fatalf("%+v", cv)
@@ -212,8 +188,8 @@ func TestCLIAndAdoptPageNoDHCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := w.node.ID()
-	cliReq, _, _, err := adoptRequest([]string{"-key", "-", "-data", w.data, "-mdns", "0", "-host", "203.0.113.52", "-node", id,
-		"-config", filepath.Join(configs.Path(w.data), "n2.json"), "-catalog", w.catalog, "-primary-kind", "manual",
+	cliReq, _, err := adoptRequest([]string{"-key", "-", "-data", w.data, "-mdns", "0", "-host", "203.0.113.52", "-node", id,
+		"-config", filepath.Join(configs.Path(w.data), "n2.json"), "-catalog", w.catalog,
 		"-address", "dhcp", "-reserved", "-dry-run"})
 	if err != nil {
 		t.Fatal(err)
@@ -226,41 +202,24 @@ func TestCLIAndAdoptPageNoDHCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	none := func() (string, error) { return "", nil }
-	_, cerr := adoption.Build(context.Background(), w.client(), cliReq, none, func(string, ...any) {})
-	_, werr := adoption.Build(context.Background(), w.client(), webReq, none, func(string, ...any) {})
+	_, cerr := adoption.Build(context.Background(), w.client(), cliReq, func(string, ...any) {})
+	_, werr := adoption.Build(context.Background(), w.client(), webReq, func(string, ...any) {})
 	if cerr == nil || werr == nil || cerr.Error() != werr.Error() || !strings.Contains(cerr.Error(), "203.0.113.0/24, which has no DHCP server") {
 		t.Fatal(cerr, werr)
 	}
 }
 
-// The token's flags; the old names (-technitium, its $TECHNITIUM_URL default,
-// -technitium-token-file, -technitium-done, the page's "technitium_done") are gone.
-func TestAdoptPrimaryFlags(t *testing.T) {
-	w := newAdoptWorld(t)
-	base := []string{"-data", w.data, "-host", "203.0.113.52"}
-	r, _, tf, err := adoptRequest(append(slices.Clone(base), "-primary-token-file", "/t", "-primary-token-env", "TOKEN_NAME"))
-	if err != nil || tf != (tokenFrom{file: "/t", env: "TOKEN_NAME"}) || r.PrimaryKind != "" {
-		t.Fatal(err, tf, r.PrimaryKind)
-	}
-	t.Setenv("TECHNITIUM_URL", w.turl)
-	if r, _, _, err := adoptRequest(base); err != nil || r.PrimaryKind != "" || r.PrimaryURL != "" {
-		t.Fatal(err, r.PrimaryKind, r.PrimaryURL)
-	}
-	if _, err := adoption.ParseWeb([]byte(`{"node":"203.0.113.52","technitium_done":true}`)); err == nil {
-		t.Fatal(`the page's old "technitium_done" taken`)
+// The page's old "primary_done" is gone: nothing is changed on the primary, so there is
+// nothing to confirm done.
+func TestAdoptPrimaryFlagsGone(t *testing.T) {
+	if _, err := adoption.ParseWeb([]byte(`{"node":"203.0.113.52","primary_done":true}`)); err == nil {
+		t.Fatal(`the page's old "primary_done" taken`)
 	}
 }
 
-func rmToken(t *testing.T, data string) {
-	if err := os.Remove(keys.TokenPath(data)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// espdns adopt as make fleet-adopt runs it: the node adopted, the zone primary's lists
-// changed with the token from the data directory (none in the environment here), the config it runs
-// recorded by the CLI, and with -add-to-settings its address in settings.json.
+// espdns adopt: the node adopted, the config it runs recorded by the CLI, and with
+// -add-to-settings its address in settings.json. A node in none of the networks the zone
+// primary allows is adopted all the same, after being told what to set up there.
 func TestCLIAdoptRecords(t *testing.T) {
 	w := newAdoptWorld(t)
 	keyFile := filepath.Join(t.TempDir(), "release.pem")
@@ -290,11 +249,7 @@ func TestCLIAdoptRecords(t *testing.T) {
 	if !slices.Equal(s.Nodes, []string{"203.0.113.51", "203.0.113.60"}) {
 		t.Fatal(s.Nodes)
 	}
-	if z, _ := w.tech.Zone("lab.example"); !slices.Equal(z.TransferList, []string{"203.0.113.60"}) {
-		t.Fatal(z)
-	}
-	// No token anywhere and no -technitium-done: refused before anything is pushed, saying
-	// how to go on.
+	// Outside every network the primary allows: said, and adopted.
 	w2 := newAdoptWorld(t)
 	adoptClient = func(o *fleetOpts) (*fleet.Client, error) {
 		c, err := o.client()
@@ -305,17 +260,23 @@ func TestCLIAdoptRecords(t *testing.T) {
 		c.HTTP, c.DNS, c.PeerDNS, c.Poll, c.Pusher.Client = hc, w2.lan, w2.lan, 10*time.Millisecond, hc
 		return c, nil
 	}
-	put(t, keys.TokenPath(w2.data), nil)
-	err = cmdAdopt([]string{"-key", keyFile, "-data", w2.data, "-mdns", "0", "-host", "203.0.113.52", "-config", "n2.json",
-		"-catalog", w2.catalog})
-	if err == nil || !strings.Contains(err.Error(), "the zone primary API token") {
+	s2, _ := settings.Load(settings.Path(w2.data))
+	s2.Primary.Allows = []string{"198.51.100.0/24"}
+	if err := settings.Save(settings.Path(w2.data), s2); err != nil {
 		t.Fatal(err)
 	}
-	rmToken(t, w2.data)
-	err = cmdAdopt([]string{"-key", keyFile, "-data", w2.data, "-mdns", "0", "-host", "203.0.113.52", "-config", "n2.json",
-		"-catalog", w2.catalog})
-	if !errors.Is(err, fleet.ErrManual) || !strings.Contains(err.Error(), "-primary-done") ||
-		slices.Contains(w2.node.Events(), "push config") {
-		t.Fatal(err, w2.node.Events())
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	keyFile2 := filepath.Join(t.TempDir(), "release.pem")
+	pem2, _ := keys.Encode(w2.key)
+	put(t, keyFile2, pem2)
+	if err := cmdAdopt([]string{"-key", keyFile2, "-data", w2.data, "-mdns", "0", "-host", "203.0.113.52", "-config", "n2.json",
+		"-catalog", w2.catalog, "-wait", "5s"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logged.String(), "Your zone primary must allow zone transfers from 203.0.113.52: allow its network (e.g. 203.0.113.0/24) there once.") ||
+		!slices.Contains(w2.node.Events(), "push config") {
+		t.Fatal(logged.String(), w2.node.Events())
 	}
 }

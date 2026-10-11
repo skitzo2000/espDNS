@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,12 +14,12 @@ import (
 )
 
 // hasSecurityHeaders checks the response to r for every header websec sets, once, with its
-// value: the builder page's CSP on the builder page, websec.CSP everywhere else.
+// value: websec.USBCSP on websec.USBPages, websec.CSP everywhere else.
 func hasSecurityHeaders(t *testing.T, what string, r *http.Request, w *httptest.ResponseRecorder) {
 	t.Helper()
 	csp := websec.CSP
-	if r.URL.Path == "/builder.html" {
-		csp = websec.BuilderCSP
+	if slices.Contains(websec.USBPages, r.URL.Path) {
+		csp = websec.USBCSP
 	}
 	for _, kv := range websec.Set {
 		if kv[0] == "Content-Security-Policy" {
@@ -49,12 +50,12 @@ func TestSecurityHeadersEverywhere(t *testing.T) {
 			}
 		}
 		codes := map[int]bool{}
-		builder := 0
+		nodes := 0
 		check := func(what string, r *http.Request) {
 			w := serve(h, r)
 			codes[w.Code] = true
-			if r.URL.Path == "/builder.html" {
-				builder++
+			if r.URL.Path == "/index.html" {
+				nodes++
 			}
 			hasSecurityHeaders(t, what, r, w)
 		}
@@ -95,9 +96,9 @@ func TestSecurityHeadersEverywhere(t *testing.T) {
 		for what, r := range odd {
 			check(what, r)
 		}
-		// The walk met the builder page, logged out (and logged in).
-		if builder == 0 {
-			t.Errorf("password %v: the walk never asked for /builder.html", password)
+		// The walk met the Nodes page, logged out (and logged in).
+		if nodes == 0 {
+			t.Errorf("password %v: the walk never asked for /index.html", password)
 		}
 		// The walk met the answers it is about.
 		want := []int{http.StatusOK, http.StatusForbidden, http.StatusNotFound, http.StatusTemporaryRedirect}

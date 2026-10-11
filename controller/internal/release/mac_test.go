@@ -34,3 +34,29 @@ func TestNodeStatusMAC(t *testing.T) {
 		t.Fatalf("net.mac: %q", st.Net.MAC)
 	}
 }
+
+// /status's keys_source, keys_gen and keys_error (firmware/main/keys_node.h) are decoded into
+// NodeStatus; firmware from before the keys partition has none of them.
+func TestNodeStatusKeys(t *testing.T) {
+	three, one := uint32(3), uint32(1)
+	for _, c := range []struct {
+		in, source, err string
+		gen             *uint32
+	}{
+		{`{"keys_source":"partition","keys_gen":3,"keys_error":""}`, "partition", "", &three},
+		{`{"keys_source":"seeded","keys_gen":1,"keys_error":""}`, "seeded", "", &one},
+		{`{"keys_source":"corrupt","keys_gen":null,"keys_error":"no valid slot (slot A: bad CRC)"}`, "corrupt",
+			"no valid slot (slot A: bad CRC)", nil},
+		{`{"keys_source":"embedded","keys_gen":null,"keys_error":"no keys partition"}`, "embedded", "no keys partition", nil},
+		{`{"keys":["aa","bb"]}`, "", "", nil},
+	} {
+		var st NodeStatus
+		if err := json.Unmarshal([]byte(c.in), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.KeysSource != c.source || st.KeysError != c.err || (st.KeysGen == nil) != (c.gen == nil) ||
+			(c.gen != nil && *st.KeysGen != *c.gen) {
+			t.Errorf("%s: source %q gen %v error %q", c.in, st.KeysSource, st.KeysGen, st.KeysError)
+		}
+	}
+}

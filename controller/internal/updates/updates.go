@@ -5,8 +5,15 @@
 // pushes to a node.
 //
 // A node's builds are the ones a rollout would give it: its board's build
-// (firmware/builds/<board>, of the node's chip image) and its chip image's export
+// (firmware/builds/<board>, of the node's chip image, or of the sibling image its board runs
+// now: boards.Siblings) when there is one, else its chip image's export
 // (firmware/images/<image>); a node that reports no board takes any build of its image.
+// A board's build is made for the board (its pins, its partitions), so a chip image imported
+// later, even a later build, never takes its place.
+//
+// A later build of the version a node runs is offered as what it is ("A newer build of
+// 0.0.1"), never as a version change: it is a Rebuild, which the Nodes page shows in the
+// node's row only, without the update banner, and which "Update all" leaves out.
 package updates
 
 import (
@@ -16,6 +23,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/skitzo2000/espdns/controller/internal/boards"
 	"github.com/skitzo2000/espdns/controller/internal/changes"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
@@ -40,16 +48,18 @@ type Build struct {
 	Image  string `json:"image,omitempty"`
 	Board  string `json:"board,omitempty"`
 	Version
+	Label string `json:"label,omitempty"` // where it came from: "project release v0.0.3", "your build"
 	Error string `json:"error,omitempty"` // why it can't be offered
 }
 
 // Node is a node to report: its host, whether settings.json lists it (only those take a
 // firmware change), and its last /status (nil: not seen yet).
 type Node struct {
-	Host   string
-	Listed bool
-	Online bool
-	Status *release.NodeStatus
+	Host         string
+	Listed       bool
+	OutOfService bool
+	Online       bool
+	Status       *release.NodeStatus
 }
 
 // NodeUpdate is one node's update availability.
@@ -60,25 +70,38 @@ type NodeUpdate struct {
 	Board  string `json:"board,omitempty"`
 	Listed bool   `json:"listed"`
 	Online bool   `json:"online"`
+	// OutOfService: listed, but out of service (settings.json "out_of_service"): no update is
+	// offered for it; returning it to service brings its firmware up to date.
+	OutOfService bool `json:"out_of_service,omitempty"`
 	// Runs is the firmware it runs (nil: unknown); Newest the newest build for it (nil: none).
 	Runs   *Version `json:"runs,omitempty"`
 	Newest *Build   `json:"newest,omitempty"`
 	State  string   `json:"state"`
-	Why    string   `json:"why"` // the state in words
+	// Rebuild says the update offered is a later build of the version it runs.
+	Rebuild bool   `json:"rebuild,omitempty"`
+	Why     string `json:"why"` // the state in words
 	// Pending is the pending firmware change that names it, if any (its ID and summary).
 	Pending        string `json:"pending,omitempty"`
 	PendingSummary string `json:"pending_summary,omitempty"`
 }
 
-// Offered says whether an update is offered for it now: available, listed, none pending.
-func (n NodeUpdate) Offered() bool { return n.State == Available && n.Listed && n.Pending == "" }
+// Offered says whether an update is offered for it now: available, listed and in service,
+// none pending.
+func (n NodeUpdate) Offered() bool {
+	return n.State == Available && n.Listed && !n.OutOfService && n.Pending == ""
+}
+
+// Announced says whether the update is one "Update all" and the banner offer: offered,
+// and a new version, not a later build of the one it runs.
+func (n NodeUpdate) Announced() bool { return n.Offered() && !n.Rebuild }
 
 // Report is the fleet's update availability.
 type Report struct {
 	Scheme string       `json:"scheme"` // how versions are ordered (Scheme)
 	Nodes  []NodeUpdate `json:"nodes"`
 	Builds []Build      `json:"builds"`
-	// Available are the hosts an update is offered for ("Update all").
+	// Available are the hosts a new version is offered for ("Update all"); a later build
+	// of the version a node runs is offered for that node alone.
 	Available []string `json:"available"`
 }
 
@@ -89,7 +112,7 @@ func Builds(dataDir, catalog string) []Build {
 		// An error names files by their place in the data directory, never its path: the
 		// read is open before a password is set.
 		e := strings.ReplaceAll(f.Error, filepath.Clean(dataDir)+string(filepath.Separator), "")
-		b := Build{Source: f.Source, Image: f.Image, Board: f.Board, Error: e}
+		b := Build{Source: f.Source, Image: f.Image, Board: f.Board, Label: f.Label, Error: e}
 		if f.Error == "" || f.Elf != "" {
 			b.Version = Of(f.Version, f.Built, f.Elf)
 		}
@@ -112,7 +135,7 @@ func For(ns []Node, builds []Build, pending []changes.Change) Report {
 				break
 			}
 		}
-		if u.Offered() {
+		if u.Announced() {
 			r.Available = append(r.Available, u.Host)
 		}
 		r.Nodes = append(r.Nodes, u)
@@ -120,16 +143,20 @@ func For(ns []Node, builds []Build, pending []changes.Change) Report {
 	return r
 }
 
-// fits says whether a build is one a rollout gives the node.
+// fits says whether a build is one a rollout gives the node: its chip image's, or its
+// board's build of the sibling image the board runs now (boards.Siblings).
 func fits(b Build, st *release.NodeStatus) bool {
-	if b.Error != "" || b.Image != st.Image {
+	if b.Error != "" {
 		return false
+	}
+	if b.Image != st.Image {
+		return b.Board != "" && b.Board == st.Board && boards.Swappable(st.Image, b.Image)
 	}
 	return b.Board == "" || st.Board == "" || b.Board == st.Board
 }
 
 func node(n Node, builds []Build) NodeUpdate {
-	u := NodeUpdate{Host: n.Host, Listed: n.Listed, Online: n.Online}
+	u := NodeUpdate{Host: n.Host, Listed: n.Listed, OutOfService: n.OutOfService, Online: n.Online}
 	st := n.Status
 	if st == nil {
 		u.State, u.Why = Unknown, "Not seen yet: the firmware it runs is unknown"
@@ -145,9 +172,14 @@ func node(n Node, builds []Build) NodeUpdate {
 		u.State, u.Why = Unknown, "Its /status names no chip image: no build can be matched to it"
 		return u
 	}
+	// Its board's build, when there is one, else any that fits (its chip image's).
+	ofBoard := st.Board != "" && slices.ContainsFunc(builds, func(b Build) bool { return fits(b, st) && b.Board == st.Board })
 	var newest *Build
 	for i := range builds {
-		if fits(builds[i], st) && (newest == nil || Later(builds[i].Version, newest.Version)) {
+		if !fits(builds[i], st) || ofBoard && builds[i].Board != st.Board {
+			continue
+		}
+		if newest == nil || Later(builds[i].Version, newest.Version) {
 			newest = &builds[i]
 		}
 	}
@@ -168,11 +200,10 @@ func node(n Node, builds []Build) NodeUpdate {
 		u.Why = fmt.Sprintf("It runs %s, another build than the newest here (%s); which is newer can't be told", runs.Text, b.Text)
 	case c == 0:
 		u.State, u.Why = Current, "Up to date: it runs "+runs.Text
+	case c > 0 && runs.Text == b.Text:
+		u.State, u.Rebuild, u.Why = Available, true, "A newer build of "+b.Text+builtWhen(b.Version)
 	case c > 0:
 		u.State, u.Why = Available, "Update available: "+runs.Text+" → "+b.Text
-		if runs.Text == b.Text {
-			u.Why += " (a later build of it)"
-		}
 	default:
 		u.State = Newer
 		u.Why = fmt.Sprintf("It runs %s, newer than any build here (the newest is %s)", runs.Text, b.Text)
@@ -219,6 +250,8 @@ func (r Report) Plan(hosts []string, expect map[string]string) ([]Offer, error) 
 		switch {
 		case !u.Listed:
 			return nil, fmt.Errorf("%s is not in settings.json: an update goes only to the nodes listed there", h)
+		case u.OutOfService:
+			return nil, fmt.Errorf("%s is out of service: returning it to service updates its firmware", h)
 		case u.Pending != "":
 			return nil, fmt.Errorf("%s already has a firmware update pending (%s): discard that one first", h, u.PendingSummary)
 		case u.State != Available:
@@ -254,8 +287,16 @@ func (r Report) Plan(hosts []string, expect map[string]string) ([]Offer, error) 
 }
 
 // summary says an update in words, as the header lists it: "Update dns2 from 0.0.1 to
-// 0.0.4", the nodes counted when they don't fit.
+// 0.0.4", the nodes counted when they don't fit; a later build of the version they run,
+// "Update dns2 to a newer build of 0.0.1".
 func summary(names, from []string, to string) string {
+	if len(from) == 1 && from[0] == to {
+		s := "Update " + strings.Join(names, ", ") + " to a newer build of " + to
+		if len(s) > changes.MaxSummary {
+			s = fmt.Sprintf("Update %d nodes to a newer build of %s", len(names), to)
+		}
+		return s
+	}
 	f := ""
 	if len(from) == 1 {
 		f = " from " + from[0]
@@ -265,4 +306,15 @@ func summary(names, from []string, to string) string {
 		s = fmt.Sprintf("Update %d nodes%s to %s", len(names), f, to)
 	}
 	return s
+}
+
+// builtWhen is " (built Oct 7 2026 09:30)", when the build says when it was built.
+func builtWhen(v Version) string {
+	switch {
+	case !v.at.IsZero():
+		return " (built " + v.at.Format("Jan 2 2006 15:04") + ")"
+	case v.Built != "":
+		return " (built " + Clean(v.Built, maxText) + ")"
+	}
+	return ""
 }

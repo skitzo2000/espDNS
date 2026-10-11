@@ -117,6 +117,7 @@ type fakeNode struct {
 	blips        int    // /status requests left that fail although the node stays up
 	notBlocking  bool
 	services     map[string]string // /status "services" (name: state); nil: firmware from before them
+	keysSource   string            // /status "keys_source" ("" partition; "-": none, firmware from before the keys partition)
 	memory       map[string]any    // /status "memory"; nil: firmware from before the memory plan
 	blocking     map[string]any    // /status "blocking"
 	startPolls   int               // /status polls blocking stays "starting" after a boot (its list loading)
@@ -173,10 +174,18 @@ func (n *fakeNode) up() {
 func (n *fakeNode) status() map[string]any {
 	st := map[string]any{"node_id": n.id, "image": n.image, "board": "p4-ip101", "elf_sha256": n.elf, "slot": n.slot,
 		"ota_state": n.otaState, "uptime_s": n.uptime(), "seq": n.seq, "version": "1",
-		"keys":   []string{release.Fingerprint(release.PublicRaw(n.w.key)), "0000000000000000"},
-		"config": map[string]any{"source": "node", "seq": n.seq["config"], "address": "static"},
-		"zones":  []map[string]any{{"name": "home.example"}},
-		"hosted": map[string]any{"state": "on", "seq": n.seq["zones"], "limit_bytes": 65536},
+		"keys":        []string{release.Fingerprint(release.PublicRaw(n.w.key)), "0000000000000000"},
+		"keys_source": "partition",
+		"config":      map[string]any{"source": "node", "seq": n.seq["config"], "address": "static"},
+		"zones":       []map[string]any{{"name": "home.example"}},
+		"hosted":      map[string]any{"state": "on", "seq": n.seq["zones"], "limit_bytes": 65536},
+	}
+	switch n.keysSource {
+	case "-":
+		delete(st, "keys_source")
+	case "":
+	default:
+		st["keys_source"] = n.keysSource
 	}
 	if n.services != nil {
 		var svcs []map[string]any
@@ -384,5 +393,6 @@ func app(t *testing.T, elf string) []byte {
 		t.Fatal("bad elf")
 	}
 	copy(b[32+144:], e)
+	copy(b[512:], "espdns:keys=partition-v1\x00") // reads the keys partition (release.KeysOf)
 	return b
 }

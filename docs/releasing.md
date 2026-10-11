@@ -1,51 +1,44 @@
 # Releasing espDNS
 
-A release is one version of the firmware and the controller together (they share the
-repository's [`VERSION`](../VERSION); README.md, Versions). Every step here is a docker
-command or git. Nothing needs installing but Docker and git.
+A release is one version of the firmware and the controller together. They share the
+repository's [`VERSION`](../VERSION). Every step here is a docker or git command: Docker and
+git are all you need.
 
 ## What a release holds
 
-CI builds a release's files when a version tag is pushed
-([`.github/workflows/release.yml`](../.github/workflows/release.yml)) and puts them on
-GitHub as a **draft** release, which only the repository's writers see:
+Push a version tag and CI builds the files
+([`.github/workflows/release.yml`](../.github/workflows/release.yml)), then puts them on
+GitHub as a **draft** release that only the repository's writers can see:
 
 | File | What it is |
 | --- | --- |
-| `espdns-<version>-image-<image>.tar.gz` | Each chip image (`firmware/images/*`), exported as the controller's builder imports it: `<image>/` with the bootloader, both partition tables, the OTA data, the app and `image.json` |
-| `espdns-<version>-factory-<board>.bin` | Each catalog board's factory image (`boards/*.json`): one file, written at offset 0 of a new node's flash |
-| `espdns-<version>-factory-<board>.manifest.json` | Its [ESP Web Tools](https://esphome.github.io/esp-web-tools/) manifest, as the builder's: erase, then install that file at offset 0 |
+| `espdns-<version>-image-<image>.tar.gz` | Each chip image (`firmware/images/*`), exported as the controller imports it: `<image>/` with the bootloader, both partition tables, the OTA data, the app and `image.json` |
 | `espdns-<version>-controller-image.txt` | The controller's image, pushed to the GitHub container registry: `ghcr.io/<owner>/espdns-controller:<version>@sha256:<digest>` |
 | `SHA256SUMS` | The SHA-256 of every file above, as `sha256sum` writes it |
-| `SHA256SUMS.sig` | The release key's signature over `SHA256SUMS`, added by a person (below) |
+| `SHA256SUMS.sig` | The project's release key's signature over `SHA256SUMS`, added by a person (below) |
 
-The images are **generic**: built with no board, no address and no site defaults, so they are the same for everyone. A chip image becomes a
-node with a board partition, written by the controller's builder with the node's address.
-A factory image carries its catalog board's definition and the address `dhcp`: a release
-can't know a node's address, so a node flashed with one asks the network's DHCP server for
-its first address, and adoption then gives it its own. On a network without a DHCP server,
-flash new nodes from the controller's builder instead (it writes a static address), with
-the release's chip images imported (Using a release, below).
+The images are **generic and key-neutral**: no board, no address, no site defaults and
+**no keys**. Install over USB adds those (a board partition and a keys partition with your
+two public keys). Every catalog board's chip image is in every release. There are **no
+factory images** (whole-flash images): a release can't know your keys or addresses.
 
-The signature is the one the nodes check on every release they take: ECDSA P-256 over the
-SHA-256 of `SHA256SUMS`, 64 bytes (`r || s`), made with the release key, checked with the
-public key the firmware is built with, [`firmware/keys/release.pub`](../firmware/keys/release.pub),
-fingerprint `ceccd5865252c2df` (the first 8 bytes of its SHA-256, as a node's `/status`
-`keys` lists it). The key never goes to CI: CI only builds and lists the files; a person
-signs, with the key on standard input.
+The signature is ECDSA P-256 over the SHA-256 of `SHA256SUMS`, 64 bytes (`r || s`), made
+with the project's release key. Its public half is [`keys/project.pub`](../keys/project.pub)
+(fingerprint `ceccd5865252c2df`, the first 8 bytes of its SHA-256; `/keys/project.pub` in the
+controller's image).
+
+That key signs `SHA256SUMS` and nothing else, and no node trusts it. It never goes to CI:
+CI builds the files, and a person signs, with the key on standard input.
 
 ## Once: the repository's settings
 
-There is no secret to set. The workflows use the token GitHub gives each run, and each job
-asks only for what it writes: the release job writes the draft release, the image job writes
-the package. The repository needs only:
+There's no secret to set: each job uses the token GitHub gives the run, and asks only for
+what it writes. The repository needs:
 
-- Actions enabled (Settings, Actions, General). The default workflow permissions, read
-  only, are fine: the workflows ask for more themselves.
-- The package public, after the first release. The first release creates the package
-  `espdns-controller` under the repository's owner, and GitHub makes a new package
-  private. On the package's page, Package settings, change its visibility to public, once.
-  Its label links it to the repository.
+- Actions enabled (Settings, Actions, General). The default read-only permissions are fine.
+- The package made public, once, after the first release. That release creates
+  `espdns-controller` under the repository's owner, private by default. On the package's
+  page, Package settings, set its visibility to public.
 
 ## Making a release
 
@@ -58,8 +51,8 @@ the package. The repository needs only:
      sh scripts/bump-version.sh patch      # or minor, major, or the version itself: 0.0.4
    ```
 
-   It writes `VERSION` and makes the Unreleased section the new version's, dated today.
-   Review the diff, commit it and merge it to `main` as any change.
+   It writes `VERSION` and turns Unreleased into the new version, dated today. Commit it and
+   merge it to `main` like any change.
 
 2. **The tag.** On `main`, at that merge:
 
@@ -67,104 +60,135 @@ the package. The repository needs only:
    git tag -a v0.0.2 -m "espDNS 0.0.2" && git push origin v0.0.2
    ```
 
-   The release workflow runs on the tag (only on a `v*` tag, never on a branch). It stops
-   before building anything if the tag is not `v` and `VERSION`, or if `CHANGELOG.md` has no
-   section for that version. Then it builds the chip images (one job each); once they have
-   all built, the controller's image (pushed to the registry, so a release whose firmware
-   fails pushes nothing); then the factory images and `SHA256SUMS`, and makes the draft
-   release, its notes the version's changelog. To run it again for the same tag, delete
-   the draft first: a release already there is never changed.
+   The workflow runs on `v*` tags only. It stops at once if the tag isn't `v` plus
+   `VERSION`, or `CHANGELOG.md` has no section for it. Then it builds the chip images (one
+   job each; a new `firmware/images/<image>` goes into the matrix of both the CI and release
+   workflows), then the controller's image (so failed
+   firmware pushes nothing), then the tarballs, `SHA256SUMS` and the draft, with the
+   changelog as its notes. To rerun a tag, delete the draft first: an existing release is
+   never changed.
 
 3. **The controller's image to sign with,** built from the tag you checked out, so the
-   public key it checks with comes from your copy of the source:
+   public key it checks with comes from your copy of the source (`keys/project.pub`):
 
    ```sh
    git checkout v0.0.2
    docker build -t espdns-controller:v0.0.2 \
-     --build-context boards=boards --build-context version=. --build-context keys=firmware/keys controller
+     --build-context boards=boards --build-context version=. --build-context keys=keys controller
    ```
 
 4. **Sign.** Download the draft's `SHA256SUMS` into an empty directory, `sign/`, and sign it
-   with the release key, which comes on standard input: from its file, or piped from your
-   password manager. It is never an argument or an environment variable, and never written
-   anywhere.
+   with the release key on standard input, from its file or piped from your password
+   manager. Never pass it as an argument or an environment variable.
 
    ```sh
    docker run --rm -i -u "$(id -u):$(id -g)" -v "$PWD/sign:/release" --network none \
      --entrypoint /espdns espdns-controller:v0.0.2 \
-     release sign -dir /release -pub /keys/release.pub < release.pem
+     release sign -dir /release -pub /keys/project.pub < release.pem
    ```
 
-   It writes `sign/SHA256SUMS.sig`. A key that is not the firmware's release key
-   (`-pub`) is refused: nobody could check its signature.
+   It writes `sign/SHA256SUMS.sig`, and refuses any key that isn't the project's (`-pub`).
 
-5. **Publish.** Add `SHA256SUMS.sig` to the draft, and publish it.
+5. **Publish.** Add `SHA256SUMS.sig` to the draft and publish it.
 
-6. **Check it** as anyone will (Checking a release, below), from the published release.
+6. **Check it** the way anyone will ([Checking a release](#checking-a-release)), from the
+   published release.
 
 ## Checking a release
 
-Download all of a release's files into one directory, e.g. `espdns-0.0.2/`, and:
+Download all of a release's files into one directory, e.g. `espdns-0.0.2/`, and run:
 
 ```sh
 docker run --rm -v "$PWD/espdns-0.0.2:/release:ro" --network none \
-  --entrypoint /espdns espdns-controller:v0.0.2 release verify -dir /release -pub /keys/release.pub
+  --entrypoint /espdns espdns-controller:v0.0.2 release verify -dir /release -pub /keys/project.pub
 ```
 
-(`espdns-controller:v0.0.2`: the image built from the source at the tag, Making a release,
-step 3.) It checks `SHA256SUMS.sig` with the release key, then every file against `SHA256SUMS`, and
-says each one is OK; any file missing or changed, or a signature that isn't the key's, is an
-error. It prints the key's fingerprint: `ceccd5865252c2df` is espDNS's release key. Use a
-controller image built from the source (step 3 above), or the one you already run, rather
-than the image of the release being checked: the check is only as good as the key it uses.
+It checks `SHA256SUMS.sig` with the project's key, then every file against `SHA256SUMS`.
+A missing or changed file, or a wrong signature, is an error. It prints the key's
+fingerprint: `ceccd5865252c2df` is espDNS's release key.
+
+Use the image you built from the source (Making a release, step 3) or the one you already
+run, never the image of the release you're checking: the check is only as good as its key.
 
 ## Using a release
 
-A published release is signed with the project's release key, and its images carry the
-project's public keys. Use one only for nodes that run the project's firmware. If you made
-your own keys, as [Getting started](getting-started.md#3-make-your-keys) does, your nodes
-refuse the project's releases: build and sign your own as that guide shows.
+The images are key-neutral, so one release serves everyone's flock. Your nodes never trust
+the project's key.
 
-- **The controller.** Its image is in `espdns-<version>-controller-image.txt`, by digest.
-  In `controller/`, put it in `.env` as `ESPDNS_IMAGE=<that line>` and start it without
-  building:
+The controller takes a release only if `SHA256SUMS` is signed by the project's key
+(`/keys/project.pub` in its image) or by your own release key, and refuses anything else.
+Each imported chip image keeps its provenance in `firmware/images/<image>/provenance/` in
+the data directory (the signed `SHA256SUMS`, its signature, the tarball and who signed it).
+Before every firmware update (Nodes page or `espdns rollout`) the controller checks that
+chain again, including that the app it sends is the one in the tarball, and only then signs
+the update with your release key. If the chain doesn't check, nothing is sent.
+
+The pages label each firmware **project release v0.0.2**, **your build v0.0.2** (a release
+you signed yourself) or **your build** (no release behind it).
+
+- **The controller.** Its image is `ghcr.io/skitzo2000/espdns-controller:<version>`, and
+  `espdns-<version>-controller-image.txt` names it by digest. In `controller/`, put it in
+  `.env` as `ESPDNS_IMAGE=<that line>` and start it without building, as
+  [Docker Compose](developer.md#docker-compose) does:
 
   ```sh
-  docker pull "$(cat ../espdns-0.0.2/espdns-0.0.2-controller-image.txt)"
+  docker compose pull
   docker compose up -d --no-build
   ```
 
-  (or build it from the source, `docker compose up -d --build`, as
-  [Getting started](getting-started.md#5-start-the-controller) does).
+  Or build it from the source at the tag: `docker compose up -d --build` with no
+  `ESPDNS_IMAGE`.
 
-- **The chip images,** for the builder and for firmware updates on the Nodes page: import
-  them into the controller's data directory. The import checks the release first, as
-  `release verify` does, and imports nothing if it doesn't check. It takes the fleet lock:
-  while a rollout or a job runs it is refused; run it again after. From `controller/`:
+- **The chip images,** for Install over USB and firmware updates: **Get firmware**, in
+  Install over USB (for a board whose chip image isn't there yet) or in the account panel
+  (Firmware). It downloads the newest published release's chip images, `SHA256SUMS` and
+  `SHA256SUMS.sig` from GitHub, checks the signature before downloading anything else,
+  checks each file, and imports them. The same from `controller/`, for one version:
+
+  ```sh
+  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version v0.0.2
+  ```
+
+  For a mirror of the repository on another forge, add
+  `-url https://git.example.com/<owner>/espdns`, or set
+  `"release_url"` in `settings.json` for the pages. A release you downloaded yourself is
+  imported like this, after the same checks as `release verify`:
 
   ```sh
   docker compose run --rm -T -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns \
-    espdns-controller release import -dir /release -pub /keys/release.pub -data /data
+    espdns-controller release import -dir /release -data /data
   ```
 
-- **A new node,** from a factory image: in the controller's builder (a static address), or
-  with the release's file and esptool, which erases the flash first, the board on USB:
+  Both take the fleet lock, so they're refused while a rollout or job runs.
 
-  ```sh
-  docker run --rm --device /dev/ttyACM0 -v "$PWD/espdns-0.0.2:/release:ro" \
-    espressif/idf:v5.5.5@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2 \
-    esptool.py -p /dev/ttyACM0 write_flash --erase-all 0 /release/espdns-0.0.2-factory-xiao-s3-sense.bin
-  ```
+- **A new node:** Install over USB, from the imported chip image. It writes the board's
+  definition, the node's address and your two public keys
+  ([Getting started](getting-started.md#run-the-setup)).
 
-  The node then starts on DHCP (What a release holds, above) and waits to be adopted.
+### Your own builds
+
+- **A release of your own:** chip images built from the source, packaged with `release
+  build`, `SHA256SUMS` signed with **your** release key (`release sign -pub` your
+  `release.pub`, the key from the controller's data directory on standard input), then
+  `release import` with no `-pub`. It's labelled "your build v0.0.2" and checked before
+  every update like a project release. The commands are in
+  [Build your own firmware](developer.md#build-your-own-firmware); the build itself is
+  [Building a release by hand](#building-a-release-by-hand).
+- **Builds with no release behind them** (in `firmware/builds/<board>/` in the data
+  directory, or chip images you copied in yourself) have nothing to check, so they're sent
+  as they are (labelled "your build"). They still pass every update's keys checks:
+  - the image must read the keys partition (its `espdns:keys=partition-v1` marker; a build
+    from before that is a downgrade to built-in keys, and refused);
+  - a node in setup mode takes nothing;
+  - a node on firmware from before the keys partition takes only a build whose keys seed is
+    its own keys.
 
 ## Building a release by hand
 
-The release workflow's steps, as docker commands, for trying a change to them or building
-a release without CI. Build in a clean checkout of the commit, never in the one your keys
-(`firmware/secrets/`), data directory or site files are in: the firmware build's container
-mounts the whole checkout, with the network the component registry needs. A new
-worktree of the tag, or of your branch with the change committed:
+The workflow's steps as docker commands, for testing a change to them or releasing without
+CI. Build in a clean worktree of the tag (or your committed branch), never in the checkout
+holding your keys, data directory or site files: the firmware container mounts the whole
+checkout, with network.
 
 ```sh
 git worktree add ../espdns-release v0.0.2
@@ -175,25 +199,27 @@ Then, from its top (`../espdns-release`), into `build/release/` (not in git):
 ```sh
 IDF=espressif/idf:v5.5.5@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
 
-# Every chip image, generic, exported (build/release/images/<image>/); a compiler warning,
-# a changed component lock, or an address or site defaults built in fails it
+# Every chip image, generic and key-neutral, exported (build/release/images/<image>/); a
+# compiler warning, a changed component lock, or an address, site defaults or keys built
+# in fails it
 docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src "$IDF" \
   sh scripts/release/build-firmware.sh build/release/images
 
 # The controller's image (as in step 3 above), then the release's files and SHA256SUMS
 docker build -t espdns-controller:build \
-  --build-context boards=boards --build-context version=. --build-context keys=firmware/keys controller
+  --build-context boards=boards --build-context version=. --build-context keys=keys controller
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/build/release:/release" --network none \
   --entrypoint /espdns espdns-controller:build release build -version "$(cat VERSION)" \
   -images /release/images -catalog /catalog -out /release/dist
 ```
 
-`release build` refuses a chip image of another version or with an address built in, a
-catalog board whose chip image is missing, and an output directory with anything in it.
-CI adds `-include` with the controller image's reference after pushing it.
+`release build` refuses a chip image of another version, with an address built in, or not
+key-neutral (no `espdns:keys=partition-v1` marker, or a keys seed built in); a catalog board
+with no chip image; and a non-empty output directory. CI adds `-include` with the
+controller image's reference after pushing it.
 
-To try signing and checking without the release key, with a throwaway key made for the
-purpose (the firmware's own tool; never a real key, and never one the nodes trust):
+To try signing and checking, use a throwaway key from the firmware's own tool (never a real
+key, never one the nodes trust):
 
 ```sh
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/build/release:/out" -v "$PWD/firmware/tools:/tools:ro" \
@@ -205,9 +231,22 @@ docker run --rm -v "$PWD/build/release:/release:ro" --network none \
   --entrypoint /espdns espdns-controller:build release verify -dir /release/dist -pub /release/throwaway.pub
 ```
 
+And import it into a throwaway data directory (`-pub` stands in for the project's key;
+nothing reaches a node):
+
+```sh
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/build/release:/out" --network none "$IDF" mkdir -m 700 /out/data
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/build/release:/release" --network none \
+  --entrypoint /espdns espdns-controller:build \
+  release import -dir /release/dist -pub /release/throwaway.pub -data /release/data
+```
+
 The scripts the workflow runs are in [`scripts/release/`](../scripts/release/):
-`check-version.sh` (the tag against `VERSION` and `CHANGELOG.md`), `changelog.sh` (a
-version's changelog), `notes.sh` (the draft's notes: the changelog and how to check the
-files) and `build-firmware.sh` (above). The workflow makes the draft with GitHub's `gh`.
-The release's files are `controller/internal/dist`; its tests and the scripts' run with the
+
+- `check-version.sh`: the tag against `VERSION` and `CHANGELOG.md`;
+- `changelog.sh`: a version's changelog;
+- `notes.sh`: the draft's notes (the changelog and how to check the files);
+- `build-firmware.sh`: above.
+
+The release code is `controller/internal/dist`; its tests and the scripts' run with the
 controller's (`controller/releasescripts_test.go`).

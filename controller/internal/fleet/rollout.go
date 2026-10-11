@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skitzo2000/espdns/controller/internal/boards"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
@@ -18,6 +19,12 @@ type Firmware struct {
 	Board string // for a node on firmware from before board definitions: the board it was built for
 	App   []byte
 	Desc  release.AppDesc
+	// Check, if set, checks App before any node is touched and again right before each push
+	// signs it: an imported release's provenance (dist.CheckProvenance). nil for your own
+	// builds (firmware/builds/, a chip image with no provenance, name=app.bin).
+	Check func(app []byte) error
+	// Origin says where it came from, for the log ("project release v0.0.3", "your build").
+	Origin string
 }
 
 // Change is what a rolling push sends to each node.
@@ -29,6 +36,10 @@ type Change struct {
 	Payload func(ctx context.Context, host string, st release.NodeStatus) ([]byte, error)
 	// Firmware is the app per chip image (by board name for a node from before chip images).
 	Firmware []Firmware
+	// BoardImage, if set, is the chip image the catalog gives a board ("" if unknown): a
+	// node whose board now runs its image's sibling (boards.Siblings) is moved to it, when
+	// Firmware has it.
+	BoardImage func(board string) string
 	// Reinstall pushes firmware to a node that already runs the build.
 	Reinstall bool
 	// Note, if set, says what else the change does on the node at host, whose /status is
@@ -65,14 +76,29 @@ func serviceFor(kind release.Kind) string {
 	return ""
 }
 
-// firmwareFor is the app for the node, by its chip image (or, before chip images, board).
+// firmwareFor is the app for the node, by its chip image (or, before chip images, board);
+// its board's image instead when that is the sibling of the one it runs and is given.
 func (ch Change) firmwareFor(st release.NodeStatus) (Firmware, bool) {
+	if img := ch.boardImage(st.Board); st.Image != "" && img != st.Image && boards.Swappable(st.Image, img) {
+		for _, f := range ch.Firmware {
+			if f.Image == img {
+				return f, true
+			}
+		}
+	}
 	for _, f := range ch.Firmware {
 		if st.Image != "" && f.Image == st.Image || st.Image == "" && f.Board != "" && f.Board == st.Board {
 			return f, true
 		}
 	}
 	return Firmware{}, false
+}
+
+func (ch Change) boardImage(board string) string {
+	if ch.BoardImage == nil || board == "" {
+		return ""
+	}
+	return ch.BoardImage(board)
 }
 
 // Plan says which nodes a rolling push changes, in what order, and how carefully.
@@ -197,6 +223,14 @@ func (ch Change) Prepare(ctx context.Context, h string, st release.NodeStatus) (
 		if !ok {
 			return nil, "", fmt.Errorf("%s runs chip image %q (board %s): no firmware given for it", h, st.Image, st.Board)
 		}
+		if err := release.FirmwareKeysCheck(h, st, fw.App); err != nil {
+			return nil, "", err
+		}
+		if fw.Check != nil {
+			if err := fw.Check(fw.App); err != nil {
+				return nil, "", err
+			}
+		}
 		return nil, "", FirmwareAddressCheck(h, st, fw.App)
 	}
 	// A node with the service off refuses its releases: say so before any node is
@@ -236,27 +270,27 @@ func FirmwareAddressCheck(h string, st release.NodeStatus, app []byte) error {
 	if !known || st.Config == nil {
 		return nil
 	}
-	has := "none"
+	has := "no address"
 	if built != "" {
-		has = built
+		has = "a different address (" + built + ")"
 	}
 	ip := st.Config.IP
 	if p, err := netip.ParsePrefix(ip); err == nil {
 		ip = p.Addr().String()
 	}
+	const fix = "Install the node again with Install over USB on the Nodes page, which writes its address into the board."
 	switch {
 	case st.Config.AddressFrom == "firmware" && built != ip:
-		return fmt.Errorf("%s: its address (%s) is the one built into the firmware it runs, and this image has %s built in: "+
-			"it would come up without it. Build the image with the node's address (STATIC_IP_%s in firmware/local.mk, "+
-			"make fleet-firmware)", h, ip, has, st.Board)
+		return fmt.Errorf("%s takes its address (%s) from the firmware it runs, and this firmware image has %s for it: "+
+			"the node would come up without its address. %s", h, ip, has, fix)
 	case st.Config.AddressFrom == "config" && st.BoardSource != "partition" && built == "":
-		return fmt.Errorf("%s has no board partition, so if its config is ever refused it falls back on the address built "+
-			"into its firmware, and this image has none: it would be left with no address. Build the image with the "+
-			"node's address (STATIC_IP_%s in firmware/local.mk, make fleet-firmware)", h, st.Board)
+		return fmt.Errorf("%s has no address stored on the board, so if its settings are ever refused it falls back on "+
+			"the address in its firmware, and this firmware image has no address for it: the node would be left with "+
+			"no address. %s", h, fix)
 	case st.Config.AddressFrom == "config" && st.BoardSource != "partition" && built != ip && documentation(built):
-		return fmt.Errorf("%s has no board partition, so if its config is ever refused it falls back on the address built "+
-			"into its firmware, and this image has %s, a documentation address (CI's, or an example's): build the image "+
-			"with the node's address (STATIC_IP_%s in firmware/local.mk, make fleet-firmware)", h, built, st.Board)
+		return fmt.Errorf("%s has no address stored on the board, so if its settings are ever refused it falls back on "+
+			"the address in its firmware, and this firmware image has %s, an example address, not the node's. %s",
+			h, built, fix)
 	}
 	return nil
 }
@@ -473,7 +507,7 @@ func (c *Client) apply(ctx context.Context, p Plan, ch Change, host string, payl
 			fw.Desc.ElfSHA256, before.Version, before.ElfSHA256)
 		out.pushed = true
 		pushed, err = c.Pusher.PushFirmware(ctx, host, fw.App, release.FirmwareOptions{Image: fw.Image,
-			Board: fw.Board, Later: before.Reboot != nil})
+			Board: fw.Board, Later: before.Reboot != nil, Check: fw.Check})
 	} else {
 		out.pushed = true
 		pushed, err = c.Pusher.PushRelease(ctx, host, ch.Kind, payload)

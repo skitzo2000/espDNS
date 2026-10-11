@@ -28,8 +28,11 @@ bool board_load(void);
 const char *board_source(void);
 /* Why the `board` partition wasn't used, or "" if it was. */
 const char *board_error(void);
-/* The chip image this firmware is (ESPDNS_IMAGE), and the fallback board's name or "". */
+/* The chip image this firmware is (ESPDNS_IMAGE); its sibling image, or "" (the same chip
+ * and flash layout, built differently: firmware/CMakeLists.txt); and the fallback board's
+ * name, or "". */
 const char *board_image(void);
+const char *board_image_sibling(void);
 const char *board_fallback_name(void);
 
 /* Installs the board's Ethernet driver (not started, no interface attached). False if the

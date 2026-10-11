@@ -26,6 +26,15 @@ if(NOT IMAGE OR NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/images/${IMAGE}/sdkconfig.
     message(FATAL_ERROR "set IMAGE to one of images/<image> (got '${IMAGE}')")
 endif()
 
+# Sibling images: the same chip, PSRAM and flash layout, built differently (esp32s3-eth is
+# esp32s3-octal with speed bought with internal RAM, for wired boards). A node moves between
+# them over the air and keeps what it has: its board partition and its stored signed
+# releases name the image it ran when they were written, and the sibling takes them as its
+# own (board.c, release.c). The controller has the same pairs (internal/boards, Siblings).
+set(sibling_esp32s3-octal esp32s3-eth)
+set(sibling_esp32s3-eth esp32s3-octal)
+set(IMAGE_SIBLING "${sibling_${IMAGE}}")
+
 set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;images/${IMAGE}/sdkconfig.defaults")
 # For experiments: one more defaults file on top, e.g. -DEXTRA_SDKCONFIG=build/wpa2-only.defaults
 if(EXTRA_SDKCONFIG)
@@ -42,6 +51,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(ESPDNS_IMAGE "${IMAGE}")
+idf_build_set_property(ESPDNS_IMAGE_SIBLING "${IMAGE_SIBLING}")
 idf_build_set_property(ESPDNS_FALLBACK "${BOARD}")
 idf_build_set_property(ESPDNS_FALLBACK_JSON "${fallback_json}")
 # The component lock, committed so every checkout builds the same components: one per chip

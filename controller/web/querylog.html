@@ -4,36 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>espDNS query log</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="img/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="querylog.css">
 </head>
 <body>
 <main>
-  <h1>Traffic</h1>
-  <nav class="tabs" aria-label="Traffic"><a href="traffic.html">Charts</a><a href="querylog.html" aria-current="page">Query log</a></nav>
-  <p class="lead">The fleet's recent queries, newest first, as each node logs them.</p>
-  <form class="card qlbar" id="filters" autocomplete="off">
-    <label>Node <select id="f-node"><option value="">every node</option></select></label>
-    <label>Client <input id="f-client" spellcheck="false" placeholder="192.0.2."></label>
-    <label>Name <input id="f-name" spellcheck="false" placeholder="example.com"></label>
-    <label>Result <select id="f-result">
-      <option value="">any</option>
-      <option>cache</option><option>forwarded</option><option>hosted</option><option>secondary</option>
-      <option>blocked</option><option>overridden</option><option>refused</option><option>servfail</option>
-      <option>error</option><option>notify</option>
-    </select></label>
-    <label>Type <input id="f-qtype" spellcheck="false" placeholder="A, AAAA…" class="short"></label>
-    <div class="qlacts">
-      <button class="btn small" type="button" id="pause">Pause</button>
-      <button class="btn small" type="reset" id="clear">Clear filters</button>
+  <div class="head">
+    <div class="lead">
+      <h1>Query log</h1>
+      <p class="muted">What your devices asked, newest first, from every node.</p>
     </div>
-  </form>
-  <div id="qlnodes" class="qlnodes"></div>
-  <p class="sub" id="qlstate"></p>
-  <div class="card scroll"><table class="qlog">
-    <thead><tr><th>Time</th><th>Node</th><th>Client</th><th>Name</th><th>Type</th><th>Result</th><th class="num">Took</th></tr></thead>
-    <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
-  </table></div>
+  </div>
+  <section class="qlsec">
+    <form class="row qlbar" id="filters" autocomplete="off" role="search">
+      <input class="t" id="qlq" type="search" spellcheck="false" placeholder="Filter by site or device" aria-label="Filter by site or device">
+      <div class="row" role="group" aria-label="Show" id="show">
+        <button class="btn small" type="button" data-show="all">Everything</button>
+        <button class="btn small" type="button" data-show="blocked">Blocked</button>
+        <button class="btn small" type="button" data-show="failed">Failed</button>
+      </div>
+      <select class="t qlnode" id="qlnode" aria-label="Node" hidden><option value="">Every node</option></select>
+      <span class="chips" id="qlchips"></span>
+      <span class="live"><span class="hint" id="qllive">Reading…</span> <button class="btn link small" type="button" id="pause">Pause</button></span>
+    </form>
+    <p class="hint qlkeep" id="qlkeep"></p>
+    <div class="qlwarn" id="qlwarn"></div>
+    <div class="panel rows ql" id="qlrows">
+      <div class="r headr"><div>Time</div><div>Device</div><div>Site</div><div class="hide-n">Type</div><div>Answer</div><div class="hide-n took">Took</div></div>
+    </div>
+    <p class="hint" id="qlmore"></p>
+  </section>
+  <section id="most" hidden>
+    <h2>Most asked</h2>
+    <div class="grid2">
+      <div class="panel pad stack" id="topsites"><h3>Sites</h3></div>
+      <div class="panel pad stack" id="topdevices"><h3>Devices</h3></div>
+    </div>
+  </section>
+  <section id="hour" hidden>
+    <div class="sec-head"><h2>Last hour</h2><span class="hint" id="hourwhat"></span></div>
+    <div class="minis" id="minis"></div>
+  </section>
 </main>
 <script type="module" src="querylog.js"></script>
 </body>

@@ -1,5 +1,5 @@
 // The login (login.html): the form, the countdown after too many failures, and where to go after.
-import { session, loggedIn, deviceToken } from "./common.js";
+import { session, loggedIn, deviceToken, getJSON } from "./common.js";
 
 // Where to go after: a page of this controller only. Resolved as the browser will (it
 // drops tabs and newlines, so "/\t/elsewhere" is "//elsewhere"), then its origin checked.
@@ -15,7 +15,12 @@ const $ = id => document.getElementById(id);
 
 const s = await session;
 if (s.logged_in) location.replace(next);
-if (!s.password_set) $("nopass").hidden = false;
+if (!s.password_set) {
+  // A first run (no password, no settings.json) is set up in the browser (setup.html).
+  const setup = await getJSON("api/setup").catch(() => ({}));
+  if (setup.first_run) location.replace("setup.html");
+  else $("nopass").hidden = false;
+}
 else {
   $("form").hidden = false;
   if (s.error) { $("broken").hidden = false; $("broken").textContent = `The login can't be used: ${s.error}`; }
@@ -45,7 +50,7 @@ function countdown(secs) {
 
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
-  $("msg").className = "status";
+  $("msg").className = "status hint";
   $("msg").textContent = "Checking…";
   $("submit").disabled = true;
   try {
@@ -55,12 +60,12 @@ $("form").addEventListener("submit", async e => {
       body: JSON.stringify({ user: $("user").value, password: $("password").value }) });
     const j = await r.json().catch(() => ({}));
     if (r.ok) { loggedIn(j); location.replace(next); return; }
-    $("msg").className = "status bad";
+    $("msg").className = "status hint bad";
     if (r.status === 429) { countdown(Number(r.headers.get("Retry-After")) || 1); return; }
     $("msg").textContent = j.error || r.statusText;
     $("password").select();
   } catch (err) {
-    $("msg").className = "status bad";
+    $("msg").className = "status hint bad";
     $("msg").textContent = `Can't reach the controller: ${err.message}`;
   }
   $("submit").disabled = false;

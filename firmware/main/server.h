@@ -12,6 +12,7 @@
 #include "cache.h"
 #include "dns_wire.h"
 #include "health.h"
+#include "load.h"
 #include "svc.h"
 #include "upq.h"
 
@@ -40,6 +41,11 @@ void server_upstream_reset(void);
 /* The forward loop's counts for /metrics (upq.h); false before the DNS service is up. */
 bool server_forward_stats(upq_stats_t *s);
 void server_get_stats(server_stats_t *s);
+/* The UDP queries received, dropped and shed for their deadline (load.h): the last
+ * LOAD_WINDOW_MS for health (all 0 before the DNS service is up), and the queue's full time and
+ * the deadline sheds since boot for /metrics (false before). Any task may call them. */
+void server_load(load_window_t *w);
+bool server_load_totals(uint64_t *full_ms, uint32_t *expired);
 /* The cache's counters, for /metrics; false if it has none (no memory). max_entries and bytes:
  * its size from the memory plan (memory.cache_entries, cache_kb). */
 bool server_cache_stats(cache_stats_t *s, uint32_t *max_entries, uint32_t *bytes);

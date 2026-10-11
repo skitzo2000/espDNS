@@ -1,0 +1,32 @@
+/* The account panel (account.js), loaded when it first opens, on top of shell.css: its rows
+   stacked as one block, the backup's options, the restore, and the
+   "your password again" dialog (common.js askPassword), which the shell pages don't style
+   otherwise. */
+.acct details.ex + details.ex { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0 }
+.acct details.ex:has(+ details.ex) { border-bottom-left-radius: 0; border-bottom-right-radius: 0 }
+.acct .rows-ex { display: grid }
+.acct p { margin: 0 }
+.acct form.stack > .row { margin-top: 2px }
+.acct .hint.ok { color: var(--fg) }
+.acct .restore { border-top: 1px solid var(--line); padding-top: 14px; gap: 8px }
+.acct .changes-list .change { align-items: baseline; flex-wrap: wrap }
+.acct .changes-list .change > .hint { white-space: nowrap }
+.acct details.sub-ex > summary { cursor: pointer; color: var(--muted) }
+.acct details.sub-ex[open] > summary { margin-bottom: 10px }
+.acct #bp-parts .change { align-items: baseline; flex-wrap: wrap }
+
+/* askPassword's dialog on a shell page */
+dialog.confirm { border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--fg); padding: 0; width: min(420px, calc(100% - 32px));
+  box-shadow: 0 18px 48px rgba(6,20,38,.35), inset 0 3px 0 var(--sky), inset 0 6px 0 var(--orange) }
+dialog.confirm::backdrop { background: rgba(6,20,38,.42) }
+dialog.confirm form { display: grid; gap: 12px; padding: 22px 22px 18px }
+dialog.confirm h2 { margin: 0; font-size: 17px }
+dialog.confirm p { margin: 0 }
+dialog.confirm label { display: grid; gap: 5px; font-size: 13.5px; font-weight: 500 }
+dialog.confirm input { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface) }
+dialog.confirm .sub { font-size: 13px; color: var(--muted); min-height: 1em }
+dialog.confirm .sub.bad { color: var(--warn) }
+dialog.confirm .row { justify-content: flex-end }
+.acct pre.cmd { margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere }
+.acct #rot fieldset { border: 0; padding: 0; margin: 0 }
+.acct #rot-nodes .change { align-items: baseline; flex-wrap: wrap }

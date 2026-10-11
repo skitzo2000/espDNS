@@ -36,7 +36,7 @@ func testServer(t *testing.T, password bool, opts ...func(*server)) (http.Handle
 		client: func() *fleet.Client { return &fleet.Client{} }}, secret: newSecret(), nodes: s.nodes,
 		job: func(string) (jobs.Job, bool) { return jobs.Job{}, false }}
 	s.adopt = adoptKind{actions: s.push.actions, secret: newSecret(), nodes: s.nodes, used: &usedRuns{},
-		token: keys.TokenFileSource{Path: keys.TokenPath(dir)}, job: func(string) (jobs.Job, bool) { return jobs.Job{}, false }}
+		job: func(string) (jobs.Job, bool) { return jobs.Job{}, false }}
 	for _, o := range opts {
 		o(s)
 	}
@@ -183,6 +183,17 @@ func TestEveryRouteNeedsLogin(t *testing.T) {
 		!strings.Contains(w.Header().Get("Content-Type"), "javascript") {
 		t.Errorf("the vendored esp-web-tools logged out: %d %q", w.Code, w.Header().Get("Content-Type"))
 	}
+	// The icons and the mascot (web/img/), which the login page shows too: open, as images.
+	imgs, _ := fs.ReadDir(web.Files, "img")
+	if len(imgs) < 4 {
+		t.Errorf("web/img: %d files", len(imgs))
+	}
+	for _, f := range imgs {
+		w := serve(h, request("GET /img/"+f.Name()))
+		if ct := w.Header().Get("Content-Type"); w.Code != http.StatusOK || !strings.HasPrefix(ct, "image/") {
+			t.Errorf("img/%s logged out: %d %q", f.Name(), w.Code, ct)
+		}
+	}
 
 	// LocalOnly is still in front: another Host, or another site's Origin, is refused even
 	// with a session.
@@ -204,7 +215,7 @@ func TestEveryRouteNeedsLogin(t *testing.T) {
 // configs' (they can hold a Wi-Fi password), the hosted zones', the zone inventory and its
 // lookup (which queries the primaries), the list definitions' and
 // source files' (a feed's URL can hold its key), the Push page's, the Adopt page's, the
-// zone primary's lists (read with the token) and its certificate, the Backup page's, the query log's (who asked
+// the Backup page's, the query log's (who asked
 // for what), the pending changes' (a config change holds the Wi-Fi password), a node's
 // settings (from its config) and Add node's found nodes (as the Adopt page's), every change
 // refused, saying how to set one.
@@ -264,7 +275,7 @@ func TestOddPathsNeedLogin(t *testing.T) {
 		"/api/jobs/x.js", "/build/x.js", "/build/x/image.bin", "/build/x/manifest.json", "/x.js/../api/nodes",
 		"/..%2fapi%2fnodes.js", "/index.html.js", "/./index.html", "/index.html/", "/login.html/../index.html",
 		"/api/jobs/x/events", "/api/key", "/api/actions", "/.%2fapi/actions.css", "/api/../api/key.js", "//api/key.js",
-		"/a/..//api/key.js", "/jobs.html", "/%61pi/key.js", "/api/key%00.js", "/api/key;.js", "/API/key", "/api/KEY"}
+		"/a/..//api/key.js", "/zones.html", "/%61pi/key.js", "/api/key%00.js", "/api/key;.js", "/API/key", "/api/KEY"}
 	for _, m := range []string{"GET", "HEAD", "OPTIONS", "POST", "PUT", "DELETE", "PATCH"} {
 		for _, p := range paths {
 			r := httptest.NewRequest(m, "http://127.0.0.1:8480"+p, strings.NewReader("{}"))

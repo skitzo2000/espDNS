@@ -417,6 +417,9 @@ static void test_metrics_text(void)
     us.table.held[FLIGHT_GROUP_ZONE(0)] = 1;
     us.table.held[FLIGHT_GROUP_ZONE(1)] = 2;
     mx_forward(&w, &us, fzone, NULL);
+    /* The UDP receive queue under load: its full time and the queries shed for their
+     * deadline. */
+    mx_load(&w, 12345, 7);
     mx_end(&w);
     CHECK(s_biggest <= sizeof(buf));
     /* The shared vector: the controller's parser reads the same text (internal/fleet). */
@@ -460,6 +463,8 @@ static void test_metrics_text(void)
     CHECK(strstr(s_out, "espdns_fwd_expired_total{group=\"default\"} 2\nespdns_fwd_expired_total{group=\"zones\"} 0\n"));
     CHECK(strstr(s_out, "# TYPE espdns_fwd_tcp_retries_total counter\nespdns_fwd_tcp_retries_total 6\n"));
     CHECK(strstr(s_out, "espdns_fwd_select_errors_total 1\n"));
+    CHECK(strstr(s_out, "# TYPE espdns_udp_queue_full_seconds_total counter\nespdns_udp_queue_full_seconds_total 12.345000\n"));
+    CHECK(strstr(s_out, "# TYPE espdns_udp_queue_expired_total counter\nespdns_udp_queue_expired_total 7\n"));
     CHECK(s_out[s_out_n - 1] == '\n');
 
     /* Many lines through a small buffer: handed on in pieces, nothing lost, none over. */

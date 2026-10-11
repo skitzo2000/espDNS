@@ -4,85 +4,56 @@
 // row per node (its LED, state and reason, its address to copy, its load, and its MAC to copy
 // while it is on DHCP), the nodes found on the network and not added yet (with their MACs to
 // copy, for a DHCP reservation or a static address), and the last hour's charts. A node
-// opens its details (nodes.html, until the node page is built). Read from /api/nodes and
-// /api/nodes/found every 5 s, /api/dashboard every 10 s, /api/updates every 30 s.
-import { shell, h, arr, obj, str, hostOnly, led, addr, mac, copyText, toast, panel, refreshChanges, onChanges,
-  getJSON, post, session, nodeText, answering } from "./shell.js";
-import { onNodes, every } from "./common.js";
-import { addNode } from "./addnode.js";
+// opens its page (node.html, node.js); a found node its setup panel (addnode.js: what it
+// needs next, a click away). A later build of the version a node runs is said so in its row,
+// with no banner (internal/updates, Rebuild). A node's keys are said in its row when they
+// aren't the controller's: "Needs keys" (setup mode), "Old keys (rotation pending)" (not the
+// release key the controller signs with, or not the new keys of a rotation under way). Read
+// from /api/nodes and /api/nodes/found every 5 s, /api/dashboard every 10 s, /api/updates and
+// /api/key every 30 s.
+import { shell, h, arr, obj, str, hostOnly, led, addr, mac, copyText, toast, refreshChanges, onChanges,
+  getJSON, session, nodeText, answering, inService } from "./shell.js";
+import { onNodes, every, releaseKey } from "./common.js";
+import { addNode, blocker, usbButton } from "./addnode.js";
+import { stateOf, upFor, linkWord, readBoards, mini, fmtNum, pct, andList } from "./nodeview.js";
+import { openUpdate as updatePanel } from "./update.js";
+import { setupCheck } from "./setupcheck.js";
 
 shell("index.html");
+setupCheck(document.getElementById("update"));
 
 const $ = id => document.getElementById(id);
-const data = { nodes: null, found: [], updates: null, dash: null, boards: new Map(), sess: {} };
+const data = { nodes: null, found: [], updates: null, dash: null, boards: new Map(), sess: {}, key: null };
 
 // ---- a node in words --------------------------------------------------------------------
 
 // boardName is a board's title from the catalog (/api/boards), else its name.
 const boardName = b => data.boards.get(str(b)) || str(b);
-const linkWord = k => (k === "ethernet" ? "Wired" : k === "wifi" ? "Wi-Fi" : "");
 const nodeKey = n => n.id || n.addr;
-const sentenceCase = s => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-function upFor(sec) {
-  if (typeof sec !== "number" || sec < 0) return "";
-  const d = Math.floor(sec / 86400), hh = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
-  return d ? `${d} d ${hh} h` : hh ? `${hh} h ${m} m` : `${m} m`;
-}
-function sinceWords(t) {
-  const s = Math.max(0, Math.round((Date.now() - new Date(t)) / 1000));
-  return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 129600 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
-}
-
-// Reasons that don't make a node abnormal (docs/troubleshooting.md, Health reasons).
-const INFO = ["config on trial", "reboot pending", "service restarting"];
-
-// stateOf is a node's state as its LED shows it: the LED pattern, a word, why, and the row's
-// tint ("" normal, warn, bad).
-function stateOf(n) {
-  const s = obj(n.status), hh = obj(s.health);
-  if (!n.online) {
-    const why = n.status ? `No reply for ${sinceWords(n.last_seen)}` : "No reply since the controller started";
-    return { led: "fault", word: "Not answering", why, tint: "bad" };
-  }
-  const reasons = arr(hh.reasons).filter(r => typeof r === "string");
-  const words = rs => rs.map(sentenceCase).join(", ");
-  const st = hh.state;
-  if (st === undefined || st === null || st === "") {
-    // Firmware from before health states: its degraded flag.
-    return s.degraded ? { led: "unknown", word: "Degraded", why: "Old firmware: update it", tint: "warn" }
-      : { led: "unknown", word: "Answering", why: "Old firmware: update it", tint: "" };
-  }
-  switch (st) {
-    case "healthy": return { led: "healthy", word: "Healthy", why: words(reasons.filter(r => INFO.includes(r))), tint: "" };
-    case "degraded": return { led: "degraded", word: "Degraded", why: words(reasons) || "Something it runs failed", tint: "warn" };
-    case "no network": return { led: "nonet", word: "No network", why: words(reasons), tint: "bad" };
-    case "fault": return { led: "fault", word: "Fault", why: words(reasons), tint: "bad" };
-    case "updating": return { led: "updating", word: "Updating", why: "Receiving new firmware", tint: "" };
-    case "booting": return { led: "booting", word: "Starting", why: "", tint: "" };
-    default: return { led: "unknown", word: typeof st === "string" ? sentenceCase(st) : "Unknown state", why: words(reasons), tint: "bad" };
-  }
-}
-
-// updateOf is a node's firmware update in versions (/api/updates), or "".
+// updateOf is a node's firmware update in versions (/api/updates), or "": a later build of
+// the version it runs said as that (its why), never "0.0.1 → 0.0.1".
+const updateFor = n => arr(obj(data.updates).nodes).find(x => x.host === n.addr);
 function updateOf(n) {
-  const u = arr(obj(data.updates).nodes).find(x => x.host === n.addr);
+  const u = updateFor(n);
   if (!u) return "";
   const from = str(obj(u.runs).version), to = str(obj(u.newest).version);
-  if (u.pending) return `Update waiting to apply: ${from} → ${to}`;
-  if (u.state === "available") return `Update available: ${from} → ${to}`;
+  if (u.pending) return u.rebuild ? `A newer build of ${to} waiting to apply` : `Update waiting to apply: ${from} → ${to}`;
+  if (u.state === "available") return u.rebuild ? str(u.why) : `Update available: ${from} → ${to}`;
   return "";
 }
 
 const listed = () => arr(data.nodes).filter(n => n.source === "settings");
+// serving are the nodes in service: a node out of service is shown, muted, but isn't counted
+// as up or down, nor given to the router.
+const serving = () => arr(data.nodes).filter(inService);
 const names = ns => ns.map(n => nodeText(n));
 const both = ns => (ns.length === 2 ? "both nodes" : `all ${ns.length} nodes`);
-const andList = xs => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 // ---- the head: the sentence, Copy DNS servers, + Add node --------------------------------
 
 function renderHead() {
-  const ns = listed();
+  const ns = serving();
   const sentence = $("sentence"), sub = $("sentence-sub");
   const copy = $("copy-dns");
   const ips = ns.map(n => hostOnly(n.addr));
@@ -91,7 +62,10 @@ function renderHead() {
   if (data.nodes === null) return;
   const up = ns.filter(answering);
   const attention = ns.map(n => [n, stateOf(n)]).filter(([, s]) => s.tint);
-  if (!ns.length) {
+  if (!ns.length && listed().length) {
+    sentence.textContent = "No node in service";
+    sub.textContent = "Every node is out of service: return one to service from its page.";
+  } else if (!ns.length) {
     sentence.textContent = "No node yet";
     sub.textContent = "Add a node to start answering DNS on your network.";
   } else if (!up.length) {
@@ -111,7 +85,7 @@ function renderHead() {
 }
 
 $("copy-dns").addEventListener("click", async () => {
-  const ips = listed().map(n => hostOnly(n.addr));
+  const ips = serving().map(n => hostOnly(n.addr));
   if (!ips.length) return;
   const t = ips.join(", ");
   toast(await copyText(t) ? `Copied ${t}: give ${ips.length === 2 ? "both" : ips.length === 1 ? "it" : "them all"} to your router as its DNS servers`
@@ -123,6 +97,8 @@ const adder = addNode($("add-node"), {
   nodes: () => listed(),
   boardName,
   nodeKey,
+  // What a USB install of a chip image gives: its exported image's version.
+  imageVersion: image => str(obj(obj(data.updates).builds && arr(data.updates.builds).find(b => b.source === `images/${image}` && !b.error)).version),
   done: () => { readFound(); refreshChanges(); },
 });
 
@@ -131,11 +107,12 @@ const adder = addNode($("add-node"), {
 function renderUpdate() {
   const box = $("update");
   const rep = obj(data.updates);
-  const offered = arr(rep.nodes).filter(u => u.state === "available" && u.listed && !u.pending);
+  // A new version only: a later build of the one a node runs is said in its row.
+  const offered = arr(rep.nodes).filter(u => u.state === "available" && u.listed && !u.out_of_service && !u.pending && !u.rebuild);
   if (!offered.length) { box.hidden = true; box.replaceChildren(); return; }
-  const others = listed().filter(n => !offered.some(u => u.host === n.addr));
+  const others = serving().filter(n => !offered.some(u => u.host === n.addr));
   const nm = u => nodeText(u.host);
-  const b = h("button", { class: "btn primary", type: "button", onclick: openUpdate }, offered.length === 1 ? `Update ${nm(offered[0])}` : "Update all");
+  const b = h("button", { class: "btn primary", type: "button", onclick: () => openUpdate() }, offered.length === 1 ? `Update ${nm(offered[0])}` : "Update all");
   let line;
   if (offered.length === 1) {
     const u = offered[0];
@@ -150,69 +127,18 @@ function renderUpdate() {
   box.hidden = false;
 }
 
-// The Update panel: which nodes, from which version to which; adds the updates to the
-// changes to apply (POST /api/updates).
-function openUpdate() {
-  const rep = obj(data.updates);
-  const p = panel("Update firmware");
-  const picks = new Map();
-  const rows = arr(rep.nodes).filter(u => u.listed).map(u => {
-    const from = str(obj(u.runs).version), to = str(obj(u.newest).version);
-    let right, hint;
-    if (u.state === "available" && !u.pending) {
-      const cb = h("input", { type: "checkbox", checked: true, "aria-label": `Update ${nodeText(u.host)}` });
-      picks.set(u.host, cb);
-      right = cb;
-      hint = `${from} → ${to} · restarts for a few seconds`;
-    } else if (u.pending) {
-      right = h("span", { class: "hint" }, "Waiting to apply");
-      hint = str(u.pending_summary);
-    } else if (u.state === "current") {
-      right = h("span", { class: "hint" }, "Up to date");
-      hint = `Already on ${from}`;
-    } else {
-      right = h("span", { class: "hint" }, "–");
-      hint = str(u.why);
-    }
-    return h("div", { class: "change" }, h("div", {}, h("b", {}, nodeText(u.host)), h("div", { class: "hint" }, hint)), right);
-  });
-  const note = h("p", { class: "small" });
-  const msg = h("p", { class: "hint bad", role: "status" });
-  const go = h("button", { class: "btn primary", type: "button" }, "Add to changes");
-  const say = () => {
-    const chosen = [...picks].filter(([, cb]) => cb.checked).map(([host]) => host);
-    const rest = listed().filter(n => !chosen.includes(n.addr));
-    go.disabled = !chosen.length || !data.sess.logged_in;
-    note.textContent = !chosen.length ? "Choose a node to update."
-      : rest.length ? `${andList(names(rest))} keep${rest.length === 1 ? "s" : ""} answering while ${andList(chosen.map(x => nodeText(x)))} restart${chosen.length === 1 ? "s" : ""}.`
-        : "One node at a time restarts; the others keep answering.";
-  };
-  for (const cb of picks.values()) cb.addEventListener("change", say);
-  go.addEventListener("click", async () => {
-    const chosen = [...picks].filter(([, cb]) => cb.checked).map(([host]) => host);
-    const builds = {};
-    for (const host of chosen) builds[host] = str(obj(arr(rep.nodes).find(u => u.host === host).newest).build);
-    go.disabled = true;
-    msg.textContent = "";
-    try {
-      await post("api/updates", { nodes: chosen, builds });
-      p.close();
-      await Promise.all([refreshChanges(), readUpdates()]);
-      toast(`Added to changes to apply: update ${andList(chosen.map(x => nodeText(x)))}`);
-    } catch (e) { msg.textContent = e.message; go.disabled = false; }
-  });
-  p.body.append(h("div", { class: "stack" }, rows), note, msg);
-  p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Not now"), go);
-  say();
+// The Update panel (update.js): adds the updates to the changes to apply. only, a host, is
+// the node whose row opened it: only it is chosen; else the new versions are (a later build
+// of the one a node runs is not).
+function openUpdate(only) {
+  updatePanel({ updates: data.updates, listed: serving(), canWrite: !!data.sess.logged_in, only, done: readUpdates });
 }
 
 // ---- the facts and the rows -------------------------------------------------------------
 
-const fmtNum = v => (typeof v === "number" && isFinite(v) ? (v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString()) : "–");
-const pct = v => (typeof v === "number" && isFinite(v) ? `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}%` : "–");
 
 function renderFacts() {
-  const ns = listed();
+  const ns = serving();
   const f = obj(obj(data.dash).fleet), now = obj(f.now), hour = obj(f.hour);
   const failed = typeof hour.servfail === "number" ? hour.servfail + (hour.dropped || 0) : null;
   const fact = (b, t) => h("span", {}, h("b", {}, b), ` ${t}`);
@@ -229,33 +155,58 @@ function macLine(m) {
   return c ? h("div", { class: "sub" }, c) : null;
 }
 
+// keysOf is a node's keys in words when they aren't the controller's, or "": in setup mode
+// (no keys, or damaged ones), or trusting another release key than the one the controller
+// signs with (during a rotation: than the rotation's new keys).
+function keysOf(n) {
+  const s = obj(n.status), ks = arr(s.keys), src = str(s.keys_source);
+  if (src === "none" || src === "corrupt") return "Needs keys (setup mode)";
+  const k = obj(data.key), rot = obj(k.rotation);
+  if (!n.online || typeof ks[0] !== "string" || !ks[0]) return "";
+  if (rot.release) return ks[0] !== rot.release || (rot.recovery && ks[1] !== rot.recovery) ? "Old keys (rotation pending)" : "";
+  return k.present && str(k.fingerprint) && ks[0] !== k.fingerprint ? "Old keys (rotation pending)" : "";
+}
+
 function nodeRow(n) {
   const s = obj(n.status), net = obj(s.net);
   const st = stateOf(n);
-  const why = [st.why, !st.tint ? updateOf(n) : ""].filter(Boolean).join(" · ");
-  const href = `nodes.html#${encodeURIComponent(nodeKey(n))}`;
+  const keys = keysOf(n);
+  // Setup mode is said once: its health reason "no keys" is this.
+  const stWhy = keys.startsWith("Needs") ? st.why.split(", ").filter(w => w !== "No keys").join(", ") : st.why;
+  const why = [stWhy, keys, !st.tint && !st.out ? updateOf(n) : ""].filter(Boolean).join(" · ");
+  // A later build of its version: no banner, so its row offers it.
+  const u = updateFor(n);
+  const rebuild = !st.tint && !st.out && u && u.rebuild && u.state === "available" && u.listed && !u.pending
+    ? h("button", { class: "btn small link", type: "button", onclick: () => openUpdate(n.addr) }, "Update") : null;
+  const href = `node.html#${encodeURIComponent(nodeKey(n))}`;
   const up = n.online ? upFor(s.uptime_s) : "";
-  return h("div", { class: `r${st.tint ? ` r-${st.tint}` : ""}`, "data-href": href },
+  // Out of service: muted, its badge for its state.
+  const word = st.out ? h("span", { class: "out-badge" }, st.word) : h("span", { class: "stw" }, st.word);
+  return h("div", { class: `r${st.tint ? ` r-${st.tint}` : ""}${st.out ? " r-out" : ""}`, "data-href": href },
     h("div", {}, h("a", { class: "name", href }, nodeText(n)), h("div", { class: "sub" }, boardName(s.board) || "–")),
-    h("div", { class: "full-n" }, h("span", { class: "state" }, led(st.led), h("span", { class: "stw" }, st.word)), why ? h("div", { class: "sub" }, why) : null),
+    h("div", { class: "full-n" }, h("span", { class: "state" }, led(st.led), word), why ? h("div", { class: "sub" }, why, rebuild ? " " : null, rebuild) : null),
     h("div", { class: "full-n" }, addr(hostOnly(n.addr)), h("div", { class: "sub" }, [linkWord(net.kind), up && `up ${up}`].filter(Boolean).join(" · ")),
       obj(s.config).address === "dhcp" ? macLine(n.mac) : null),
     h("div", { class: "hide-n num" }, n.online && typeof n.qps === "number" ? n.qps.toFixed(1) : "–", " ", h("span", { class: "sub" }, "q/s")),
     h("span", { class: "chev", "aria-hidden": "true" }, "›"));
 }
 
-// A node found on the network (mDNS, or looked up) and not added: a light-blue row.
+// A node found on the network (mDNS, or looked up) and not added: a light-blue row. A click
+// on it opens its setup panel; its button does the next step itself.
 function foundRow(f) {
   const link = f.net === "ethernet" ? "Wired" : f.net === "wifi" ? "Wi-Fi" : "";
-  const refusal = arr(f.refusals)[0];
-  const sub = refusal ? `Can't be added yet: ${refusal}`
+  const sub = !f.next ? blocker(f)
     : `Found ${f.source === "lookup" ? "at its address" : "on your network"}${link ? ` over ${link}` : ""}${f.version ? `, firmware ${f.version}` : ""}`;
-  return h("div", { class: "r r-new" },
+  // The next step's button: Add in the narrow last column; Update over USB, wider, under why.
+  const act = f.next ? h("button", { class: "btn small primary", type: "button", onclick: () => adder.open(f) }, "Add")
+    : f.install === "usb" ? null : h("button", { class: "btn small", type: "button", onclick: () => adder.setup(f) }, "Set up");
+  const usb = f.install === "usb" ? h("div", { class: "actions" }, usbButton(f, "btn small primary", boardName(f.board) || str(f.hostname))) : null;
+  return h("div", { class: "r r-new", "data-found": "", onclick: e => { if (!e.target.closest("button, a, input, label")) adder.setup(f); } },
     h("div", {}, h("div", { class: "name" }, f.adopted && f.name ? str(f.name) : "New device found"),
       h("div", { class: "sub" }, [boardName(f.board), str(f.hostname)].filter(Boolean).join(" · "))),
-    h("div", { class: "full-n" }, h("span", { class: "state" }, led("unknown"), h("span", { class: "stw" }, "Not added yet")), h("div", { class: "sub" }, sub)),
+    h("div", { class: "full-n" }, h("span", { class: "state" }, led("unknown"), h("span", { class: "stw" }, "Not added yet")), h("div", { class: "sub" }, sub), usb),
     h("div", { class: "full-n" }, addr(hostOnly(f.host)), macLine(f.mac)),
-    h("div", { class: "hide-n" }, f.next ? h("button", { class: "btn small primary", type: "button", onclick: () => adder.open(f) }, "Add") : null),
+    h("div", { class: "hide-n" }, act),
     h("div", {}));
 }
 
@@ -265,7 +216,9 @@ function renderRows() {
   const ns = listed();
   const rows = [...ns.map(nodeRow), ...arr(data.found).map(foundRow)];
   if (data.nodes === null) rows.push(h("div", { class: "empty" }, h("p", {}, "Reading the nodes…")));
-  else if (!rows.length) rows.push(h("div", { class: "empty" }, h("p", {}, "No node yet. + Add node finds the ones on your network, or installs a new board over USB.")));
+  else if (!rows.length) rows.push(h("div", { class: "empty with-mascot" },
+    h("img", { class: "mascot", src: "img/artie.webp", width: 56, height: 96, alt: "", title: "Artie A. Record" }),
+    h("p", {}, "No node yet. + Add node finds the ones on your network, or installs a new board over USB.")));
   head.hidden = !ns.length && !arr(data.found).length;
   box.replaceChildren(head, ...rows);
 }
@@ -278,31 +231,11 @@ $("nodes").addEventListener("click", e => {
 
 // ---- the last hour ----------------------------------------------------------------------
 
-function spark(values) {
-  const vs = arr(values).map(v => (typeof v === "number" && isFinite(v) ? v : null));
-  const known = vs.filter(v => v !== null);
-  if (known.length < 2) return null;
-  const max = Math.max(...known) || 1, w = 200, hgt = 50;
-  const pts = vs.map((y, i) => (y === null ? null : `${(i / (vs.length - 1) * w).toFixed(1)},${(hgt - 4 - y / max * (hgt - 10)).toFixed(1)}`)).filter(Boolean).join(" ");
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  for (const [k, v] of Object.entries({ class: "spark", viewBox: `0 0 ${w} ${hgt}`, preserveAspectRatio: "none", "aria-hidden": "true" })) svg.setAttribute(k, v);
-  const first = pts.split(" ")[0].split(",")[0], last = pts.split(" ").at(-1).split(",")[0];
-  const poly = document.createElementNS(NS, "polygon");
-  poly.setAttribute("points", `${first},${hgt} ${pts} ${last},${hgt}`);
-  const line = document.createElementNS(NS, "polyline");
-  line.setAttribute("points", pts);
-  line.setAttribute("vector-effect", "non-scaling-stroke");
-  svg.append(poly, line);
-  return svg;
-}
-
 function renderHour() {
   const f = obj(obj(data.dash).fleet), hour = obj(f.hour);
   const sec = $("hour");
   if (!listed().length || !data.dash) { sec.hidden = true; return; }
   const ms = v => (typeof v === "number" ? `${Math.round(v)} ms typical` : "–");
-  const mini = (t, v, series, title) => h("div", { class: "panel mini", title }, h("span", { class: "small muted" }, t), h("span", { class: "v num" }, v), spark(series));
   $("minis").replaceChildren(
     mini("Queries a second", fmtNum(hour.qps), f.qps),
     mini("Answer time", ms(hour.p50_ms), f.p95_ms, "The line: the slowest answers (95th percentile) each minute"),
@@ -322,8 +255,27 @@ function render() {
 
 async function readFound() {
   if (!data.sess.logged_in) return;
-  try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); } catch { /* kept */ }
+  try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); data.foundRead = true; } catch { /* kept */ }
   render();
+  openFound();
+}
+
+// #found=<address or node ID> (a found node's page, or a search result) opens that found
+// node's setup panel once the found nodes are read.
+function openFound() {
+  const m = location.hash.match(/^#found=(.+)$/);
+  if (!m || !data.foundRead) return;
+  let k = "";
+  try { k = decodeURIComponent(m[1]).toLowerCase(); } catch { return; }
+  const f = arr(data.found).find(x => hostOnly(x.host) === k || str(x.host) === k || str(x.id).toLowerCase() === k);
+  history.replaceState(null, "", location.pathname + location.search);
+  if (f) adder.setup(f);
+  else toast("That node isn't found on the network now");
+}
+window.addEventListener("hashchange", openFound);
+async function readKey() {
+  data.key = await releaseKey();
+  renderRows();
 }
 async function readUpdates() {
   try { data.updates = await getJSON("api/updates"); } catch { data.updates = null; }
@@ -343,14 +295,12 @@ onChanges(c => {
   if (changesKey !== null && k !== changesKey) readUpdates();
   changesKey = k;
 });
-getJSON("api/boards").then(bs => {
-  for (const b of arr(bs)) { const bd = obj(b.board); if (bd.name) data.boards.set(bd.name, str(bd.title) || bd.name); }
-  render();
-}).catch(() => {});
+readBoards(data.boards).then(render);
 session.then(s => {
   data.sess = s;
   every(readFound);
   every(readUpdates, 30000);
   every(readDash, 10000);
+  every(readKey, 30000);
 });
 render();

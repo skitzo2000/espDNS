@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "load.h"
+
 void mx_init(mx_t *w, char *buf, size_t cap, mx_flush_fn flush, void *ctx)
 {
     *w = (mx_t){ .buf = buf, .cap = cap, .flush = flush, .ctx = ctx };
@@ -206,4 +208,17 @@ void mx_forward(mx_t *w, const upq_stats_t *s, bool (*zone)(void *ctx, int i, ch
     mx_family(w, "espdns_fwd_select_errors_total", "counter",
               "Times the forward loop's select() failed (it waits, longer each time in a row).");
     mx_u64(w, "espdns_fwd_select_errors_total", "", s->select_errors);
+}
+
+_Static_assert(LOAD_DEADLINE_MS == 1000, "espdns_udp_queue_expired_total's help names the deadline");
+
+void mx_load(mx_t *w, uint64_t full_ms, uint32_t expired)
+{
+    mx_family(w, "espdns_udp_queue_full_seconds_total", "counter",
+              "Time the queue for the UDP workers was full, from a query it had no place for until it "
+              "drained to half: what came meanwhile was dropped.");
+    mx_seconds(w, "espdns_udp_queue_full_seconds_total", "", full_ms * 1000);
+    mx_family(w, "espdns_udp_queue_expired_total", "counter",
+              "Queries shed unanswered: they waited in the queue past its deadline (1 s).");
+    mx_u64(w, "espdns_udp_queue_expired_total", "", expired);
 }

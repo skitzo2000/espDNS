@@ -103,6 +103,9 @@ func cmdBackup(args []string) error {
 	for _, sk := range s.Skipped {
 		log.Printf("skipped: %s", sk)
 	}
+	if err := backup.Done(*dataDir); err != nil { // the account panel's "Last backup"
+		log.Printf("the backup's time not kept in %s: %v", *dataDir, err)
+	}
 	return nil
 }
 

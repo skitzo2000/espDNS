@@ -53,7 +53,20 @@ const (
 type foundNode struct {
 	adoptNode
 	Next string `json:"next"`
+	// Install says how to move it on when its firmware is the reason nothing adds it:
+	// "usb", firmware from before node configs (before 0.0.1), which only a USB install
+	// moves on (an update over the network goes to the nodes in settings.json only); "keys",
+	// a node with no keys (setup mode, which takes nothing over the network), whose keys are
+	// written over USB (Write keys only, which keeps its firmware and settings).
+	Install string `json:"install,omitempty"`
 }
+
+// installUSB and installKeys are foundNode.Install for a node to install, or to write the
+// keys of, over USB.
+const (
+	installUSB  = "usb"
+	installKeys = "keys"
+)
 
 func (a addNodeServer) routes(mux *routes) {
 	mux.HandleFunc("GET /api/nodes/found", needLogin("adding a node needs", a.found))
@@ -64,6 +77,12 @@ func (a addNodeServer) routes(mux *routes) {
 func (a addNodeServer) view(n nodes.Node, all []nodes.Node, s settings.Settings, files []configs.File) foundNode {
 	an := a.adopt.describe(n, all, s, files)
 	f := foundNode{adoptNode: an}
+	switch {
+	case an.Read && !an.Listed && (an.KeysSource == "none" || an.KeysSource == "corrupt"):
+		f.Install = installKeys
+	case an.Read && !an.Configs && !an.Listed:
+		f.Install = installUSB
+	}
 	switch {
 	case len(an.Refusals) > 0 || an.Listed:
 	case !an.Adopted:

@@ -64,8 +64,9 @@ func (f FileSource) Key() (*ecdsa.PrivateKey, error) {
 	return release.ParseKey(f.Path, b)
 }
 
-// Parse reads a key as base64 of the PEM file or as the PEM itself. Errors name the key
-// by name, never by its value.
+// Parse reads a key as base64 of the PEM file or as the PEM itself, PKCS#8 ("PRIVATE KEY",
+// as `make keys` and the browser write it) or SEC1 ("EC PRIVATE KEY", as openssl ecparam
+// -genkey writes it). Errors name the key by name, never by its value.
 func Parse(name string, b []byte) (*ecdsa.PrivateKey, error) {
 	v := bytes.TrimSpace(b)
 	if len(v) == 0 {
@@ -76,7 +77,10 @@ func Parse(name string, b []byte) (*ecdsa.PrivateKey, error) {
 		if err != nil {
 			return nil, errors.New(name + ": neither a PEM key nor base64 of one")
 		}
-		v = d
+		v = bytes.TrimSpace(d)
+	}
+	if bytes.Contains(v, []byte("-----BEGIN EC PRIVATE KEY-----")) {
+		return parseSEC1(name, v)
 	}
 	return release.ParseKey(name, v)
 }

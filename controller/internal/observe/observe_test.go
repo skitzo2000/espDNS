@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -251,6 +252,66 @@ func TestReadForwardVector(t *testing.T) {
 	}
 }
 
+// The UDP receive queue under load: its full time as a share of each poll's
+// span, per node and none over the fleet, and the queries shed past its deadline.
+func TestScrapeQueueLoad(t *testing.T) {
+	a := newFake(t, "dns-a", 1)
+	s, now := clocked()
+	ctx := context.Background()
+	s.Scrape(ctx, []nodes.Node{a.node()})
+	a.n.LogQuery("192.0.2.10", "a.example", "A", "cache", "NOERROR")
+	a.n.SetQueueLoad(4000, 9) // full 4 of the next 10 s
+	*now = now.Add(10 * time.Second)
+	s.Scrape(ctx, []nodes.Node{a.node()})
+	d := s.Dashboard()
+	v := nodeView(t, d, a.n.ID())
+	if !near(v.Gauges.QueueFull, 4) {
+		t.Errorf("gauge %v", v.Gauges.QueueFull)
+	}
+	r := v.Now
+	if r == nil || !near(r.QueueFullShare, 0.4) || r.QueueExpired != 9 {
+		t.Fatalf("now %+v", r)
+	}
+	if !near(v.Hour.QueueFullShare, 0.4) || v.Hour.QueueExpired != 9 || d.Fleet.Now.QueueExpired != 9 {
+		t.Errorf("hour %+v, fleet %+v", v.Hour, d.Fleet.Now)
+	}
+	// A share of each node's own time: none over the fleet (two nodes full 60% aren't 100%).
+	if d.Fleet.Now.QueueFullShare != nil || d.Fleet.Hour.QueueFullShare != nil {
+		t.Errorf("fleet share %v %v", d.Fleet.Now.QueueFullShare, d.Fleet.Hour.QueueFullShare)
+	}
+	// Nothing more: the next poll's change is none, the hour's share half what it was.
+	*now = now.Add(10 * time.Second)
+	s.Scrape(ctx, []nodes.Node{a.node()})
+	v = nodeView(t, s.Dashboard(), a.n.ID())
+	if r := v.Now; r == nil || !near(r.QueueFullShare, 0) || r.QueueExpired != 0 {
+		t.Errorf("a quiet poll: %+v", r)
+	}
+	if !near(v.Hour.QueueFullShare, 0.2) {
+		t.Errorf("hour %v", v.Hour.QueueFullShare)
+	}
+}
+
+// The firmware's own text (firmware/tests/metrics_vector.txt): the UDP queue's families read.
+func TestReadQueueVector(t *testing.T) {
+	b, err := os.ReadFile("../../../firmware/tests/metrics_vector.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := fleet.ParseMetrics(string(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := readRaw(m)
+	if !near(r.gauges.QueueFull, 12.345) || r.qFull != 12.345 || r.qExpired != 7 {
+		t.Errorf("queue: gauge %v, full %v, expired %v", r.gauges.QueueFull, r.qFull, r.qExpired)
+	}
+	r.hasRes = true
+	p, ok := point(raw{}, time.Unix(0, 0), r, time.Unix(20, 0))
+	if !ok || math.Abs(float64(p.QFull)-12.345) > 1e-4 || p.QExpired != 7 {
+		t.Errorf("point %+v %v", p, ok)
+	}
+}
+
 // A 32-bit counter that wraps between two polls counts what it went up by.
 func TestScrapeWrap(t *testing.T) {
 	a := newFake(t, "dns-a", 1)
@@ -379,6 +440,8 @@ func TestQueryLog(t *testing.T) {
 	for f, want := range map[*Filter]int{
 		{Node: a.n.ID()}: 2, {Client: "192.0.2.2"}: 2, {Name: "two"}: 1, {Result: "blocked"}: 1,
 		{Result: "overridden"}: 1, {QType: "aaaa"}: 2, {Limit: 1}: 1, {Result: "blocked", QType: "A"}: 1,
+		{Result: "blocked,overridden"}: 2, {Result: "servfail,refused"}: 0, {Device: "192.0.2.1"}: 0, {Device: "192.0.2.10"}: 1,
+		{Text: "TWO"}: 1, {Text: "192.0.2.2"}: 2, {Text: "printer"}: 0, {Text: "printer", TextClients: map[string]bool{"192.0.2.11": true}}: 1,
 	} {
 		if got := len(s.Log(*f).Entries); got != want {
 			t.Errorf("filter %+v: %d, want %d", *f, got, want)
@@ -394,7 +457,7 @@ func TestQueryLog(t *testing.T) {
 
 	top := s.Top("")
 	if top.Entries != 5 || top.Blocks != 2 || len(top.Blocked) != 1 || top.Blocked[0] != (TopName{"ads.example", 2}) ||
-		top.Queried[0] != (TopName{"ads.example", 2}) {
+		top.Queried[0] != (TopName{"ads.example", 2}) || len(top.Clients) != 3 || top.Clients[0] != (TopName{"192.0.2.10", 2}) {
 		t.Errorf("top %+v", top)
 	}
 	if top := s.Top(a.n.ID()); top.Entries != 3 || top.Blocks != 0 {
@@ -661,5 +724,53 @@ func TestAsked(t *testing.T) {
 	names, clients = s.Asked(nil, nil)
 	if len(names) != 0 || len(clients) != 0 {
 		t.Errorf("nil picks: %v %v", names, clients)
+	}
+}
+
+// Askers: each device that asked for the name (exactly, either case, with or without the
+// final dot), with its count, blocks, last time and nodes (the most recent first); the
+// devices the most recent first, the rest counted past max; the entries without an
+// address in one row.
+func TestAskers(t *testing.T) {
+	s, now := clocked()
+	s.nodes["a"] = &nodeState{key: "a", addr: "192.0.2.53", name: "dns1"}
+	s.nodes["b"] = &nodeState{key: "b", addr: "192.0.2.54", name: "dns2"}
+	at := func(min int) *int64 { ms := now.Add(time.Duration(min) * time.Minute).UnixMilli(); return &ms }
+	ip := func(s string) *string { return &s }
+	seq := uint64(0)
+	add := func(node string, min int, client *string, name, result string) {
+		seq++
+		s.AddPage(node, release.QueryLogPage{BootID: node, Client: "full", Entries: []release.QueryEntry{{Seq: seq, Time: at(min),
+			Client: client, QName: name, QType: "A", Result: result}}}, false, nil, fleet.QueryLogCursor{}, *now)
+	}
+	add("a", 1, ip("192.0.2.1"), "ads.example", "blocked")
+	add("b", 2, ip("192.0.2.1"), "Ads.Example.", "blocked")
+	add("a", 3, ip("192.0.2.1"), "ads.example", "blocked")
+	add("a", 4, ip("192.0.2.20"), "ads.example", "cache")
+	add("b", 5, nil, "ads.example", "blocked")
+	add("a", 6, ip("192.0.2.30"), "www.ads.example", "blocked") // another name
+	add("a", 7, ip("192.0.2.31"), "ads.example.net", "blocked") // another name
+	v := s.Askers("ADS.example.", 0)
+	if v.Name != "ads.example" || v.Queries != 5 || v.More != 0 || v.Held != 7 || v.Cap != LogCap || v.Oldest == nil || len(v.Nodes) != 2 {
+		t.Fatalf("%+v", v)
+	}
+	if len(v.Askers) != 3 {
+		t.Fatalf("askers %+v", v.Askers)
+	}
+	if a := v.Askers[0]; a.Client != nil || a.Queries != 1 || !slices.Equal(a.Nodes, []string{"b"}) {
+		t.Errorf("hidden: %+v", a)
+	}
+	if a := v.Askers[1]; *a.Client != "192.0.2.20" || a.Queries != 1 || a.Blocked != 0 {
+		t.Errorf("second: %+v", a)
+	}
+	if a := v.Askers[2]; *a.Client != "192.0.2.1" || a.Queries != 3 || a.Blocked != 3 ||
+		!a.Last.Equal(now.Add(3*time.Minute).Truncate(time.Millisecond)) || !slices.Equal(a.Nodes, []string{"a", "b"}) {
+		t.Errorf("gateway: %+v", a)
+	}
+	if v := s.Askers("ads.example", 2); len(v.Askers) != 2 || v.More != 1 || *v.Askers[1].Client != "192.0.2.20" {
+		t.Errorf("max 2: %+v", v)
+	}
+	if v := s.Askers("nothing.example", 0); len(v.Askers) != 0 || v.Queries != 0 || v.Held != 7 {
+		t.Errorf("none: %+v", v)
 	}
 }

@@ -4,7 +4,8 @@ Takes a catalog board (boards/<board>.json) and the build of the chip image it n
 writes one image that is written at offset 0 to a new node, with an ESP Web Tools manifest:
 
     dist/<board>/dns2-<board>.bin       bootloader, partition table for the board's flash size,
-                                        OTA data, the board partition, the app (erases NVS)
+                                        OTA data, the board partition, the keys partition (with
+                                        --keys), the app (erases NVS)
     dist/<board>/manifest.json          ESP Web Tools: {"builds": [{"chipFamily", "parts"}]}
     dist/<board>/info.json              board, chip image, version, build time, ELF SHA-256
 
@@ -12,8 +13,13 @@ The node's address goes into the board partition ("network"), as the builder wri
 static address with its prefix length and a gateway, or "dhcp" for a network with a DHCP
 server. A node never asks DHCP on its own, so an image without an address is refused.
 
+--keys DIR writes DIR's release.pub and recovery.pub into the keys partition (tools/keyspart.py:
+slot A, generation 1, source USB; slot B erased), the keys the node trusts from its first boot.
+Without it the range is left erased: a key-neutral app then comes up in setup mode until its
+keys are written over USB.
+
 The controller's builder assembles the same image in Go; this is the command-line version.
-The image holds no secrets (only public keys are built in), so it can be served openly.
+The image holds no secrets (only public keys), so it can be served openly.
 Factory images are for new nodes only: nodes already running take signed updates (make ota).
 """
 import argparse
@@ -26,11 +32,13 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 from boardpart import pack  # noqa: E402
+import keyspart  # noqa: E402
 from ota_push import app_desc  # noqa: E402
 
 CHIP_FAMILY = {"esp32": "ESP32", "esp32s3": "ESP32-S3", "esp32c3": "ESP32-C3", "esp32c6": "ESP32-C6",
                "esp32p4": "ESP32-P4"}
 BOARD_OFFSET = 0x12000  # partitions-*.csv
+KEYS_OFFSET = keyspart.PART_OFFSET  # partitions-*.csv
 FIRMWARE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -74,6 +82,7 @@ def main():
     ap.add_argument("--address", required=True,
                     help="the node's address with its prefix length (192.0.2.52/24), or dhcp")
     ap.add_argument("--gateway", help="the gateway, with a static address")
+    ap.add_argument("--keys", help="a directory with release.pub and recovery.pub: written into the keys partition")
     ap.add_argument("--out", help="default: dist/<board>")
     a = ap.parse_args()
 
@@ -105,6 +114,15 @@ def main():
         part = os.path.join(tmp, "board.bin")
         open(part, "wb").write(pack(board))
         files[BOARD_OFFSET] = part
+        if a.keys:
+            try:
+                rec = keyspart.pack(keyspart.load_key(os.path.join(a.keys, "release.pub")),
+                                    keyspart.load_key(os.path.join(a.keys, "recovery.pub")))
+            except (OSError, ValueError) as e:
+                sys.exit(f"--keys {a.keys}: {e}")
+            kp = os.path.join(tmp, "keys.bin")
+            open(kp, "wb").write(keyspart.partition(rec))
+            files[KEYS_OFFSET] = kp
 
         os.makedirs(out, exist_ok=True)
         image = f"dns2-{name}.bin"
@@ -124,11 +142,14 @@ def main():
         "name": f"espDNS {name}",
         "version": d["version"],
         "new_install_prompt_erase": True,
-        # ESP Web Tools only installs: the dashboard sets up Wi-Fi itself over Improv, with its
-        # own port handling (ESP Web Tools left the port open after a missed Improv probe).
-        "new_install_improv_wait_time": 0,
         "builds": [{"chipFamily": CHIP_FAMILY[chip], "parts": [{"path": image, "offset": 0}]}],
     }
+    # As the controller's (image.Chip.Manifest): a board that may run on Wi-Fi (no Ethernet,
+    # or Ethernet that may not be fitted) gets ESP Web Tools' Improv step after installing, at
+    # its default wait, for the network the erased NVS no longer has; a wired one only installs.
+    eth = board.get("ethernet") or {"kind": "none"}
+    if eth.get("kind", "none") != "none" and not eth.get("optional"):
+        manifest["new_install_improv_wait_time"] = 0
     json.dump(manifest, open(f"{out}/manifest.json", "w"), indent=2)
     json.dump(info, open(f"{out}/info.json", "w"), indent=2)
     size = os.path.getsize(f"{out}/{image}")

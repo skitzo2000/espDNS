@@ -165,8 +165,20 @@ func TestCLIAndPushPageBuildTheSamePlan(t *testing.T) {
 			if d := bw.Plan.Describe(bw.Change.Kind); !reflect.DeepEqual(bc.Plan.Describe(bc.Change.Kind), d) || len(d) == 0 {
 				t.Errorf("plan descriptions differ: %q", d)
 			}
+			// The firmware the same, each chip image's checked against its provenance by both
+			// (a func: compared by whether it is there)
+			noCheck := func(fs []fleet.Firmware) []fleet.Firmware {
+				out := slices.Clone(fs)
+				for i := range out {
+					if out[i].Check == nil && strings.Contains(strings.Join(cliReq.Images, " "), "/images/") {
+						t.Errorf("%s: a chip image's firmware without its provenance check", out[i].Image)
+					}
+					out[i].Check = nil
+				}
+				return out
+			}
 			if bc.Change.Kind != bw.Change.Kind || bc.Change.Reinstall || bw.Change.Reinstall ||
-				!reflect.DeepEqual(bc.Change.Firmware, bw.Change.Firmware) || !reflect.DeepEqual(bc.Specs, bw.Specs) {
+				!reflect.DeepEqual(noCheck(bc.Change.Firmware), noCheck(bw.Change.Firmware)) || !reflect.DeepEqual(bc.Specs, bw.Specs) {
 				t.Errorf("changes differ:\nCLI  %+v\npage %+v", bc.Change, bw.Change)
 			}
 			// Every node's payload, from its /status, byte for byte.

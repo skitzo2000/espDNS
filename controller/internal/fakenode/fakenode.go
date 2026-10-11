@@ -31,6 +31,7 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
+	"github.com/skitzo2000/espdns/controller/internal/boards"
 	"github.com/skitzo2000/espdns/controller/internal/memplan"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/release"
@@ -45,7 +46,11 @@ type Node struct {
 	Image string // chip image
 	Board string
 	Pub   []byte // the release key it trusts in slot 0
-	Addr  string // where it is reached (host or host:port), for its "ip"
+	// Recovery is the recovery key it trusts in slot 1, which signs the KEYS releases that
+	// rotate its keys (release.Keys); nil: its /status says 1111111111111111 there, and it
+	// takes no KEYS release.
+	Recovery []byte
+	Addr     string // where it is reached (host or host:port), for its "ip"
 	// Firmware it runs.
 	Version, Elf, Slot string
 	// DownFor is how long a reboot takes; TrialFor how long a new build stays on trial.
@@ -90,6 +95,17 @@ type Node struct {
 	// FellBack: it took config seq 5 once, which it refuses now: it runs its board's
 	// settings, as a node in service whose config no longer loads (with Unadopted).
 	FellBack bool
+	// NoConfigs: firmware from before node configs (before 0.0.1): its /status says no
+	// "config".
+	NoConfigs bool
+	// KeysSource is its /status "keys_source" (firmware/main/keys_node.h), "partition" if
+	// empty; KeysGen its "keys_gen" (1 if 0; null unless the keys are from the partition:
+	// "partition" or "seeded"), KeysError its "keys_error". NoKeysPartition: firmware from
+	// before the keys partition, whose /status says none of them.
+	KeysSource      string
+	KeysGen         uint32
+	KeysError       string
+	NoKeysPartition bool
 	// Prefix and Gateway go with its address in /status config (default 24 and 127.0.0.1).
 	Prefix  int
 	Gateway string
@@ -116,6 +132,7 @@ type Node struct {
 	hosted     release.HostedStatus
 	hostedPrev *release.HostedStatus // the bundle in its other slot: what a revert goes back to
 	cfg        *nodecfg.Config
+	retired    []byte // the release key a KEYS release replaced, kept for its stored releases
 	state      string
 	reasons    []string
 	events     []string
@@ -141,7 +158,7 @@ func (n *Node) init() {
 		return
 	}
 	n.boot = time.Now().Add(-time.Hour)
-	n.seq = map[string]uint64{"firmware": 1, "config": 1, "zones": 1, "blocklist": 1, "overrides": 1, "control": 1}
+	n.seq = map[string]uint64{"firmware": 1, "config": 1, "zones": 1, "blocklist": 1, "overrides": 1, "control": 1, "keys": 0}
 	n.list = release.ListStatus{State: "on", Seq: 1, Entries: 1000, Tier: "ram", Bytes: 64 << 10, Slot: slot(0)}
 	if n.NoList {
 		n.list = release.ListStatus{State: "off", Slot: slot(-1)}
@@ -295,7 +312,7 @@ func (n *Node) status() map[string]any {
 	st := map[string]any{"project": "espdns", "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
 		"slot": n.Slot, "ota_state": n.otaState(), "uptime_s": int64(time.Since(n.boot).Seconds()), "node_id": n.ID(),
 		"board": n.Board, "image": n.Image, "boot_ms": 2100, "ip": n.Addr,
-		"keys": []string{release.Fingerprint(n.Pub), "1111111111111111"}, "seq": n.seq,
+		"keys": n.keys(), "seq": n.seq,
 		"net":    map[string]any{"kind": "ethernet", "mac": n.ID(), "link": true, "hostname": n.Name + ".local"},
 		"health": map[string]any{"state": n.state, "answering": n.answering(), "reasons": reasons},
 		"reboot": map[string]any{"pending": len(n.pending) > 0, "reasons": pending, "since_s": 3},
@@ -309,6 +326,25 @@ func (n *Node) status() map[string]any {
 		"blocking": map[string]any{"list": n.list, "overrides": n.ovr, "paused_s": n.pausedS()},
 		"queries":  n.Queries,
 	}
+	if n.NoConfigs {
+		delete(st, "config")
+	}
+	if !n.NoKeysPartition {
+		ks, kg := n.KeysSource, any(nil)
+		if ks == "" {
+			ks = "partition"
+		}
+		if ks == "partition" || ks == "seeded" {
+			kg = max(n.KeysGen, 1)
+		}
+		st["keys_source"], st["keys_gen"], st["keys_error"] = ks, kg, n.KeysError
+		st["keys_retired"] = nil
+		if n.retired != nil {
+			st["keys_retired"] = release.Fingerprint(n.retired)
+		}
+	} else {
+		delete(n.seq, "keys")
+	}
 	n.observeStatus(st)
 	if n.Memory != nil {
 		st["memory"] = map[string]any{"board": n.Memory}
@@ -319,6 +355,22 @@ func (n *Node) status() map[string]any {
 	}
 	st["forward_zones"] = fz
 	return st
+}
+
+// keys are its /status "keys": the fingerprints of its release and recovery keys. Locked.
+func (n *Node) keys() []string {
+	rec := "1111111111111111"
+	if n.Recovery != nil {
+		rec = release.Fingerprint(n.Recovery)
+	}
+	return []string{release.Fingerprint(n.Pub), rec}
+}
+
+// Retired is the release key a KEYS release kept as its retired key, nil for none.
+func (n *Node) Retired() []byte {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.retired
 }
 
 // forward are its forward zones: its pushed config's, else Forward. Locked.
@@ -411,7 +463,14 @@ func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // release checks a release as the firmware does and applies it. Locked.
 func (n *Node) release(b []byte, ota, later bool) (map[string]any, error) {
-	if len(b) < release.HeaderLen || !release.Verify(n.Pub, b[:release.HeaderLen]) {
+	if len(b) < release.HeaderLen {
+		return nil, errors.New("bad release size")
+	}
+	trusted := n.Pub
+	if b[9] == release.KeyRecovery {
+		trusted = n.Recovery
+	}
+	if trusted == nil || !release.Verify(trusted, b[:release.HeaderLen]) {
 		return nil, errors.New("signature not by a trusted key")
 	}
 	m, p := b[:release.ManifestLen], b[release.HeaderLen:]
@@ -419,11 +478,15 @@ func (n *Node) release(b []byte, ota, later bool) (map[string]any, error) {
 	seq := binary.LittleEndian.Uint64(m[32:])
 	sum := sha256.Sum256(p)
 	switch {
-	case m[9] != release.KeyRelease:
+	case kind == release.Keys && m[9] != release.KeyRecovery:
+		return nil, errors.New("a keys release must be signed with the recovery key")
+	case kind != release.Keys && m[9] != release.KeyRelease:
 		return nil, fmt.Errorf("key slot %d", m[9])
+	case kind == release.Keys && n.NoKeysPartition:
+		return nil, errors.New("release kind not supported here")
 	case string(m[10:16]) != string(n.MAC[:]):
 		return nil, errors.New("not for this node")
-	case strings.TrimRight(string(m[16:32]), "\x00") != n.Image:
+	case !boards.Swappable(n.Image, strings.TrimRight(string(m[16:32]), "\x00")): // its image, or the sibling's (firmware release.c)
 		return nil, errors.New("not for this chip image")
 	case seq <= n.seq[kind.String()]:
 		return nil, fmt.Errorf("seq %d not above %d", seq, n.seq[kind.String()])
@@ -437,6 +500,30 @@ func (n *Node) release(b []byte, ota, later bool) (map[string]any, error) {
 	}
 	n.events = append(n.events, "push "+kind.String())
 	switch kind {
+	case release.Keys:
+		// As the firmware (keys_body): the slot not in use written with the next generation,
+		// the new keys in use at once, the old release key kept as the retired one if asked.
+		if n.KeysSource != "" && n.KeysSource != "partition" && n.KeysSource != "seeded" {
+			return nil, errors.New("this node's keys are not from its keys partition: write its keys over USB")
+		}
+		rel, rec, keep, err := release.ParseKeysPayload(p)
+		if err != nil {
+			return nil, err
+		}
+		n.seq["keys"] = seq
+		n.retired = nil
+		if keep {
+			n.retired = n.Pub
+		}
+		n.Pub, n.Recovery = rel, rec
+		n.KeysGen, n.KeysSource = max(n.KeysGen, 1)+1, "partition"
+		var ret any
+		if n.retired != nil {
+			ret = release.Fingerprint(n.retired)
+		}
+		r := ok(fmt.Sprintf("ok, keys generation %d in use: release %s, recovery %s", n.KeysGen, n.keys()[0], n.keys()[1]), false)
+		r["keys"], r["keys_retired"], r["keys_gen"] = n.keys(), ret, n.KeysGen
+		return r, nil
 	case release.Firmware:
 		d, err := release.ParseAppDesc(p)
 		if err != nil {
@@ -798,5 +885,7 @@ func AppBuilt(version, elf, date, clock string) []byte {
 		panic("fakenode.App: elf is 16 hex digits")
 	}
 	copy(b[32+144:], e)
+	// Firmware that reads the keys partition (release.KeysOf), as every build since
+	copy(b[1024:], "espdns:keys=partition-v1\x00")
 	return b
 }

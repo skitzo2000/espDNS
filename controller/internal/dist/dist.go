@@ -1,13 +1,18 @@
 // Package dist makes, signs, checks and imports a release's files (docs/releasing.md): every
-// chip image as the controller's builder imports it, one factory image per catalog board
-// with its ESP Web Tools manifest, and SHA256SUMS over them all, which the release key signs.
+// chip image as the controller's builder imports it, key-neutral (no keys, no board, no
+// address in it), and SHA256SUMS over them all, which the release key signs. A release has
+// no factory images: a new node is installed with the controller's Install over USB, which
+// writes its keys and address with the chip image.
 //
-// The signature is the one nodes already check on every release (internal/release, Sign):
-// ECDSA P-256 over the SHA-256 of the file, r || s, 64 bytes, in SHA256SUMS.sig. It is
-// checked with the public key the firmware has built in (firmware/keys/release.pub, 65 raw
-// bytes), so a release is trusted by the same key as the nodes trust. A signed SHA256SUMS
-// can't be taken for a node release, nor the other way round: a release manifest is 128
-// bytes that start "ESPDNS1\0", and SHA256SUMS is text lines, refused with any NUL in it.
+// The signature is made as the nodes' releases are (internal/release, Sign): ECDSA P-256
+// over the SHA-256 of the file, r || s, 64 bytes, in SHA256SUMS.sig. The project's releases
+// are signed with the project's release key (keys/project.pub at the top of the repository,
+// /keys/project.pub in the controller's image); a build of your own with your release key.
+// The nodes trust neither for that: their keys are yours, in their keys partition, and the
+// controller signs what it pushes with your release key once the import's record of the
+// release still checks (provenance.go). A signed SHA256SUMS can't be taken for a node
+// release, nor the other way round: a release manifest is 128 bytes that start
+// "ESPDNS1\0", and SHA256SUMS is text lines, refused with any NUL in it.
 //
 // CI makes the files and SHA256SUMS (Build) and never sees the key; a person signs SHA256SUMS
 // afterwards, with the key on standard input (Sign).
@@ -35,7 +40,6 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/boards"
 	"github.com/skitzo2000/espdns/controller/internal/image"
-	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/secfile"
 )
@@ -46,11 +50,6 @@ const (
 	SumsFile = "SHA256SUMS"
 	// SigFile is the release key's signature over SumsFile.
 	SigFile = SumsFile + ".sig"
-	// FactoryNetwork is the address a factory image starts on: a release can't know a node's,
-	// so its board definition asks DHCP for one (as the builder's "dhcp"), and adoption then
-	// gives the node its own. On a network with no DHCP server, flash from the controller's
-	// builder instead, which writes a static address.
-	FactoryNetwork = "dhcp"
 	// maxFile is the most one file in a chip image may be (the largest flash is 16 MB).
 	maxFile = 32 << 20
 	// maxTarball is the most a chip image's tarball may be: its six files (chipFiles), at most maxFile each.
@@ -60,16 +59,6 @@ const (
 // ChipFile is a chip image's tarball: its exported directory, <image>/<file>.
 func ChipFile(version, img string) string { return "espdns-" + version + "-image-" + img + ".tar.gz" }
 
-// FactoryFile is a board's factory image, written at offset 0 of a new node's flash.
-func FactoryFile(version, board string) string {
-	return "espdns-" + version + "-factory-" + board + ".bin"
-}
-
-// ManifestFile is the ESP Web Tools manifest beside FactoryFile.
-func ManifestFile(version, board string) string {
-	return "espdns-" + version + "-factory-" + board + ".manifest.json"
-}
-
 // The files of an exported chip image (firmware/tools/export_image.py), the only ones a
 // chip image's tarball may hold.
 var chipFiles = []string{"app.bin", "bootloader.bin", "image.json", "ota_data_initial.bin", "partitions-4mb.bin", "partitions-8mb.bin"}
@@ -78,15 +67,15 @@ var chipFiles = []string{"app.bin", "bootloader.bin", "image.json", "ota_data_in
 type Options struct {
 	Version string   // the repository's VERSION: every chip image must be built at it
 	Images  string   // the exported chip images, <Images>/<image>/image.json
-	Catalog string   // the board catalog (boards/), one factory image per board
+	Catalog string   // the board catalog (boards/): every board's chip image must be in Images
 	Out     string   // where the release's files go: missing or empty
 	Include []string // more files the release carries (and SHA256SUMS lists), by their base name
 }
 
-// Build writes a release into o.Out: each chip image's tarball, each catalog board's
-// factory image and manifest, the included files, then SHA256SUMS over all of them. It
-// returns the files written, SHA256SUMS last. A chip image of another version, a catalog
-// board with errors or with no chip image here, and an Out with anything in it are refused.
+// Build writes a release into o.Out: each chip image's tarball, the included files, then
+// SHA256SUMS over all of them. It returns the files written, SHA256SUMS last. A chip image
+// of another version or not key-neutral, a catalog board with errors or with no chip image
+// here, and an Out with anything in it are refused.
 func Build(o Options) ([]string, error) {
 	if !version.MatchString(o.Version) {
 		return nil, fmt.Errorf("version %q: not MAJOR.MINOR.PATCH", o.Version)
@@ -118,6 +107,15 @@ func Build(o Options) ([]string, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("%s: no boards", o.Catalog)
 	}
+	// Every catalog board must be installable from the release (Install over USB)
+	for _, e := range entries {
+		if len(e.Errors) > 0 {
+			return nil, fmt.Errorf("board %s: %s", e.Board.Name, strings.Join(e.Errors, "; "))
+		}
+		if _, ok := byName[e.Board.Image]; !ok {
+			return nil, fmt.Errorf("board %s runs chip image %s, which isn't in %s", e.Board.Name, e.Board.Image, o.Images)
+		}
+	}
 	if err := emptyDir(o.Out); err != nil {
 		return nil, err
 	}
@@ -142,26 +140,6 @@ func Build(o Options) ([]string, error) {
 			return nil, err
 		}
 	}
-	for _, e := range entries {
-		c, ok := byName[e.Board.Image]
-		if !ok {
-			return nil, fmt.Errorf("board %s runs chip image %s, which isn't in %s", e.Board.Name, e.Board.Image, o.Images)
-		}
-		bin, err := Factory(c, e)
-		if err != nil {
-			return nil, fmt.Errorf("board %s: %w", e.Board.Name, err)
-		}
-		m, err := json.MarshalIndent(c.Manifest(e.Board.Name, FactoryFile(o.Version, e.Board.Name)), "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		if err := write(FactoryFile(o.Version, e.Board.Name), bin); err != nil {
-			return nil, err
-		}
-		if err := write(ManifestFile(o.Version, e.Board.Name), append(m, '\n')); err != nil {
-			return nil, err
-		}
-	}
 	for _, f := range o.Include {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -181,9 +159,11 @@ func Build(o Options) ([]string, error) {
 	return append(files, SumsFile), nil
 }
 
-// generic checks a chip image's app is a release's: its descriptor says the version, and
-// it has no address built in (a transitional image's, firmware/Makefile STATIC_IP), only
-// the firmware's mark saying it has none.
+// generic checks a chip image's app is a release's: its descriptor says the version, it
+// has no address built in (a transitional image's, firmware/Makefile STATIC_IP), only the
+// firmware's mark saying it has none, and it is key-neutral: it reads its keys from the
+// keys partition (espdns:keys=partition-v1) and carries no seed of anybody's keys (a
+// KEYS_SEED= build's espdns:keys-seed=).
 func generic(c image.Chip, version string) error {
 	app, err := os.ReadFile(filepath.Join(c.Dir(), "app.bin"))
 	if err != nil {
@@ -202,33 +182,15 @@ func generic(c image.Chip, version string) error {
 	case addr != "":
 		return fmt.Errorf("chip image %s: its app has the address %s built in: a release's images carry none", c.Image, addr)
 	}
+	switch k, err := release.KeysOf(app); {
+	case err != nil:
+		return fmt.Errorf("chip image %s: its app's keys marker: %w", c.Image, err)
+	case !k.Partition:
+		return fmt.Errorf("chip image %s: its app doesn't read the keys partition (no espdns:keys=partition-v1 marker): not a key-neutral build", c.Image)
+	case k.Seed != nil:
+		return fmt.Errorf("chip image %s: its app carries a keys seed (%s): a release's images are key-neutral (no KEYS_SEED=)", c.Image, strings.Join(k.Seed, ","))
+	}
 	return nil
-}
-
-// Factory is a catalog board's factory image: its chip image with its board definition, as
-// the controller's builder assembles one, the address FactoryNetwork.
-func Factory(c image.Chip, e boards.Entry) ([]byte, error) {
-	if len(e.Errors) > 0 {
-		return nil, errors.New(strings.Join(e.Errors, "; "))
-	}
-	if e.Board.Network != nil {
-		return nil, errors.New("a catalog board names no address: it is per node")
-	}
-	bd := e.Board
-	bd.Network = &nodecfg.Network{Address: FactoryNetwork}
-	e = e.WithChanges(bd)
-	if len(e.Errors) > 0 {
-		return nil, errors.New(strings.Join(e.Errors, "; "))
-	}
-	part, err := e.Pack()
-	if err != nil {
-		return nil, err
-	}
-	flash := e.Board.FlashMB
-	if flash == 0 {
-		flash = 4 // as the builder takes a board that doesn't say
-	}
-	return c.Assemble(flash, part)
 }
 
 // tarTime is every tarball entry's time: a release's bytes depend only on what is in it.
@@ -376,19 +338,28 @@ func Sign(dir string, k *ecdsa.PrivateKey) error {
 type Checked struct {
 	Files    []string
 	Unlisted []string
-	sums     map[string]string // each listed file's SHA-256, as signed
+	// Missing are the listed files not there that may be (Verify for an import of a fetched
+	// release's chip images: its other files); always none from Verify.
+	Missing []string
+	sums    map[string]string // each listed file's SHA-256, as signed
+	// The SHA256SUMS and signature as read and checked, kept with an import (provenance)
+	sumsRaw, sigRaw []byte
 }
 
 // ErrSignature: SHA256SUMS.sig is not the key's signature over SHA256SUMS.
 var ErrSignature = errors.New(SigFile + " is not this key's signature over " + SumsFile)
 
-// Verify checks a release in dir: SHA256SUMS.sig is pub's signature over SHA256SUMS (pub as
-// the firmware has it built in, 65 bytes), then every file SHA256SUMS lists is there with
-// its SHA-256. Any of them missing or different is an error naming each.
-func Verify(dir string, pub []byte) (Checked, error) {
+// Verify checks a release in dir: SHA256SUMS.sig is pub's signature over SHA256SUMS (pub a
+// raw P-256 public key, 65 bytes, as keys/project.pub), then every file SHA256SUMS lists is
+// there with its SHA-256. Any of them missing or different is an error naming each.
+func Verify(dir string, pub []byte) (Checked, error) { return verify(dir, pub, false) }
+
+// verify is Verify; chipsOnly lets the listed files but the chip images' tarballs be missing
+// (Checked.Missing): a release fetched for its chip images only (Fetch).
+func verify(dir string, pub []byte, chipsOnly bool) (Checked, error) {
 	var c Checked
 	if len(pub) != 65 || pub[0] != 4 {
-		return c, fmt.Errorf("the public key is %d bytes: not a raw P-256 key (65, as firmware/keys/release.pub)", len(pub))
+		return c, fmt.Errorf("the public key is %d bytes: not a raw P-256 key (65, as keys/project.pub)", len(pub))
 	}
 	sums, err := os.ReadFile(filepath.Join(dir, SumsFile))
 	if err != nil {
@@ -404,6 +375,7 @@ func Verify(dir string, pub []byte) (Checked, error) {
 	if !release.VerifySig(pub, sums, sig) {
 		return c, ErrSignature
 	}
+	c.sumsRaw, c.sigRaw = sums, sig
 	list, err := ParseSums(sums)
 	if err != nil {
 		return c, err
@@ -415,7 +387,10 @@ func Verify(dir string, pub []byte) (Checked, error) {
 		listed[s.Name] = true
 		c.sums[s.Name] = s.SHA256
 		got, err := fileSum(filepath.Join(dir, s.Name))
+		_, _, chip := chipOf(s.Name)
 		switch {
+		case errors.Is(err, fs.ErrNotExist) && chipsOnly && !chip:
+			c.Missing = append(c.Missing, s.Name)
 		case errors.Is(err, fs.ErrNotExist):
 			bad = append(bad, s.Name+": missing")
 		case err != nil:
@@ -441,24 +416,15 @@ func Verify(dir string, pub []byte) (Checked, error) {
 	return c, nil
 }
 
-// Import checks the release in dir (Verify) and puts each of its chip images in images
-// (the data directory's firmware/images, where the builder and the Nodes page's updates
-// find them), replacing one of the same name; every directory 0700 and file 0600 as the
-// data directory's are. Nothing is imported unless the whole release checks. It returns
-// the chip images imported.
-func Import(dir string, pub []byte, images string) ([]string, error) {
-	c, err := Verify(dir, pub)
-	if err != nil {
-		return nil, err
-	}
-	return importChecked(dir, c, images)
-}
-
-// importChecked imports the chip images of the release in dir that Verify checked (c).
-func importChecked(dir string, c Checked, images string) ([]string, error) {
+// importChecked imports the chip images of the release in dir that Verify checked (c), each
+// with its provenance: the signed SHA256SUMS, its signature, the chip's tarball as checked,
+// and who signed it (sig, whose Version is set here).
+func importChecked(dir string, c Checked, images string, sig *Signer) ([]string, error) {
 	type chip struct {
 		name  string
 		files map[string][]byte
+		tgz   []byte
+		file  string
 	}
 	var chips []chip
 	for _, f := range c.Files {
@@ -486,10 +452,18 @@ func importChecked(dir string, c Checked, images string) ([]string, error) {
 		if info.Image != img || info.Version != v {
 			return nil, fmt.Errorf("%s: image.json says %s %s", f, info.Image, info.Version)
 		}
-		chips = append(chips, chip{img, files})
+		if sig.Version != "" && sig.Version != v {
+			return nil, fmt.Errorf("%s: version %s, and another chip image is %s: not one release", f, v, sig.Version)
+		}
+		sig.Version = v
+		chips = append(chips, chip{img, files, tgz, f})
 	}
 	if len(chips) == 0 {
 		return nil, errors.New("the release has no chip images")
+	}
+	signer, err := json.MarshalIndent(*sig, "", "  ")
+	if err != nil {
+		return nil, err
 	}
 	if err := secfile.MkdirAll(images); err != nil {
 		return nil, err
@@ -505,6 +479,17 @@ func importChecked(dir string, c Checked, images string) ([]string, error) {
 		}
 		for name, b := range ch.files {
 			if err := secfile.WriteFile(filepath.Join(tmp, name), b); err != nil {
+				return done, err
+			}
+		}
+		// Its provenance, re-checked before every firmware rollout (CheckProvenance)
+		prov := filepath.Join(tmp, ProvenanceDir)
+		if err := secfile.MkdirAll(prov); err != nil {
+			return done, err
+		}
+		for name, b := range map[string][]byte{SumsFile: c.sumsRaw, SigFile: c.sigRaw, ch.file: ch.tgz,
+			SignerFile: append(signer, '\n')} {
+			if err := secfile.WriteFile(filepath.Join(prov, name), b); err != nil {
 				return done, err
 			}
 		}

@@ -20,21 +20,36 @@ import (
 // NodeStatus is the part of a node's /status a push, a rolling change or a status line
 // needs. Fields a node's firmware is too old to send stay at their zero value.
 type NodeStatus struct {
-	NodeID    string            `json:"node_id"`
-	Image     string            `json:"image"`
-	Board     string            `json:"board"`
-	Keys      []string          `json:"keys"`
-	Seq       map[string]uint64 `json:"seq"`
-	Project   string            `json:"project"`
-	Version   string            `json:"version"`
-	Built     string            `json:"built"`
-	ElfSHA256 string            `json:"elf_sha256"` // first 8 bytes, hex, as AppDesc.ElfSHA256
-	Slot      string            `json:"slot"`
-	OTAState  string            `json:"ota_state"` // "trial" until a new firmware confirms itself, then "valid"
-	UptimeS   int64             `json:"uptime_s"`
-	IP        string            `json:"ip"`
-	BootMS    int               `json:"boot_ms"`
-	Degraded  bool              `json:"degraded"`
+	NodeID string   `json:"node_id"`
+	Image  string   `json:"image"`
+	Board  string   `json:"board"`
+	Keys   []string `json:"keys"`
+	// KeysSource is where the keys it trusts came from (firmware/main/keys_node.h):
+	// "partition" (its keys partition), "seeded" (written there this boot from the keys
+	// built into its firmware), "corrupt" (no valid slot: never seeded over), "embedded"
+	// (the partition can't be used: the keys built in) or "none"; empty on firmware from
+	// before the keys partition.
+	KeysSource string `json:"keys_source"`
+	// KeysGen is the generation of the keys partition's slot in use; nil if its keys aren't
+	// from the partition.
+	KeysGen *uint32 `json:"keys_gen"`
+	// KeysError is what is wrong with its keys partition, "" if nothing.
+	KeysError string `json:"keys_error"`
+	// KeysRetired is the fingerprint of the release key a KEYS release replaced and the node
+	// keeps as its retired key (what it stored with it still loads at boot until pushed
+	// again with the new key), "" for none (null in /status) and on firmware from before.
+	KeysRetired string            `json:"keys_retired"`
+	Seq         map[string]uint64 `json:"seq"`
+	Project     string            `json:"project"`
+	Version     string            `json:"version"`
+	Built       string            `json:"built"`
+	ElfSHA256   string            `json:"elf_sha256"` // first 8 bytes, hex, as AppDesc.ElfSHA256
+	Slot        string            `json:"slot"`
+	OTAState    string            `json:"ota_state"` // "trial" until a new firmware confirms itself, then "valid"
+	UptimeS     int64             `json:"uptime_s"`
+	IP          string            `json:"ip"`
+	BootMS      int               `json:"boot_ms"`
+	Degraded    bool              `json:"degraded"`
 	// BoardSource is where its board definition came from: "partition" (written when it was
 	// flashed), "fallback" (built into a transitional image) or "none"; empty on firmware
 	// from before board definitions.
@@ -308,6 +323,11 @@ type HostedStatus struct {
 type Pusher struct {
 	Key   *ecdsa.PrivateKey
 	KeyID uint8 // KeyRelease or KeyRecovery: the slot Key is in on the nodes
+	// Alt are the other keys the signer holds for the same slot: during a key rotation
+	// (internal/rotation) the new release key, <data>/keys/release.next.pem. Each node is
+	// signed for with the one of Key and Alt it trusts in slot KeyID (its /status "keys"), so
+	// changes still reach every node while some have their new keys and some the old ones.
+	Alt []*ecdsa.PrivateKey
 	// Pins is the signer's own record of the nodes (internal/pins): a release is signed for
 	// the node ID pinned to the address, with a seq above the last one recorded for it, never
 	// for the ID or seq a /status gives (anything answering on the address can send one).
@@ -350,9 +370,22 @@ func (p *Pusher) Status(ctx context.Context, host string) (NodeStatus, error) {
 	return st, nil
 }
 
-// trusted checks the node trusts p's key in p's slot.
+// KeyFor is the key a release for the node whose /status is st is signed with: the one of
+// Key and Alt it trusts in slot KeyID, else Key (trusted then refuses it).
+func (p *Pusher) KeyFor(st NodeStatus) *ecdsa.PrivateKey {
+	if int(p.KeyID) < len(st.Keys) {
+		for _, k := range append([]*ecdsa.PrivateKey{p.Key}, p.Alt...) {
+			if k != nil && Fingerprint(PublicRaw(k)) == st.Keys[p.KeyID] {
+				return k
+			}
+		}
+	}
+	return p.Key
+}
+
+// trusted checks the node trusts p's key (KeyFor) in p's slot.
 func (p *Pusher) trusted(host string, st NodeStatus) error {
-	fp := Fingerprint(PublicRaw(p.Key))
+	fp := Fingerprint(PublicRaw(p.KeyFor(st)))
 	if len(st.Keys) == 0 {
 		return fmt.Errorf("%s runs firmware from before signed releases: update it once with firmware/tools/ota_push.py", host)
 	}
@@ -379,7 +412,7 @@ func (p *Pusher) target(host string, kind Kind, st NodeStatus) ([6]byte, uint64,
 		}
 	} else if errors.Is(err, pins.ErrNotPinned) {
 		return node, 0, fmt.Errorf("%s is not pinned to a node: releases are signed only for a node adopted here "+
-			"(espdns adopt, the Adopt page) or pinned by hand (espdns pin -host %s -node <its ID>)", host, host)
+			"(+ Add node, or espdns adopt) or pinned by hand (espdns pin -host %s -node <its ID>)", host, host)
 	}
 	if err != nil {
 		return node, 0, err
@@ -469,6 +502,9 @@ func (p *Pusher) PushRelease(ctx context.Context, host string, kind Kind, payloa
 	if kind == Firmware {
 		return out, fmt.Errorf("firmware goes to /ota, not here")
 	}
+	if kind == Keys {
+		return out, fmt.Errorf("a KEYS release is signed offline with the node's recovery key (KeysManifest), never here")
+	}
 	st, err := p.Status(ctx, host)
 	if err != nil {
 		return out, err
@@ -487,7 +523,7 @@ func (p *Pusher) PushRelease(ctx context.Context, host string, kind Kind, payloa
 	if err != nil {
 		return out, err
 	}
-	hdr, err := Header(p.Key, kind, p.KeyID, node, st.Image, seq, payload)
+	hdr, err := Header(p.KeyFor(st), kind, p.KeyID, node, st.Image, seq, payload)
 	if err != nil {
 		return out, err
 	}

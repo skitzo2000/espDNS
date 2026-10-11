@@ -1,0 +1,80 @@
+/* The Blocking page (blocklists.html, blocking.js): the parts shell.css
+   doesn't have. */
+.blocking { display: grid; gap: 28px }
+
+/* Hide-and-expand rows stacked into one block */
+.exs { display: grid }
+.exs > details.ex + details.ex { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0 }
+.exs > details.ex:has(+ details.ex) { border-bottom-left-radius: 0; border-bottom-right-radius: 0 }
+details.ex > summary .what { color: var(--muted); font-size: 13px; font-weight: 400 }
+details.ex > summary > span:first-child { min-width: 0 }
+
+/* Check a site, and the add boxes of the rules */
+.check { display: flex; gap: 8px; flex-wrap: wrap }
+.check input { flex: 1; min-width: 200px }
+.verdict { border-left: 3px solid var(--sky); padding: 10px 14px; background: var(--bg); border-radius: 0 var(--r) var(--r) 0; display: grid; gap: 8px }
+.verdict.blocked { border-left-color: var(--bad-solid) }
+.verdict .row { gap: 8px }
+/* Who asked: a device a row, its name (or address) linking to its queries */
+.askers { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px }
+.askers ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px }
+.askers li { display: grid; gap: 2px; min-width: 0 }
+.askers .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0 }
+.askers .who a { overflow-wrap: anywhere; font-weight: 600 }
+.askers .tag { align-self: center }
+
+/* A switch: orange when on */
+.sw { position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--line-strong); border: none; cursor: pointer; flex: none; padding: 0 }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); transition: left .15s }
+.sw[aria-checked="true"] { background: var(--orange) }
+.sw[aria-checked="true"]::after { left: 18px }
+.sw[disabled] { opacity: .45; cursor: not-allowed }
+@media (prefers-reduced-motion: reduce) { .sw::after { transition: none } }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; margin: 0 }
+.kv dt { color: var(--muted) }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+.tag { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); white-space: nowrap; font-weight: 400 }
+.tag.wait { border-color: var(--orange); color: var(--fg) }
+.push-right { margin-left: auto }
+
+/* The add box: the catalogue's matches right under it */
+.lcombo .combo-list { max-height: min(420px, 70vh) }
+.lcombo .opt { padding: 9px 12px }
+.lcombo .opt:first-child { border-top: none }
+.lcombo .opt:hover { background: var(--hover) }
+.lcombo .opt.url select { width: auto; padding: 3px 6px; font-size: 13px }
+.lcombo .browse { padding: 9px 12px; border-top: 1px solid var(--line); background: var(--bg) }
+
+/* The picker: by purpose, a checkbox per list */
+.chips { display: flex; gap: 6px; flex-wrap: wrap }
+.chips button { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 999px; padding: 3px 11px; font-size: 13px; cursor: pointer }
+/* Pressed: the text colour as its fill, so it shows in both themes (navy is the dark
+   theme's surface) */
+.chips button { color: var(--fg) }
+.chips button[aria-pressed="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg) }
+.cat { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line); align-items: start; cursor: pointer }
+.cat:first-child { border-top: none }
+.cat input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--orange) }
+
+/* Advanced: each node, the files */
+.nrow { display: grid; grid-template-columns: minmax(90px, 160px) 1fr auto; gap: 6px 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line) }
+.nrow:first-child { border-top: none }
+.nrow .row { gap: 6px; justify-content: flex-end }
+textarea.t.code { font-family: var(--mono); font-size: 13px; min-height: 220px; resize: vertical }
+pre.cmd { margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere }
+@media (max-width: 760px) {
+  .nrow { grid-template-columns: 1fr }
+  .nrow .row { justify-content: flex-start }
+  #pause { align-items: stretch }
+}
+#add-list, #add-first { display: contents }
+#pause select.t { width: auto }
+@media (max-width: 520px) { details.ex > summary .what { display: none } }
+.combo.lcombo { width: 380px; max-width: 100% }
+@media (max-width: 760px) { .combo.lcombo { width: 100% } }
+main > .head > .lead { flex: 1 1 360px }
+/* The schedule, under the lists: how often they are checked, Refresh now */
+.refresh { margin-top: 12px }
+.refresh select.t { width: auto }
+.refresh .bad { margin: 0 }

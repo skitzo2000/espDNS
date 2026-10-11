@@ -19,15 +19,14 @@ Please include:
 - whether the attacker needs to be on the local network, logged in to the controller, or
   on the controller's machine.
 
-Leave out your own addresses, zone names and secrets. We will confirm that we got your
-report, keep you updated while we fix it, and credit you when the fix is released, unless
-you ask us not to. Please give us a reasonable time to release a fix before you publish
-details.
+Leave out your own addresses, zone names and secrets. We'll confirm we got your report,
+keep you updated while we fix it, and credit you when the fix is released, unless you ask
+us not to. Please give us a reasonable time to release a fix before you publish details.
 
 ## Supported versions
 
-espDNS is alpha software. Only the newest 0.0.x release gets security fixes. There are no
-backports to older versions: update to the newest release.
+espDNS is alpha software. Only the newest 0.0.x release gets security fixes, with no
+backports: update to the newest release.
 
 | Version | Security fixes |
 |---|---|
@@ -36,41 +35,42 @@ backports to older versions: update to the newest release.
 
 ## Security model in brief
 
-The full model is in [docs/security.md](docs/security.md). In short:
+The full model is in [docs/security.md](docs/security.md).
 
 **Nodes**
 
-- A node takes only **signed releases**: firmware, config, zones, blocklists, overrides
-  and control commands. Each is signed with ECDSA P-256 and names the node (its chip ID),
-  the chip image and a sequence number. A node refuses a release for another node or chip,
-  a bad signature, and a sequence number not above the last one it applied, so a replay or
-  a downgrade fails, also after a reboot.
-- Only **public keys** are built into the firmware: a release key and an offline
-  recovery key. The recovery key can replace a lost or leaked release key. Firmware images
-  hold no secrets.
-- A node accepts releases, and serves its query log, only from **private source
-  addresses**. Recursion is also for private addresses only.
+- A node takes only **signed releases** (firmware, config, zones, blocklists, overrides,
+  control commands), ECDSA P-256, each naming the node (its chip ID), the chip image and a
+  sequence number. Another node's or chip's release, a bad signature, or a sequence number
+  not above the last one applied is refused, so replays and downgrades fail, even after a
+  reboot.
+- A node trusts two **public keys**, yours, in its keys partition: a release key and an
+  offline recovery key, written by the controller's Install over USB. Firmware images hold
+  no key and no secret. Over the network, only a release signed with the recovery key can
+  change a node's keys (a key rotation).
+- A node accepts releases, serves its query log and recurses only for **private source
+  addresses**.
 - A node's web server answers only requests whose `Host` names the node, which stops DNS
-  rebinding attacks from a browser on your network.
+  rebinding from a browser on your network.
 - **A node never contacts the controller.** The controller always connects to the node.
 
 **The controller**
 
 - It listens on **localhost only** (plain HTTP). Use it from the machine it runs on.
-- One login, with the password kept as an argon2id hash. Failed logins are slowed down.
-  A backup or a revealed Wi-Fi password asks for the password again.
+- One login, the password kept as an argon2id hash. Failed logins are slowed down. Backups
+  and revealing a Wi-Fi password ask for the password again.
 - Every page sends a strict Content-Security-Policy and other security headers.
 - It runs in Docker as your user, with no Linux capabilities and a read-only root
   filesystem. Its data directory (settings, the login, the release key) is readable by
   your user only.
 - It signs each release for the node it pinned at adoption, with its own record of
-  sequence numbers, not with what the node's address claims.
+  sequence numbers, not what the node's address claims.
 - Backups are encrypted with a passphrase.
 
 **Known gaps (alpha)**
 
-- Releases travel to the nodes over **plain HTTP**. They are signed, not encrypted.
-- A node's `/status`, `/health` and `/metrics` are open to anyone who can reach the node.
-  `/metrics` holds no names that clients looked up; `/status` does describe the node.
-- A node answers DNS queries from any address (recursion only for private ones), and
-  any private address can read its query log. Put the nodes on a network you trust.
+- Releases travel to the nodes over **plain HTTP**: signed, not encrypted.
+- A node's `/status`, `/health` and `/metrics` are open to anyone who can reach it.
+  `/metrics` holds no names clients looked up; `/status` does describe the node.
+- A node answers DNS from any address (recursion only for private ones), and any private
+  address can read its query log. Put the nodes on a network you trust.

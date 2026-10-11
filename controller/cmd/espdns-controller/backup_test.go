@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 
@@ -104,15 +105,21 @@ func TestBackupDownload(t *testing.T) {
 	// What it holds.
 	r := withSession(httptest.NewRequest("GET", "http://127.0.0.1:8480/api/backup", nil), cookie, tok)
 	var info struct {
-		Parts []part `json:"parts"`
+		Parts []part    `json:"parts"`
+		Last  time.Time `json:"last"`
 	}
 	if w := serve(h, r); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &info) != nil || len(info.Parts) < 4 {
 		t.Fatalf("info %d %s", w.Code, w.Body)
 	}
 	for _, p := range info.Parts {
-		if (p.Name == "firmware" || p.Name == "fleet.lock") == p.Included || p.Name == TmpDir {
+		if (p.Name == "firmware" || p.Name == "fleet.lock") == p.Included || p.Name == TmpDir || p.Name == backup.LastFile {
 			t.Errorf("%+v", p)
 		}
+	}
+
+	// When the last one was sent: the account panel's "Last backup".
+	if info.Last.IsZero() || time.Since(info.Last) > time.Minute {
+		t.Errorf("last backup: %v", info.Last)
 	}
 
 	for body, want := range map[string]string{

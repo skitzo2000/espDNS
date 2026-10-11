@@ -1,11 +1,11 @@
 # Controller HTTP API
 
 The controller serves its dashboard and a JSON API on `http://127.0.0.1:8480` (set by
-`ESPDNS_LISTEN`, loopback only). The dashboard's pages use this API. You can use it too, from
-the same machine.
+`ESPDNS_LISTEN`, loopback only). The dashboard uses this API, and so can you, from the same
+machine.
 
-This page lists every route the controller registers in this version (0.0.x, alpha). The API
-may change in any 0.0.x release. There is no versioned path.
+These are every route in 0.0.x (alpha). The API may change in any 0.0.x release; there is no
+versioned path.
 
 Back to the [reference index](README.md).
 
@@ -13,7 +13,7 @@ Back to the [reference index](README.md).
 
 ### Where requests may come from
 
-- The controller listens on a loopback address only. It refuses to start on any other.
+- The controller listens on loopback only and refuses to start on any other address.
 - Every request under `/api/` and `/build/` must have a `Host` of `localhost` or a loopback
   address, with any port. Others get `403`. This stops DNS rebinding.
 - A request that changes something must not come from another site: an `Origin` header, if
@@ -22,8 +22,8 @@ Back to the [reference index](README.md).
 
 ### Logging in
 
-A session has two halves. Send both on every request under `/api/`, and on every request that
-is not a GET or HEAD:
+A session has two halves. Send both on every request under `/api/`, and on every non-GET,
+non-HEAD request:
 
 1. **A cookie** named `espdns_session_<port>` (for example `espdns_session_8480`). It is
    `HttpOnly` and `SameSite=Strict`. `POST /api/login` sets it.
@@ -51,8 +51,6 @@ to be counted as the same client.
 
 ### Access levels
 
-Each route below has one of these levels:
-
 | Level | Meaning |
 |-------|---------|
 | **public** | No session needed. |
@@ -60,36 +58,37 @@ Each route below has one of these levels:
 | **login** | Always needs a session. While no password is set, it answers `403` ("read-only"). |
 | **login + password** | Needs a session and a fresh password grant (see below). |
 
-Any request that is not a GET or HEAD needs a session. While no password is set, such a
-request gets `403` ("read-only"). Set the first password with
+Any request other than GET or HEAD needs a session; while no password is set it gets `403`
+("read-only"). Set the first password with
 [`POST /api/setup/password`](#login-and-session) or [`espdns passwd`](cli.md#passwd).
 
-Without a session, once a password is set, an API request gets `401`. A page request is
+Once a password is set, an API request without a session gets `401` and a page request is
 redirected to `/login.html`.
 
 ### Password grants
 
-Two things need your password again: downloading a backup, and showing a config's Wi-Fi
-password. Call `POST /api/reauth` with `{"password": "…"}`. The reply has a grant:
+Three things need your password again: changing it, downloading a backup, and showing a
+config's Wi-Fi password. Call `POST /api/reauth` with `{"password": "…"}` to get a grant:
 
 ```json
 {"reauth": "…", "expires": "…"}
 ```
 
-Send it once, in `X-Reauth: <grant>`, with the request that needs it. A grant lasts 2 minutes
-and is used up by one request. Without one, the request gets `403` with `{"reauth": true}`.
+Send it in `X-Reauth: <grant>` with the request that needs it. A grant lasts 2 minutes and
+covers one request. Without one, the request gets `403` with `{"reauth": true}`.
 
 ### Bodies and replies
 
-- Request bodies are JSON. Send `Content-Type: application/json`. Routes that need a login,
-  the login routes and the job routes refuse a POST without it (`403`). The board builder's
-  three POSTs (`/api/boards/check`, `/api/boards`, `/api/build`) don't check the header.
+- Request bodies are JSON with `Content-Type: application/json`. Routes that need a login,
+  the login routes and the job routes refuse a POST without it (`403`). Install over USB's
+  four POSTs (`/api/boards/check`, `/api/boards`, `/api/build`, `/api/build/keys`) don't
+  check it.
 - Most bodies refuse unknown fields (`400`).
 - Replies are JSON with `Cache-Control: no-store`, unless noted.
 - An error reply is `{"error": "…"}`. Some also name the form field: `{"error": "…", "field": "…"}`.
 - Files you edit (configs, zones, blocking sources, list definitions, settings) carry a
-  version: a `hash` (or `version`). Send back the version you read. If the file changed since,
-  the save gets `409` and changes nothing. Use `""` for a new file.
+  version (`hash` or `version`). Send back the one you read; if the file changed since, the
+  save gets `409` and changes nothing. Use `""` for a new file.
 
 ## Routes
 
@@ -101,6 +100,7 @@ and is used up by one request. Without one, the request gets `403` with `{"reaut
 | POST | `/api/login` | public | `{"user", "password"}` | Sets the cookie. `{"user", "token", "device", "expires"}`. `401` wrong login, `429` backing off. |
 | POST | `/api/logout` | public* | — | Ends the session, clears the cookie. `{"logged_in": false}`. |
 | POST | `/api/reauth` | login | `{"password"}` | `{"reauth": "<grant>", "expires"}`. `403` wrong password. Too many wrong passwords end the session (`401`). |
+| POST | `/api/password` | login + password | `{"password"}` | Changes the logged-in user's password. `400` with `"field": "password"` if the new one isn't taken (checked before the grant is used). Every session ends, this one too: log in again. |
 | POST | `/api/setup/password` | public | `{"user", "password"}` (`user` `""`: `admin`) | Sets the first password, then logs in as `/api/login` does. Only while no password is set (`409` after). Only from a loopback client address (`403` otherwise). Password: at least 12 characters. |
 
 \* `/api/logout` is a POST, so in practice it needs the session it ends.
@@ -109,17 +109,26 @@ and is used up by one request. Without one, the request gets `403` with `{"reaut
 
 | Method | Path | Level | Body / query | Reply |
 |--------|------|-------|--------------|-------|
-| GET | `/api/nodes` | open | — | Every node the controller knows: `id` (chip MAC), `addr`, `hostname`, `mac`, `source` (`settings`, `mdns` or `lookup`), `online`, `last_seen`, `polled`, `error`, `qps`, and `status` (the node's last [`/status`](node-endpoints.md#status), kept while it is offline). |
+| GET | `/api/nodes` | open | — | Every node the controller knows: `id` (chip MAC), `addr`, `hostname`, `mac`, `source` (`settings`, `mdns` or `lookup`), `out_of_service` (one in `settings.json` taken out of service), `online`, `last_seen`, `polled`, `error`, `qps`, and `status` (the node's last [`/status`](node-endpoints.md#status), kept while it is offline). |
 | GET | `/api/nodes/found` | login | — | `{"nodes": [...]}`: nodes found over mDNS or looked up that are not in `settings.json`, each with what adds it in `next`: `adopt`, `settings-add`, or `""` (its `refusals` say why). |
 | POST | `/api/nodes/lookup` | login | `{"address": "192.0.2.10"}` | Reads `/status` at that IPv4 address only. `{"address", "listed", "found", "answered", "error", "node"}`. A node found is listed from then on, as an mDNS one is. |
 | GET | `/api/nodes/{id}/settings` | login | `{id}`: the node ID | The node page's form: each field's value, where it comes from, and whether a change applies live or at a restart; the config file's `version`; its pending changes. Never the Wi-Fi password. |
-| POST | `/api/nodes/{id}/settings` | login | `{"settings": {...}, "version"}` | Checks the edit and adds it as a pending change of the node's config file. Returns the form again. `settings` takes `name`, `network`, `forwarders`, `tz`, `blocking` (bool), `querylog` (`{"enabled", "client"}`), and `reset` (fields to put back to the lower layer). Only for a node in `settings.json`. |
+| POST | `/api/nodes/{id}/settings` | login | `{"settings": {...}, "version"}` | Checks the edit and adds it as a pending change of the node's config file. Returns the form again. `settings` takes `name`, `network`, `forwarders`, `tz`, `blocking` (bool), `querylog` (`{"enabled", "client"}`), and `reset` (fields to put back to the lower layer). Only for a node in `settings.json`. An edit that moves the node to another address is refused with `"move"`: the new address. A node whose config file is missing or doesn't read is answered (both routes) with `"write"`: `[{"file", "draft"}]`, the files to write or correct. |
+| POST | `/api/nodes/{id}/move` | login | `{"settings": {"network"}, "version"}` | Writes only the new address to the node's config file, at once, for the `config-push` job to push next (a dry run, then the push, which confirms the node there and lists it there in `settings.json`). Refused while changes of the file wait to apply. Returns `{"file", "node", "to", "hash"}`. |
+| POST | `/api/nodes/{id}/move/undo` | login | `{"hash"}` | Puts the config file back as it was before a move whose push didn't go through, while it is still as the move wrote it. |
 
 ### Fleet state
 
 | Method | Path | Level | Body / query | Reply |
 |--------|------|-------|--------------|-------|
-| GET | `/api/key` | open | — | The release key: `source`, `present`, and `fingerprint`, or `error` and `missing`. Never the key. |
+| GET | `/api/key` | open | — | The release key: `source`, `present`, and `fingerprint`, or `error` and `missing`. Never the key. `recovery`: the recovery public key's `present`, `fingerprint`, or `error` and `missing`. `nodes_listed`: `settings.json` lists a node. `rotation`: a key rotation under way, `{"id", "release", "recovery"}` (its new keys' fingerprints), or `null`. |
+| POST | `/api/keys/release` | login | `{}` | Makes a release key in `keys/release.pem`, as `espdns key generate`. `409` if one is there, or a node is listed. `/api/key`'s reply. |
+| GET | `/api/keys/release.pub` | open | — | The release key's public half, the 65-byte point, as `release.pub`. `404` without a key. |
+| POST | `/api/keys/recovery` | login | `{"public_key": "<base64 of the 65-byte point>", "replace": false}` | Sets the recovery key's public half, `keys/recovery.pub` (made in the browser, or read from a file there; any other field, a private key, is refused). The same key again changes nothing. Another: `409` unless `replace`, and always while a node is listed; `409` too if a listed node trusts another recovery key. `400` with `field` for a malformed key or the release key. `/api/key`'s reply. |
+| GET | `/api/keys/rotation` | open | — | `{"pending", "rotations"}`: the rotation under way (or `null`) and the last ten, newest first. Each is its `plan.json` (`id`, `old` and `new` keys' fingerprints, `compromised`, `nodes` with each one's `state`: `prepared`, `keys` or `done`, `repush`, `missing`, `error`; `finished`), with `signed` (by node ID), `signed_all` and `sign_command` (the offline signing, from the controller's directory). |
+| POST | `/api/keys/rotation` | login | `{"new_release": "generate"\|"keep", "new_recovery": "<base64 of a public key>", "recovery_pub": "<base64>", "compromised": false}` | Prepares a rotation for every node in `settings.json`, as `espdns key rotate prepare` (the nodes' `/status` read now). `new_recovery` empty: the recovery key stays; `recovery_pub`: the one the nodes trust, if `keys/recovery.pub` isn't there. Any other field (a private key) is refused. `201` with the rotation; `409` with why (a rotation under way, a node out of service, not pinned or not answering, ...). |
+| POST | `/api/keys/rotation/{id}/signed` | login | `{"release": "<base64 of a node's release.bin>"}` | A node's KEYS release signed elsewhere: checked (the release prepared for one of the rotation's nodes, signed with the recovery key they trust) and kept. The rotation. `400` with `field` if it isn't. |
+| POST | `/api/keys/rotation/{id}/discard` | login | `{}` | Removes a rotation no node has taken (and `keys/release.next.pem`). `409` once a node took it. |
 | GET | `/api/lock` | open | — | `{"held": false}`, or `{"held": true, "holder", "text"}`: who holds the fleet lock. |
 | GET | `/api/actions` | open | `?n=` (default 100) | The action log's newest `n` entries, newest first. |
 | GET | `/api/dashboard` | open | — | The dashboard: `now`, `window_s`, `bin_s`, `bins`, `fleet` (rates and time series: queries a second, blocked, p95 latency, upstream p95 and failures, cache hit rate, SERVFAIL) and `nodes`. Built from each node's `/metrics`, in memory only. |
@@ -131,9 +140,10 @@ and is used up by one request. Without one, the request gets `403` with `{"reaut
 
 | Method | Path | Level | Body | Reply |
 |--------|------|-------|------|-------|
-| GET | `/api/setup` | open | — | What is set up: the password, `settings.json`, the release key, the zone primary and its token, the nodes. `first_run` while there is neither a password nor `settings.json`. The first run's steps. |
-| GET | `/api/settings` | open | — | `settings.json` as the form edits it (every field, empty ones too), its `version`, the zone primary kinds, and whether the token is set. Never the token. |
-| POST | `/api/settings` | login | `{"settings": {...}, "version", "primary_token", "remove_primary_token"}` | Replaces `settings.json` whole if it is still `version` (`""` while there is no file; `409` otherwise). Writes or removes the zone primary's token with it. Returns the form again. A refused field: `{"error", "field"}`. See [settings.md](settings.md#settingsjson). |
+| GET | `/api/setup` | open | — | What is set up: the password, `settings.json`, the keys (`release_key`, `recovery_key`, `keys_saved`), the zone primary (`primary`: its address), the nodes. `first_run` while there is neither a password nor `settings.json`. The first run's steps (`password`, `keys`, `primary`, `first_node`, `second_node`, `router`, `blocking`), and `done` once every one is; `blocklists`, the lists defined. `keys` is done with both keys there and `keys` marked. |
+| POST | `/api/setup/step` | login | `{"step"}`: `keys`, `primary`, `router` or `blocking` | Marks a first-run step done that the controller can't see done (recovery.pem saved offline: only once both keys are there; the router told) or that was skipped (the zone primary, blocking). Kept in `setup.json` in the data directory. `400` with `field` for another step. The setup again. |
+| GET | `/api/settings` | open | — | `settings.json` as the form edits it (every field, empty ones too), its `version`, and `primary`: the zone primary's `address`, `allows` and `zones`, `set`, and `uncovered`, the nodes in `settings.json` whose address is in none of the networks it allows. |
+| POST | `/api/settings` | login | `{"settings": {...}, "version"}` | Replaces `settings.json` whole if it is still `version` (`""` while there is no file; `409` otherwise). Returns the form again. A refused field: `{"error", "field"}`. See [settings.md](settings.md#settingsjson). |
 
 ### Node configs
 
@@ -145,6 +155,7 @@ Node configs are files in `<data>/configs`. See [node-config.md](node-config.md)
 | GET | `/api/configs/{name}` | login | `?reveal=1` (needs a [password grant](#password-grants)) | The config's text and history. The Wi-Fi password is hidden unless revealed. |
 | POST | `/api/configs/{name}/check` | login | `{"text", "board", "node"}` | The checks, as the node runs them. Never saved. |
 | POST | `/api/configs/{name}` | login | `{"text", "hash"}` | Saves the file (`hash`: the version edited; `""` for a new file). `409` if it changed. Where the text still has the hidden password marker, the saved password is kept. |
+| POST | `/api/configs/{name}/delete` | login | `{"hash"}` | Deletes the file, kept in its history. `409` if it changed, if a node runs it, or if an adoption or a push gave it to a node. |
 
 ### Hosted zones
 
@@ -159,7 +170,7 @@ Hosted zones are RFC 1035 master files in `<data>/zones/<zone>.zone`.
 | POST | `/api/zones/{name}/serial` | login | `{"text"}` | `{"text", "serial", "was"}`: the text with the SOA serial raised above the saved file's and the nodes'. |
 | POST | `/api/zones/{name}` | login | `{"text", "hash"}` | Saves the file. `409` if it changed. |
 | POST | `/api/zones/{name}/delete` | login | `{"hash"}` | Deletes it. The file is kept in the history. |
-| GET | `/api/zone-inventory` | login | — | Every zone the fleet answers for (hosted, secondary, forward), its source and the fleet's state, and the zone primary. |
+| GET | `/api/zone-inventory` | login | — | Every zone the fleet answers for (hosted, secondary, forward), its source and the fleet's state, and the zone primary (`address`, `allows`, `zones`, `set`; no node named). |
 | GET | `/api/zone-lookup` | login | `?name=<zone>` | Where a zone lives: the fleet's already, a configured primary's, or none. Sends each configured primary one SOA query. |
 
 ### Blocking
@@ -172,8 +183,14 @@ Hosted zones are RFC 1035 master files in `<data>/zones/<zone>.zone`.
 | GET | `/api/blocking/sources/{name}` | login | `?version=` | One source file: its text (the start of a big one), hash and history. |
 | POST | `/api/blocking/sources/{name}` | login | `{"text", "hash"}` | Saves it (`""` hash: a new file). At most 32 MiB. |
 | POST | `/api/blocking/sources/{name}/delete` | login | `{"hash"}` | Deletes it, kept in the history. Refused for a file a list reads. |
+| POST | `/api/blocking/refresh` | login | `{}`, or `{"list": "<name>", "accept_change": true}` | `{}`: checks every downloaded list for a new version now (`202`, `{"checking": true}`; `409` while a check runs). With `accept_change`: sends that list's new version, which the size-change check refused, this once (a [`refresh`](#job-kinds) job, `202`, `{"job"}`). |
+| POST | `/api/blocking/refresh/schedule` | login | `{"every": "off" \| "6h" \| "12h" \| "24h" \| "168h"}` | Saves how often downloaded lists are checked (`settings.json`'s `blocklist_refresh`; `"24h"`, the default, is saved as none). `400` with `field` for another value. `{"every"}`. |
 
-A compile is a job: kind [`blocklist`](#job-kinds). Nothing here pushes a list.
+A compile is a job: kind [`blocklist`](#job-kinds). Nothing here pushes a list; a
+[refresh](#the-refresh) does. `GET /api/blocking/setup` (the Blocking page) has `refresh`:
+`every`, `choices`, `checked`, `updated`, `next`, `outcome` (`unchanged`, `updating`,
+`updated`, `refused`, `failed` or `waiting`), `message`, `over` (a refusal's numbers),
+`checking` and `sending`; and each of its `lists` a `download`, `updated` and `checked`.
 
 ### Pending changes and updates
 
@@ -202,14 +219,14 @@ The push itself is a job: kind [`rollout`](#job-kinds).
 
 | Method | Path | Level | Body | Reply |
 |--------|------|-------|------|-------|
-| GET | `/api/adopt` | login | — | The nodes found (unadopted ones to adopt; adopted ones not in `settings.json`), the configs, the zone primary. |
-| POST | `/api/adopt/preview` | login | An [adoption request](#adoption-request) | The address it would get, the config checked for the node, the zones. Read only, no job. |
-| GET | `/api/primary/certificate` | login | — | The certificate the zone primary in `settings.json` presents now (read in a TLS handshake; no token is sent), its fingerprint, whether the system's roots trust it, and the pin. |
-| POST | `/api/primary/certificate` | login | `{"sha256"}` | Pins the certificate with that fingerprint, if the primary still presents it (`409` if not). |
-| DELETE | `/api/primary/certificate` | login | — | Removes the pin. |
-| GET | `/api/primary` | login | — | Each secondary zone's transfer and NOTIFY lists at the primary (or, for a primary changed by hand, what each node needs), and whether every node in `settings.json` is in them. |
+| GET | `/api/adopt` | login | — | The nodes found (unadopted ones to adopt; adopted ones not in `settings.json`), the configs, the zone primary (as `GET /api/settings` has it). |
+| POST | `/api/adopt/preview` | login | An [adoption request](#adoption-request) | The address it would get, the config checked for the node, the zones, and `advice`: what to allow once on the zone primary, when the node's address is in none of the networks it allows. Read only, no job. |
 
-Adoption itself is a job: kinds [`adopt`, `primary` and `settings-add`](#job-kinds).
+Adoption itself is a job: kinds [`adopt` and `settings-add`](#job-kinds). Nothing changes on
+the zone primary. The job's progress has `primary`: `{"primary", "zones", "advice"}`, with
+`advice` set when the node's address is in none of the networks the primary allows:
+"Your zone primary must allow zone transfers from 192.0.2.60: allow its network (e.g.
+192.0.2.0/24) there once." It's said once and never stops the adoption.
 
 ### Boards and flashing
 
@@ -219,27 +236,30 @@ Adoption itself is a job: kinds [`adopt`, `primary` and `settings-add`](#job-kin
 | POST | `/api/boards/check` | session | A board definition | `{"errors": [...], "warnings": [...]}`. |
 | POST | `/api/boards` | session | A board definition | Saves it to `<data>/boards`. `201` with the board. |
 | GET | `/api/images` | open | — | `{"images", "known"}`: the imported chip images and the image names boards may use. |
-| POST | `/api/build` | session | `{"name": "<catalog board>"}` or `{"board": {...}}`, with `"network": {"address": "192.0.2.52/24", "gateway": "192.0.2.1"}` or `{"address": "dhcp"}` | Builds a flash image for the board with that address. `{"id", "board", "chip"}`. `422` if it can't be built (no network, chip image not imported). |
+| GET | `/api/firmware` | open | — | `{"images": [{"image", "version", "built", "origin", "label", "fingerprint", "error"}], "release_url", "project_key"}`: each imported chip image and where it came from (`origin` `project`, `own` or `build`; `label` "project release v0.0.2", "your build v0.0.2" or "your build"), where Get firmware fetches from, and the project key's fingerprint (`""`: none, so nothing can be fetched). |
+| POST | `/api/build` | session | `{"name": "<catalog board>"}` or `{"board": {...}}`, with `"network": {"address": "192.0.2.52/24", "gateway": "192.0.2.1"}` or `{"address": "dhcp"}` | Builds a flash image for the board with that address and the controller's two public keys in its keys partition (0x1b000). `{"id", "board", "chip", "keys"}` (`keys`: the fingerprints). `422` if it can't be built (no network, "set up your keys first", chip image not imported or exported before the keys partition). |
+| POST | `/api/build/keys` | session | `{}` | Write keys only: the keys partition alone. `{"id", "keys", "keys_only": true}`; `/build/{id}/image.bin` is the 8 KB the page writes at 0x1b000 itself (esptool-js: no erase, read back); no ESP Web Tools manifest (`404`). `422` "set up your keys first". |
 | GET | `/build/{id}/manifest.json` | open | — | The ESP Web Tools manifest for that build. |
 | GET | `/build/{id}/image.bin` | open | — | The flash image (`application/octet-stream`). |
 
-The two `/build/` routes need only the session cookie, not the `X-Session-Token` header. "session" means any session, as every POST needs. These three POSTs have no further check.
-The controller keeps the last 32 builds or so in memory. Flashing from the browser (Web Serial)
+The two `/build/` routes need only the session cookie, not the `X-Session-Token` header.
+"session" means any session, as every POST needs; these four POSTs have no further check. The
+controller keeps the last 32 or so builds in memory. Flashing from the browser (Web Serial)
 works because the dashboard is on localhost.
 
 ### Backup
 
 | Method | Path | Level | Body | Reply |
 |--------|------|-------|------|-------|
-| GET | `/api/backup` | login | — | What a backup would hold: `data_dir`, `parts` (each top-level entry, its size, and whether it is included), `format`, `min_passphrase` (12), and `lock` if the fleet lock is held. |
+| GET | `/api/backup` | login | — | What a backup would hold: `data_dir`, `parts` (each top-level entry, its size, and whether it is included), `format`, `min_passphrase` (12), `last` (when a backup was last made whole, downloaded from the page or by `espdns backup`; absent if never), and `lock` if the fleet lock is held. |
 | POST | `/api/backup` | login + password | `{"passphrase"}` or `{"recipient": "age1…"}`, and `"firmware": true` to include `firmware/` | The encrypted backup as a download (`application/octet-stream`). `409` if the fleet lock is held (it doesn't wait). |
 
 Restore is not in the API. Use [`espdns restore`](cli.md#restore) with the controller stopped.
 
 ### Jobs
 
-Anything that changes nodes, and a few other long tasks, run as jobs: one at a time, under the
-fleet lock, in the action log with the logged-in user, their progress live.
+Anything that changes nodes, and a few other long tasks, runs as a job: one at a time, under
+the fleet lock, in the action log with the logged-in user, progress live.
 
 | Method | Path | Level | Body / query | Reply |
 |--------|------|-------|--------------|-------|
@@ -268,7 +288,7 @@ A comment every 15 seconds keeps the connection open.
 
 | Method | Path | Level | Reply |
 |--------|------|-------|-------|
-| GET | `/` and other paths | page | The dashboard's pages. `/login.html`, `/style.css`, `/common.js` and every other `.js` and `.css` file are public. Other pages need a session once a password is set (else a redirect to `/login.html`). |
+| GET | `/` and other paths | page | The dashboard's pages. `/login.html`, `/shell.css`, `/common.js` and every other `.js` and `.css` file are public. Other pages need a session once a password is set (else a redirect to `/login.html`). |
 
 ## Job kinds
 
@@ -277,7 +297,7 @@ fields.
 
 ### Node actions
 
-Each needs the release key in the data directory. The node must be one the controller knows.
+Each needs the release key in the data directory and a node the controller knows.
 
 | Kind | Params | What it does | Which nodes |
 |------|--------|--------------|-------------|
@@ -286,6 +306,10 @@ Each needs the release key in the data directory. The node must be one the contr
 | `flush` | `{"node"}` | Drops the node's cached answers. | Nodes in `settings.json`. |
 | `revert` | `{"node", "list": "blocklist"}` | Goes back to the older copy the node keeps: `blocklist`, `overrides` or `zones`. | Nodes in `settings.json`. |
 | `reboot-pending` | `{"node"}` | A coordinated reboot of a node a release left waiting for one. | Nodes in `settings.json`. |
+
+During a key rotation, these and the fleet jobs sign for each node with the key it trusts:
+the new release key (`keys/release.next.pem`) for a node that has it, `release.pem` for the
+others.
 
 ### Fleet jobs
 
@@ -296,14 +320,31 @@ Each needs the release key in the data directory. The node must be one the contr
 | `config-push` | `{"node", "config", "dry_run": true}`, then `{"node", "config", "after": "<dry run job ID>"}` | Sends one config file to one node in `settings.json`. The push must name a dry run of the same node and file that passed in the last 15 minutes, with the file unchanged. |
 | `rollout` | A [rollout request](#rollout-request) with `"dry_run": true`, then the same with `"after": "<dry run job ID>"` | The rolling push, one node at a time. The push must name a passing dry run of the same request with the same file contents, from the last 15 minutes. Each dry run serves one push. |
 | `apply` | `{"canary": "<node>", "soak_s": 60, "accept_change": ["<list>"]}`, all optional | Sends every pending change as one safe rolling change (below). |
+| `fetch-release` | `{"version": "v0.0.2"}`, optional (default: the newest published) | Get firmware: downloads a published release's chip images, `SHA256SUMS` and its signature from `settings.json`'s `release_url` (else the controller's `-release-url`, GitHub), checks them with the project's key (`/keys/project.pub`), and imports them, as `espdns release fetch`. Not queued without the project's key. Result: `{"version", "images", "label", "fingerprint", "from"}`. |
+| `key-rotate` | `{"id": "<rotation>", "nodes": ["<address>"]}` (`nodes` optional: only those this time) | Pushes a signed key rotation, as `espdns key rotate push`: one node at a time, its KEYS release, then its stored config, hosted zones, overrides and blocklist signed again with the new key, then its health; stops at the first failure (run it again to go on); swaps the controller's keys when every listed node has the new ones. Not queued unless every node still to take its release has it signed. Progress and result: the rotation. |
+| `refresh` | `{"lists": ["<name>"], "accept_change": false}` | Sends downloaded lists whose sources changed, as an apply of them alone ([below](#the-refresh)). The schedule starts it (by `""`, the controller); `accept_change` takes a size change over the limit once. |
 
 ### Adoption jobs
 
 | Kind | Params | What it does |
 |------|--------|--------------|
 | `adopt` | An [adoption request](#adoption-request) with `"dry_run": true`, then the same with `"after": "<dry run job ID>"` | Adopts a node. The adoption must follow a passing dry run of the same request and files, from the last 15 minutes. One adoption per dry run. |
-| `primary` | `{"zone", "address", "action": "allow"}` or `"remove"` | Adds a node in `settings.json` to one zone's transfer and NOTIFY lists at the primary, or takes an address that is no node off them. Only for a primary the controller drives over its API. |
 | `settings-add` | `{"node": "<address>"}` | Adds a node the controller found, already adopted, to `settings.json`. |
+
+### Service jobs
+
+The node page's **Take out of service**, **Return to service** and **Remove from the group**
+([operations.md](../operations.md#taking-a-node-out-of-service)), as `espdns node out`, `in`
+and `remove`. Each is for a node in `settings.json`.
+
+| Kind | Params | What it does |
+|------|--------|--------------|
+| `node-out` | `{"node": "<address>"}` | Adds it to `settings.json`'s `out_of_service`. Works while the node is offline. From then on an apply, a rollout, a refresh, a config push and the fleet check skip it and say so (`<address>: skipped: out of service`), and it isn't counted for the last-healthy-node rule. Refused while a key rotation under way includes it. |
+| `node-in` | `{"node": "<address>"}` | Returns it to service. It must answer and trust the controller's release key; else it fails and the node stays out. Then it's sent, alone, what it missed: its config, the hosted zones, the overrides, its blocklist, and the newest firmware for it if it runs older. Each is a dry run first, then the push, as an apply's (progress and result as an apply's). Only once all are done is it in service again. Needs the release key. |
+| `node-remove` | `{"node": "<address>"}` | Takes it out of `settings.json` (`nodes`, `out_of_service`, and `canary` if it was). Its config file is kept and the node isn't touched. Works while the node is offline. Not queued while another job names it or changes every node (an apply, a refresh, a key rotation), while a key rotation under way includes it, or while a pending firmware update names it. |
+
+`/api/nodes` marks a node out of service with `"out_of_service": true`; `/api/updates` too,
+and offers it no update.
 
 ### Rollout request
 
@@ -338,8 +379,8 @@ The body of `POST /api/adopt/preview` and the params of an `adopt` job:
 | `config` | A file in `configs/`. Required. |
 | `address` | `""` (the config's, else the one it runs on), `a.b.c.d/nn`, or `"dhcp"` (never on a network in `no_dhcp`). |
 | `gateway` | With a static address. |
+| `static` | As + Add node sends it: a fixed `address` with its `gateway` (an address in the node's own network), or `"dhcp"` with `reserved`; never left out. |
 | `reserved` | With `dhcp`: the address is reserved for the node in your DHCP server. |
-| `primary_done` | The primary is changed by hand, and the changes the dry run named were made. |
 | `add_to_settings` | Once adopted, add its address to `settings.json`. |
 | `dry_run` | `true` for the dry run. |
 | `after` | The adoption: the dry run's job ID. |
@@ -361,8 +402,23 @@ Params, all optional: `canary` (one of `settings.json`'s nodes; default its `can
 `soak_s` (60 to 3600), `accept_change` (lists whose size change is taken this once).
 
 If a blocklist's size changed more than allowed, the apply ends `stopped` with `questions` in
-its result, and pushes nothing. Apply again with the params a question names to take the
+its result and pushes nothing. Apply again with the params a question names to take the
 change.
 
-If an apply stops part way, the changes stay pending, marked written once their files are.
+If an apply stops part way, the changes stay pending (marked written once their files are).
 Applying again finishes them; discarding puts the files back.
+
+### The refresh
+
+On the schedule `settings.json`'s `blocklist_refresh` sets (daily by default), the controller
+checks each list with a URL source, outside any job: a conditional GET (`If-None-Match`,
+`If-Modified-Since`) of each URL source, the body otherwise only hashed and compared with the
+version the nodes run (kept in `blocking/refresh.json`).
+
+- **Unchanged**: marked checked; nothing in the action log.
+- **Changed**: starts a `refresh` job: the apply's **check**, **compile**, **dry run** and
+  **push** steps for that list alone, with no pending change and no file written.
+- **Size change over the limit**: the job ends `failed` (`refused by the size-change check:
+  ...`), nothing pushed, and the schedule doesn't try that version again.
+- **A list a pending change edits** (its definition, or a file it reads) is left to that
+  change's apply.

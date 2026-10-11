@@ -70,10 +70,26 @@ var Images = map[string]Chip{
 	"esp32p4-rev1":  chipP4,
 	"esp32p4":       chipP4,
 	"esp32s3-octal": withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
+	"esp32s3-eth":   withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
 	"esp32s3-quad":  chipS3,
 	"esp32":         chipESP32,
 	"esp32c3":       chipC3,
 	"esp32c6":       chipC6,
+}
+
+// Siblings are chip images of the same chip, PSRAM and flash layout, built differently
+// (esp32s3-eth is esp32s3-octal with speed bought with internal RAM, for wired boards):
+// a node moves between them over the air. Each takes the other's board definition and
+// signed releases (firmware/CMakeLists.txt has the same pairs).
+var Siblings = map[string]string{
+	"esp32s3-octal": "esp32s3-eth",
+	"esp32s3-eth":   "esp32s3-octal",
+}
+
+// Swappable says whether a node running chip image from may be moved to chip image to over the
+// air: the same image, or its sibling.
+func Swappable(from, to string) bool {
+	return from != "" && (from == to || Siblings[from] == to)
 }
 
 func withReserved(c Chip, from, to int, why string) Chip {

@@ -1,0 +1,247 @@
+package dist
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/skitzo2000/espdns/controller/internal/release"
+	"github.com/skitzo2000/espdns/controller/internal/secfile"
+)
+
+// DefaultForge is where the project's releases are published: its GitHub repository. A
+// mirror on another forge works the same way: settings.json's "release_url", or espdns
+// release fetch -url.
+const DefaultForge = "https://github.com/skitzo2000/espdns"
+
+// FetchOptions say which release Fetch gets, from where.
+type FetchOptions struct {
+	Forge   string // the repository's page, https://<host>/<owner>/<repo> ("": DefaultForge)
+	Version string // "0.0.3" or "v0.0.3"; "": the newest published one
+	// ProjectPub is the project's release public key (keys/project.pub): the only key a
+	// fetched release is taken with.
+	ProjectPub []byte
+	Client     *http.Client         // nil: one with a timeout
+	Logf       func(string, ...any) // progress; nil: none
+}
+
+// Forge is a repository on GitHub or another forge, from its page's URL.
+type Forge struct {
+	Base        string // https://<host>/<owner>/<repo>
+	host, owner string
+	repo        string
+	scheme      string
+}
+
+var forgeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+
+// ParseForge reads a repository's URL: http or https, a host, and /<owner>/<repo>.
+func ParseForge(s string) (Forge, error) {
+	u, err := url.Parse(strings.TrimSuffix(strings.TrimSpace(s), "/"))
+	if err != nil {
+		return Forge{}, fmt.Errorf("release URL %q: %v", s, err)
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		len(parts) != 2 || !forgeName.MatchString(parts[0]) || !forgeName.MatchString(parts[1]) {
+		return Forge{}, fmt.Errorf("release URL %q: not a repository's page, https://<host>/<owner>/<repo>", s)
+	}
+	repo := strings.TrimSuffix(parts[1], ".git")
+	return Forge{Base: u.Scheme + "://" + u.Host + "/" + parts[0] + "/" + repo, host: u.Host, owner: parts[0], repo: repo, scheme: u.Scheme}, nil
+}
+
+// api is the forge's releases API: GitHub's, else the /api/v1 one.
+func (f Forge) api() string {
+	if strings.EqualFold(f.host, "github.com") {
+		return "https://api.github.com/repos/" + f.owner + "/" + f.repo + "/releases?per_page=30"
+	}
+	return f.scheme + "://" + f.host + "/api/v1/repos/" + f.owner + "/" + f.repo + "/releases?limit=30"
+}
+
+// Download is a release file's URL, the same on GitHub and the other forges.
+func (f Forge) Download(tag, file string) string {
+	return f.Base + "/releases/download/" + url.PathEscape(tag) + "/" + url.PathEscape(file)
+}
+
+// Fetch downloads a release's SHA256SUMS and SHA256SUMS.sig, checks the signature with the
+// project's key, then downloads the chip images' tarballs it lists, each checked against
+// it as it arrives, into a new directory in work (removed after), and imports them into
+// images (Import: signer the project, with their provenance). The other files it lists (the
+// controller image's reference) are not downloaded. The caller holds the fleet lock, as for any import.
+func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, error) {
+	var out Imported
+	if len(o.ProjectPub) != 65 || o.ProjectPub[0] != 4 {
+		return out, errors.New("no project public key (" + ProjectPub + "): a fetched release is checked with it")
+	}
+	src := o.Forge
+	if src == "" {
+		src = DefaultForge
+	}
+	f, err := ParseForge(src)
+	if err != nil {
+		return out, err
+	}
+	logf := o.Logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	c := o.Client
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Minute}
+	}
+	tag := o.Version
+	if tag == "" {
+		if tag, err = newest(ctx, c, f); err != nil {
+			return out, err
+		}
+		logf("%s: the newest release is %s", f.Base, tag)
+	}
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	v := strings.TrimPrefix(tag, "v")
+	if !version.MatchString(v) {
+		return out, fmt.Errorf("version %q: not vMAJOR.MINOR.PATCH", o.Version)
+	}
+
+	if err := secfile.MkdirAll(work); err != nil {
+		return out, err
+	}
+	dir, err := os.MkdirTemp(work, ".fetch-")
+	if err != nil {
+		return out, err
+	}
+	defer os.RemoveAll(dir)
+	get := func(name string, max int64, sum string) error {
+		u := f.Download(tag, name)
+		logf("downloading %s", u)
+		n, got, err := download(ctx, c, u, filepath.Join(dir, name), max)
+		if err != nil {
+			return fmt.Errorf("%s: %w", u, err)
+		}
+		if sum != "" && got != sum {
+			return fmt.Errorf("%s: SHA-256 %s, not the %s signed in %s: not imported", name, got, sum, SumsFile)
+		}
+		logf("%s: %d bytes", name, n)
+		return nil
+	}
+	if err := get(SumsFile, 1<<20, ""); err != nil {
+		return out, err
+	}
+	if err := get(SigFile, 1<<10, ""); err != nil {
+		return out, err
+	}
+	sums, err := os.ReadFile(filepath.Join(dir, SumsFile))
+	if err != nil {
+		return out, err
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, SigFile))
+	if err != nil {
+		return out, err
+	}
+	// The signature first: nothing more is downloaded for a release the key didn't sign.
+	if !release.VerifySig(o.ProjectPub, sums, sig) {
+		return out, fmt.Errorf("%s of %s is not the project's release key's (%s) signature: not imported",
+			SigFile, tag, release.Fingerprint(o.ProjectPub))
+	}
+	logf("%s: signed by the project's release key %s", SumsFile, release.Fingerprint(o.ProjectPub))
+	list, err := ParseSums(sums)
+	if err != nil {
+		return out, err
+	}
+	n := 0
+	for _, s := range list {
+		cv, _, ok := chipOf(s.Name)
+		if !ok {
+			continue
+		}
+		if cv != v {
+			return out, fmt.Errorf("%s lists %s, not version %s", SumsFile, s.Name, v)
+		}
+		if err := get(s.Name, maxTarball, s.SHA256); err != nil {
+			return out, err
+		}
+		n++
+	}
+	if n == 0 {
+		return out, fmt.Errorf("release %s has no chip images", tag)
+	}
+	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, true)
+}
+
+// newest is the tag of the newest published release (not a draft) named vMAJOR.MINOR.PATCH;
+// a pre-release counts (every 0.x release is one).
+func newest(ctx context.Context, c *http.Client, f Forge) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.api(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("the releases of %s: %w", f.Base, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("the releases of %s: %s", f.Base, resp.Status)
+	}
+	var rels []struct {
+		Tag   string `json:"tag_name"`
+		Draft bool   `json:"draft"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rels); err != nil {
+		return "", fmt.Errorf("the releases of %s: %v", f.Base, err)
+	}
+	for _, r := range rels {
+		if !r.Draft && strings.HasPrefix(r.Tag, "v") && version.MatchString(r.Tag[1:]) {
+			return r.Tag, nil
+		}
+	}
+	return "", fmt.Errorf("%s has no published release yet", f.Base)
+}
+
+// download writes url's body to path, at most max bytes, and gives its size and SHA-256.
+func download(ctx context.Context, c *http.Client, u, path string, max int64) (int64, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, "", errors.New(resp.Status)
+	}
+	if resp.ContentLength > max {
+		return 0, "", fmt.Errorf("%d bytes, more than %d", resp.ContentLength, max)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return 0, "", err
+	}
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(file, h), io.LimitReader(resp.Body, max+1))
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return n, "", err
+	}
+	if n > max {
+		return n, "", fmt.Errorf("more than %d bytes", max)
+	}
+	return n, hex.EncodeToString(h.Sum(nil)), nil
+}

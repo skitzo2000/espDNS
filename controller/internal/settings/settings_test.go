@@ -9,9 +9,28 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 )
+
+// blocklist_refresh: none is every day, "off" none, a time from an hour to 30 days;
+// anything else is refused by its field.
+func TestBlocklistRefresh(t *testing.T) {
+	for v, want := range map[string]time.Duration{"": 24 * time.Hour, "off": 0, "6h": 6 * time.Hour, "168h": 168 * time.Hour, "720h": 720 * time.Hour} {
+		s, err := Parse([]byte(`{"blocklist_refresh": "` + v + `"}`))
+		if err != nil || s.Refresh() != want {
+			t.Errorf("%q: %v %v", v, s.Refresh(), err)
+		}
+	}
+	for _, v := range []string{"30m", "721h", "daily", "-6h", "0"} {
+		_, err := Parse([]byte(`{"blocklist_refresh": "` + v + `"}`))
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Field != "blocklist_refresh" {
+			t.Errorf("%q taken: %v", v, err)
+		}
+	}
+}
 
 // The repo's example (configs/example-settings.json, which make data never copies) loads,
 // with every field it shows, on documentation addresses only (RFC 5737). The repo has no
@@ -20,11 +39,11 @@ func TestExample(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	s, err := Load(filepath.Join(repo, "configs", "example-settings.json"))
 	if err != nil || len(s.Nodes) == 0 || len(s.DNSPeers) == 0 || s.Canary == "" || len(s.NoDHCP) == 0 ||
-		s.ZonePrimary().Kind != primary.KindManual || len(s.InternalSources) == 0 {
+		s.ZonePrimary().Address == "" || len(s.ZonePrimary().Allows) == 0 || len(s.InternalSources) == 0 || s.BlocklistRefresh == "" {
 		t.Fatal(s, err)
 	}
 	doc := netip.MustParsePrefix("192.0.2.0/24")
-	for _, a := range append(append(append([]string{s.Canary}, s.Nodes...), s.DNSPeers...), s.InternalSources...) {
+	for _, a := range append(append(append([]string{s.Canary, s.ZonePrimary().Address}, s.Nodes...), s.DNSPeers...), s.InternalSources...) {
 		if !doc.Contains(netip.MustParseAddr(a)) {
 			t.Errorf("%s: not a documentation address", a)
 		}
@@ -142,54 +161,90 @@ func TestSave(t *testing.T) {
 	}
 }
 
-// The technitium kind's "url": https://host[:port] only. A plain http one (loopback too)
-// already in the file still loads (the primary paused: primary.Config.CheckSaved); a save
-// through POST /api/settings refuses it (primary.Config.Check, cmd/espdns-controller).
-func TestTechnitium(t *testing.T) {
-	for v, ok := range map[string]bool{"https://192.0.2.254:53443": true, "https://dns.example": true, "https://x:1/": true,
-		"http://192.0.2.254:5380": true, "http://127.0.0.1:5380": true, "http://x:1/": true,
-		"192.0.2.254:5380": false, "ftp://x": false, "https://u:p@x": false, "https://x/api": false,
-		"https://x?token=1": false, "https://": false, "https://x#a": false} {
-		if _, err := Parse([]byte(`{"primary": {"kind": "technitium", "url": "` + v + `"}}`)); (err == nil) != ok {
-			t.Errorf("%s: %v", v, err)
+// The zone primary: "primary" is its address and the networks it allows zone transfers
+// from, checked; an older file's API fields ("kind", "url", "cert_sha256") are accepted and
+// ignored (the API's IP address taken as the address when none is given), anything else
+// refused; none: the zero Config.
+func TestPrimary(t *testing.T) {
+	pin := strings.Repeat("0f", 32)
+	for _, c := range []struct {
+		json    string
+		address string
+		allows  []string
+		zones   []string
+		ignored []string
+		bad     string
+	}{
+		{json: `{}`},
+		{json: `{"primary": {}}`},
+		{json: `{"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24", "198.51.100.0/25"], "zones": ["home.example", "_x.lab.example"]}}`,
+			address: "192.0.2.254", allows: []string{"192.0.2.0/24", "198.51.100.0/25"}, zones: []string{"home.example", "_x.lab.example"}},
+		// An older file: loads, its API fields ignored
+		{json: `{"primary": {"kind": "manual"}}`, ignored: []string{"kind"}},
+		{json: `{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "` + pin + `"}}`,
+			address: "192.0.2.254", ignored: []string{"kind", "url", "cert_sha256"}},
+		{json: `{"primary": {"kind": "technitium", "url": "http://dns.example:5380"}}`, ignored: []string{"kind", "url"}},
+		{json: `{"primary": {"kind": "technitium", "url": "https://192.0.2.9", "address": "192.0.2.254"}}`,
+			address: "192.0.2.254", ignored: []string{"kind", "url"}},
+		{json: `{"primary": {"token": "x"}}`, bad: "unknown field"},
+		{json: `{"technitium": "http://192.0.2.254:5380"}`, bad: "unknown field"},
+		{json: `{"primary": {"address": "dns.example"}}`, bad: `"address": "dns.example" is not an IPv4 address`},
+		{json: `{"primary": {"address": "2001:db8::1"}}`, bad: "not an IPv4 address"},
+		{json: `{"primary": {"allows": ["192.0.2.1/24"]}}`, bad: "192.0.2.1/24 is not a network (192.0.2.0/24 is)"},
+		{json: `{"primary": {"allows": ["192.0.2.0"]}}`, bad: "not an IPv4 network"},
+		{json: `{"primary": {"allows": ["192.0.2.0/24", "192.0.2.0/24"]}}`, bad: "192.0.2.0/24 twice"},
+		{json: `{"primary": {"zones": ["Home.example"]}}`, bad: `"zones": "Home.example" is not a zone name`},
+		{json: `{"primary": {"zones": ["home.example."]}}`, bad: "not a zone name"},
+		{json: `{"primary": {"zones": ["-a.example"]}}`, bad: "not a zone name"},
+		{json: `{"primary": {"zones": ["home.example", "home.example"]}}`, bad: "home.example twice"},
+	} {
+		s, err := Parse([]byte(c.json))
+		zp := s.ZonePrimary()
+		switch {
+		case c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)):
+			t.Errorf("%s: %v, want %q", c.json, err, c.bad)
+		case c.bad == "" && (err != nil || zp.Address != c.address || !slices.Equal(zp.Allows, c.allows) || !slices.Equal(zp.Zones, c.zones) ||
+			!slices.Equal(zp.Ignored(), c.ignored)):
+			t.Errorf("%s: %+v %v %v", c.json, zp, zp.Ignored(), err)
+		}
+	}
+	// Written back: the API fields dropped, and a "primary" left empty dropped whole.
+	path := filepath.Join(t.TempDir(), File)
+	for in, want := range map[string]string{
+		`{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "` + pin + `"}}`: `"primary": {
+    "address": "192.0.2.254"
+  }`,
+		`{"nodes": ["192.0.2.53"], "primary": {"kind": "manual"}}`: `"nodes"`,
+	} {
+		s, err := Parse([]byte(in))
+		if err == nil {
+			err = Save(path, s)
+		}
+		b, _ := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(b), want) || strings.Contains(string(b), "kind") || strings.Contains(string(b), "url") ||
+			(want == `"nodes"` && strings.Contains(string(b), "primary")) {
+			t.Errorf("%s: wrote %s, %v", in, b, err)
 		}
 	}
 }
 
-// The zone primary: "primary" checked by kind (strictly: no field but kind, url and
-// cert_sha256); the old key "technitium": "<url>" refused (greenfield); none: the zero
-// Config.
-func TestPrimary(t *testing.T) {
-	for _, c := range []struct {
-		json string
-		want primary.Config
-		bad  string
-	}{
-		{`{}`, primary.Config{}, ""},
-		{`{"primary": {"kind": "manual"}}`, primary.Config{Kind: "manual"}, ""},
-		{`{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443"}}`,
-			primary.Config{Kind: "technitium", URL: "https://192.0.2.254:53443"}, ""},
-		{`{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "` + strings.Repeat("0f", 32) + `"}}`,
-			primary.Config{Kind: "technitium", URL: "https://192.0.2.254:53443", CertSHA256: strings.Repeat("0f", 32)}, ""},
-		// Plain http in the file: loads (paused), so the controller starts
-		{`{"primary": {"kind": "technitium", "url": "http://192.0.2.254:5380"}}`,
-			primary.Config{Kind: "technitium", URL: "http://192.0.2.254:5380"}, ""},
-		{`{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "0f"}}`, primary.Config{}, `"cert_sha256"`},
-		// The old key, "technitium": "<url>", is no longer read (greenfield)
-		{`{"technitium": "http://192.0.2.254:5380"}`, primary.Config{}, "unknown field"},
-		{`{"primary": {"kind": "bind"}}`, primary.Config{}, `"kind": "bind" is not one of manual, technitium`},
-		{`{"primary": {"kind": "technitium"}}`, primary.Config{}, `"url": the technitium kind needs`},
-		{`{"primary": {"kind": "manual", "url": "http://x:1"}}`, primary.Config{}, "has no API"},
-		{`{"primary": {"kind": "manual", "token": "x"}}`, primary.Config{}, "unknown field"},
-		{`{"primary": {}}`, primary.Config{}, `"kind": one of`},
+// Covers and Uncovered: a node in a network the primary allows needs nothing said; one in
+// none is told its network, by its prefix length (24 when unknown), once to allow there.
+func TestPrimaryCovers(t *testing.T) {
+	c := primary.Config{Address: "192.0.2.254", Allows: []string{"192.0.2.0/24", "198.51.100.128/25"}}
+	for addr, want := range map[string]string{
+		"192.0.2.53":     "",
+		"198.51.100.200": "",
+		"198.51.100.9":   "Your zone primary must allow zone transfers from 198.51.100.9: allow its network (e.g. 198.51.100.0/24) there once.",
+		"203.0.113.7":    "Your zone primary must allow zone transfers from 203.0.113.7: allow its network (e.g. 203.0.113.0/24) there once.",
+		"dns2.local":     "Your zone primary must allow zone transfers from dns2.local: allow its network there once.",
 	} {
-		s, err := Parse([]byte(c.json))
-		switch {
-		case c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)):
-			t.Errorf("%s: %v, want %q", c.json, err, c.bad)
-		case c.bad == "" && (err != nil || s.ZonePrimary() != c.want):
-			t.Errorf("%s: %+v %v", c.json, s.ZonePrimary(), err)
+		if got := c.Uncovered(addr, 0); got != want {
+			t.Errorf("%s: %q, want %q", addr, got, want)
 		}
+	}
+	if got := (primary.Config{}).Uncovered("192.0.2.53", 23); !strings.Contains(got, "(e.g. 192.0.2.0/23)") {
+		t.Error(got)
 	}
 }
 
@@ -212,6 +267,55 @@ func TestMoveNode(t *testing.T) {
 	}
 	if ok, err := MoveNode(p, "203.0.113.7", "203.0.113.8"); ok || err != nil {
 		t.Fatal(ok, err)
+	}
+}
+
+// out_of_service: nodes of "nodes"; InService is the others, in order. A node moved keeps
+// its place there, SetOutOfService takes one out and back, RemoveNode drops it from both
+// (and as the canary).
+func TestOutOfService(t *testing.T) {
+	p := Path(t.TempDir())
+	a, b, c := "203.0.113.1", "203.0.113.2", "203.0.113.3"
+	if err := Save(p, Settings{Nodes: []string{a, b, c}, Canary: b}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := SetOutOfService(p, b, true); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if ok, err := SetOutOfService(p, b, true); ok || err != nil {
+		t.Fatal("out twice:", ok, err)
+	}
+	if _, err := SetOutOfService(p, "203.0.113.9", true); err == nil {
+		t.Fatal("a node not listed taken out")
+	}
+	s, _ := Load(p)
+	if !slices.Equal(s.OutOfService, []string{b}) || !slices.Equal(s.InService(), []string{a, c}) || !s.IsOutOfService(b) || s.IsOutOfService(a) {
+		t.Fatal(s, s.InService())
+	}
+	if ok, err := MoveNode(p, b, "203.0.113.8"); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if s, _ := Load(p); !slices.Equal(s.OutOfService, []string{"203.0.113.8"}) {
+		t.Fatal("moved:", s)
+	}
+	if ok, err := SetOutOfService(p, "203.0.113.8", false); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if s, _ := Load(p); len(s.OutOfService) != 0 || len(s.InService()) != 3 {
+		t.Fatal("back:", s)
+	}
+	SetOutOfService(p, c, true)
+	if ok, err := RemoveNode(p, c); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if ok, err := RemoveNode(p, c); ok || err != nil {
+		t.Fatal("removed twice:", ok, err)
+	}
+	if ok, err := RemoveNode(p, "203.0.113.8"); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if s, _ := Load(p); !reflect.DeepEqual(s, Settings{Nodes: []string{a}}) {
+		t.Fatal("removed (the canary too):", s)
 	}
 }
 
@@ -253,12 +357,15 @@ func TestAddNode(t *testing.T) {
 // Check's refusals name their field (FieldError), and say it first.
 func TestFieldErrors(t *testing.T) {
 	for body, field := range map[string]string{
-		`{"nodes": ["192.0.2.1", "192.0.2.1"]}`:           "nodes",
-		`{"dns_peers": [""]}`:                             "dns_peers",
-		`{"dns_peer_zones": ["a b"]}`:                     "dns_peer_zones",
-		`{"no_dhcp": ["192.0.2.1/24"]}`:                   "no_dhcp",
-		`{"nodes": ["192.0.2.1"], "canary": "192.0.2.2"}`: "canary",
-		`{"primary": {"kind": "technitium"}}`:             "primary",
+		`{"nodes": ["192.0.2.1", "192.0.2.1"]}`:                                  "nodes",
+		`{"dns_peers": [""]}`:                                                    "dns_peers",
+		`{"dns_peer_zones": ["a b"]}`:                                            "dns_peer_zones",
+		`{"no_dhcp": ["192.0.2.1/24"]}`:                                          "no_dhcp",
+		`{"nodes": ["192.0.2.1"], "canary": "192.0.2.2"}`:                        "canary",
+		`{"primary": {"address": "x"}}`:                                          "primary",
+		`{"nodes": ["192.0.2.1"], "out_of_service": ["192.0.2.2"]}`:              "out_of_service",
+		`{"nodes": ["192.0.2.1"], "out_of_service": ["192.0.2.1", "192.0.2.1"]}`: "out_of_service",
+		`{"nodes": ["192.0.2.1"], "out_of_service": [" 192.0.2.1"]}`:             "out_of_service",
 	} {
 		_, err := Parse([]byte(body))
 		var fe *FieldError
@@ -359,37 +466,5 @@ func TestInternalSources(t *testing.T) {
 				t.Errorf("%s: %v", body, err)
 			}
 		}
-	}
-}
-
-// SetPrimaryPin pins (or unpins) the certificate of the primary at the address it was read
-// from, and only while settings.json still names that primary.
-func TestSetPrimaryPin(t *testing.T) {
-	path := filepath.Join(t.TempDir(), File)
-	pin := strings.Repeat("0f", 32)
-	if err := SetPrimaryPin(path, "https://192.0.2.254:53443", pin); !errors.Is(err, ErrNoPrimaryAPI) {
-		t.Fatal("no file:", err)
-	}
-	if err := Save(path, Settings{Nodes: []string{"192.0.2.53"}, Primary: &primary.Config{Kind: "technitium", URL: "https://192.0.2.254:53443"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := SetPrimaryPin(path, "https://192.0.2.9:53443", pin); !errors.Is(err, ErrNoPrimaryAPI) {
-		t.Fatal("another address:", err)
-	}
-	if err := SetPrimaryPin(path, "https://192.0.2.254:53443", "0F"); err == nil {
-		t.Fatal("a pin in another form taken")
-	}
-	if err := SetPrimaryPin(path, "https://192.0.2.254:53443", pin); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Load(path)
-	if err != nil || s.ZonePrimary().CertSHA256 != pin || !slices.Equal(s.Nodes, []string{"192.0.2.53"}) {
-		t.Fatal(s, err)
-	}
-	if err := SetPrimaryPin(path, "https://192.0.2.254:53443", ""); err != nil {
-		t.Fatal(err)
-	}
-	if s, _ := Load(path); s.ZonePrimary().CertSHA256 != "" {
-		t.Fatal("still pinned")
 	}
 }

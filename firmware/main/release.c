@@ -62,8 +62,10 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
     if (m->key_id >= REL_NKEYS || !t->keys[m->key_id])
         return "unknown signing key";
 
-    /* Signature first: nothing below is trusted, or reported on, until it passes. */
-    if (!sig_ok(t->keys[m->key_id], hdr, REL_MANIFEST_LEN, hdr + REL_MANIFEST_LEN))
+    /* Signature first: nothing below is trusted, or reported on, until it passes. The
+     * retired release key only where the caller's trust has one (stored slots). */
+    if (!sig_ok(t->keys[m->key_id], hdr, REL_MANIFEST_LEN, hdr + REL_MANIFEST_LEN) &&
+        !(m->key_id == 0 && t->retired && sig_ok(t->retired, hdr, REL_MANIFEST_LEN, hdr + REL_MANIFEST_LEN)))
         return "bad signature";
 
     memcpy(m->target, hdr + 10, 6);
@@ -74,12 +76,24 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
 
     if (memcmp(m->target, t->node_id, 6) != 0 && memcmp(m->target, ANY_NODE, 6) != 0)
         return "release is for another node";
-    if (strcmp(m->board, t->board) != 0 && !(t->board_alt && strcmp(m->board, t->board_alt) == 0))
+    if (strcmp(m->board, t->board) != 0 && !(t->board_alt && strcmp(m->board, t->board_alt) == 0) &&
+        !(t->sibling && strcmp(m->board, t->sibling) == 0))
         return "release is for another chip image";
     if (m->seq <= last_seq)
         return "stale release (seq not above the last one applied)";
     if (m->seq > max_seq)
         return rel_why_ahead;
+    return NULL;
+}
+
+const char *rel_keys_check(const rel_manifest_t *m, const rel_trust_t *t)
+{
+    if (m->kind != REL_KEYS)
+        return "not a keys release";
+    if (m->key_id != 1)
+        return "a keys release must be signed with the recovery key";
+    if (memcmp(m->target, t->node_id, 6) != 0)
+        return "a keys release is for one node, not any node";
     return NULL;
 }
 
@@ -99,6 +113,7 @@ const char *rel_kind_name(uint8_t kind)
     case REL_BLOCKLIST: return "blocklist";
     case REL_OVERRIDES: return "overrides";
     case REL_CONTROL: return "control";
+    case REL_KEYS: return "keys";
     default: return "unknown";
     }
 }

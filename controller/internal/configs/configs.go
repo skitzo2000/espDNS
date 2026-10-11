@@ -166,6 +166,10 @@ func Save(dataDir, name string, text []byte, expect string) (File, error) {
 	return Read(dataDir, name)
 }
 
+// Delete removes a config, the version expect names (its hash), kept in the history first:
+// it can be had back from there.
+func Delete(dataDir, name, expect string) error { return store(dataDir).Delete(name, expect) }
+
 // writeFile writes b to path whole or not at all, mode 0600, synced before the rename.
 func writeFile(path string, b []byte) error { return filestore.WriteFile(path, b) }
 

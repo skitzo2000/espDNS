@@ -1,35 +1,28 @@
 # Operating espDNS
 
-This guide covers the day-to-day work of running an espDNS fleet: updating the controller
-and the nodes, the safety rules every change follows, pinned nodes, backup and restore, and
-getting a fleet back when the controller's data is lost.
+Day-to-day work on a running flock: updates, the safety rules, nodes out of service, pinned
+nodes, keys, backup, and getting a fleet back when the controller's data is gone. It assumes
+a setup from [Getting started](getting-started.md); when something breaks, see
+[Troubleshooting](troubleshooting.md).
 
-espDNS is alpha software (version 0.0.x). Any version may change anything. Read the
+espDNS is alpha (0.0.x): any version may change anything. Read the
 [CHANGELOG](../CHANGELOG.md) before you update.
-
-It assumes a controller and nodes set up as in [Getting started](getting-started.md). When
-something goes wrong, see [Troubleshooting](troubleshooting.md).
 
 ## Before you start
 
-Run every command in this guide from the `controller/` directory of your clone. That is
-where `compose.yaml` and your `.env` are.
-
-The controller's image also holds the `espdns` command line tool (the CLI). You run it with
-`docker compose run`, on the same data directory the controller uses:
+Run every command here from your clone's `controller/` directory, where `compose.yaml` and
+`.env` live. The `espdns` CLI ships in the controller's image; run it on the controller's
+data directory:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller <command> -data /data [flags]
 ```
 
-Two things to know about this form:
+- Without `-T`, the command gets a terminal. Use that when it asks for a password.
+- With `-T`, it reads standard input from a pipe or file. Use that to pipe a secret in.
+  Secrets are never command-line arguments.
 
-- Without `-T`, Docker gives the command a terminal. Use that when the command asks you
-  something, such as a password.
-- With `-T`, the command reads its standard input from a pipe or a file. Use that when you
-  pipe a secret in. Secrets are never command-line arguments.
-
-Each command prints its flags with `-h`:
+Every command prints its flags with `-h`:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller rollout -h
@@ -37,50 +30,54 @@ docker compose run --rm --entrypoint /espdns espdns-controller rollout -h
 
 ## The safety rules
 
-Every change to a node follows the same rules, whether it comes from the web page or the
-CLI. Nothing in the web page loosens them.
+Every change to a node follows these, from the web page or the CLI. The page loosens none of
+them.
 
-- **One change at a time.** Every change takes the *fleet lock* first. A second change
-  stops at once with `the fleet is locked by <who> (<what>) ... since <time>`. Wait for
-  the first one to finish, then try again. The lock goes away when its holder exits, even
-  after a crash, so there is never a stale lock to clear.
-- **One node at a time.** A rollout changes one node, checks it, watches it for a while
-  (the *soak*), and only then moves to the next node.
-- **The canary goes first.** The canary is the node changed first. Set a default with
-  `"canary"` in `settings.json`, or choose one for each change. If the canary fails, the
-  rollout stops and the other nodes are not touched.
-- **Never the last healthy node.** Before each node, another node or a *DNS peer* must be
-  answering. A DNS peer is a resolver your clients also use, such as your zone primary
-  (`"dns_peers"` in `settings.json`). A node that is not adopted yet does not count.
-- **Nobody else unwell.** If another node or DNS peer is unhealthy, a change that may
-  reboot a node (firmware, a config, a blocklist) does not start.
-- **Dry run first.** An Apply runs its own dry run before it touches a node. On the Push
-  and Adopt pages, the real run must follow a dry run that passed in the last 15 minutes,
-  of the same choices and the same files. On the CLI, run with `-dry-run` first.
+- **One change at a time.** Every change takes the *fleet lock*. A second one stops at once
+  with `the fleet is locked by <who> (<what>) ... since <time>`: wait and try again. The lock
+  goes when its holder exits, even after a crash, so there's never a stale lock to clear.
+- **One node at a time.** Change one node, check it, watch it for a while (the *soak*), then
+  move on.
+- **The canary goes first.** Set a default with `"canary"` in `settings.json`, or pick one
+  per change. If the canary fails, nobody else is touched.
+- **Never the last healthy node.** Before each node, another node or a *DNS peer* (a resolver
+  your clients also use, such as your zone primary: `"dns_peers"` in `settings.json`) must be
+  answering. A node that isn't adopted yet doesn't count, nor does one
+  [out of service](#taking-a-node-out-of-service).
+- **Nobody else unwell.** If another node or DNS peer is unhealthy, a change that may reboot
+  a node (firmware, a config, a blocklist) doesn't start.
+- **Dry run first.** Apply and adding a node run their own. On the CLI, use `-dry-run` first.
 
-So you need **at least two nodes, or one node and a DNS peer**, in `settings.json`. With a
-single node and no DNS peer, every change that touches the node is refused: `this is the
-only node clients use: they get no DNS while it reboots or if the change breaks it`.
+So you need **at least two nodes, or one node and a DNS peer**, in `settings.json`. A lone
+node with no DNS peer has every change refused: `this is the only node clients use: they get
+no DNS while it reboots or if the change breaks it`.
 
-Every change is written to the action log, `log/actions.jsonl` in the data directory, with
-who started it and how it ended.
+Every change is recorded, with who started it and how it ended, in `log/actions.jsonl` in the
+data directory.
 
 ## Updating the controller
 
-Back up first ([Backup](#backup)). Then pull the new version and rebuild:
+Back up first ([Backup](#backup)). Then set `ESPDNS_IMAGE` in `.env` to the new release's
+image (`ghcr.io/skitzo2000/espdns-controller:<version>`, or the line in the release's
+`espdns-<version>-controller-image.txt`, pinned by digest), and:
+
+```sh
+docker compose pull
+docker compose up -d --no-build
+```
+
+Built from your own checkout instead (no `ESPDNS_IMAGE` in `.env`):
 
 ```sh
 git pull
 docker compose up -d --build
 ```
 
-Build the controller from your own checkout. Its image carries the public keys in
-`firmware/keys/`, and if you made your own keys
-([Getting started](getting-started.md#3-make-your-keys)), those are yours. The controller
-images the project publishes carry the project's public keys instead. They suit only a
-fleet that runs the project's own firmware.
+The image carries the project's release public key (`keys/project.pub`), which only checks
+the project's releases ([Releasing](releasing.md#using-a-release)). Your nodes trust only
+your keys, which stay in the data directory.
 
-Check that it came up and which version it runs:
+Check it came up and which version it runs:
 
 ```sh
 docker compose ps
@@ -88,16 +85,15 @@ docker compose logs --tail 20
 docker compose run --rm -T --entrypoint /espdns espdns-controller version
 ```
 
-The data directory is not changed by an update. The nodes keep answering DNS while the
+An update doesn't touch the data directory, and the nodes keep answering while the
 controller is down.
 
 ## Updating node firmware
 
 ### Versions
 
-The firmware and the controller share one version number. A node reports its version in
-its status. The controller compares each node's version with the newest firmware it has
-for that node, and gives each node one of these states:
+The firmware and the controller share one version number. Each node gets a state from
+comparing its version with the newest firmware the controller holds for it:
 
 | State | Meaning |
 | --- | --- |
@@ -112,110 +108,100 @@ Two builds of the same version are ordered by build time.
 
 ### Get the firmware into the controller
 
-The controller pushes only firmware that is in its data directory. It loads chip images
-only as a **signed release**, which it checks against the release key your nodes trust.
+The controller loads chip images only as a **signed release**: the project's (checked with
+`/keys/project.pub`) or your own (signed with your release key). Either way, your nodes only
+ever see your key: the controller signs every update with it, after checking again that the
+release still vouches for the app it sends.
 
-A node takes a release only when it is signed with the key built into the firmware it
-runs. So new firmware must carry the same public keys, or the node would refuse every
-change after it. If you made your own keys, as
-[Getting started](getting-started.md#3-make-your-keys) does, build the new firmware
-yourself, from a checkout with those keys in `firmware/keys/`:
+- **The project's release:** **Get firmware** in the account menu's Firmware (or in Install
+  over USB, for a board whose chip image isn't there yet), or:
 
-1. Pull the new version: `git pull`.
-2. Build the chip images, as in
-   [Getting started, step 4](getting-started.md#4-build-the-firmware).
-3. Package them, sign them with your release key and import them, as in
-   [Getting started, step 8](getting-started.md#8-load-the-firmware-into-the-controller).
-   Remove `build/release/dist` from the last time first: `release build` writes only into
-   a missing or empty directory.
+  ```sh
+  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data
+  ```
 
-The import is the same command whoever built the release. For a release in
-`../build/release/dist`:
+  It downloads the newest release (`-version v0.0.2` for another), checks the project's
+  signature and every file, and imports it as "project release v0.0.2".
+- **Your own build:** build, package, sign and import as in
+  [Build your own firmware](developer.md#build-your-own-firmware). Remove
+  `build/release/dist` first: `release build` only writes into a missing or empty directory.
+
+The import is the same whoever built it. For a release in `../build/release/dist`:
 
 ```sh
 docker compose run --rm -T -v "$PWD/../build/release:/release:ro" --entrypoint /espdns \
-  espdns-controller release import -dir /release/dist -pub /keys/release.pub -data /data
+  espdns-controller release import -dir /release/dist -data /data
 ```
 
-It checks the signature and every file first. If anything does not check, it imports
-nothing. It takes the fleet lock, so it is refused while a change runs. The chip images
-land in `firmware/images/` in the data directory, where the Nodes page finds them.
+It checks the signature (the project's key or yours, nothing else) and every file, and
+imports nothing if any check fails. It takes the fleet lock, so it waits its turn. Chip
+images land in `firmware/images/` in the data directory. Builds in `firmware/builds/` and
+images you copy in by hand have no release behind them, and are sent as they are.
 
-The project's published releases are built with the project's keys. Use one only if your
-nodes run the project's firmware. [Releasing](releasing.md) explains what a release holds
-and how to check one.
+Every firmware update is refused for an image that doesn't read the keys partition (an older
+build with keys built in), for a node in setup mode (reinstall it, or Write keys only over
+USB), and for a node on pre-keys-partition firmware when the image's keys seed isn't that
+node's keys.
+
+**A node on firmware from before the keys partition** (`/status` has no `keys_source`)
+trusts keys built into it, so a key-neutral image is refused for it. Give it, once, your own
+build with its current public keys as the partition's seed: it writes them into its keys
+partition on first boot (`keys_source` `seeded`, same fingerprints), keeps everything it
+stores, and takes key-neutral releases from then on. Or reinstall it over USB, which writes
+its keys and erases its settings.
 
 ### Update from the web page (the Apply flow)
 
-The controller collects changes first and sends them later. An edit, or a firmware update,
-becomes a *pending change*. Nothing is sent to a node until you apply.
+Edits and firmware updates queue as *pending changes*. Nothing reaches a node until you
+apply.
 
-1. Open the controller, `http://127.0.0.1:8480`. The **Nodes** page says when an update is
-   there, for example "Update available: 0.0.1 → 0.0.2".
-2. Click **Update** (or **Update all**). The Update panel shows each node, from which
-   version to which. Confirm, and the updates join the pending changes. Nothing is sent yet.
-3. The orange chip in the top bar says how many changes wait ("2 changes to apply"). Open
-   it. The panel lists each change, what applying it does, and which nodes restart. You can
-   discard a change here.
-4. Open **How it rolls out**. Choose the node to start with (the canary) and how long to
-   watch each node: 1, 5 or 15 minutes.
-5. Click **Apply**. You can follow it in the panel.
+1. Open the controller, `http://127.0.0.1:8480`. **Nodes** says when an update is there,
+   e.g. "Update available: 0.0.2 → 0.0.3".
+2. Click **Update** (or **Update all**), check the from and to versions, and confirm.
+3. Open the orange chip in the top bar ("2 changes to apply"). It lists each change, what it
+   does and which nodes restart. You can discard one here.
+4. Open **How it rolls out**. Pick the canary and how long to watch each node: 1, 5 or 15
+   minutes.
+5. Click **Apply** and follow it in the panel.
 
-The apply runs in five steps:
+Apply checks that each file is still the version you edited and every node answers, saves
+the files (keeping the old versions), compiles any blocklist, dry-runs every rollout, then
+pushes: node configs, hosted zones, overrides, blocklists, then firmware, one node at a time,
+canary first.
 
-1. **Check.** Each changed file is still the version you edited, and every node in
-   `settings.json` answers. Nothing is written yet.
-2. **Write.** The changed files are saved. The version each one replaced is kept.
-3. **Compile.** Any blocklist the changes touch is compiled.
-4. **Dry run.** Each rollout is checked against every node it goes to, before any node is
-   touched.
-5. **Push.** The rollouts run one after the other: node configs, hosted zones, overrides,
-   blocklists, then firmware. Each rollout changes one node at a time, canary first.
+Each node boots new firmware on trial. If it isn't up and answering within 90 seconds, it
+rolls back on its own.
 
-A firmware update restarts each node, one at a time. Each node boots the new firmware on
-trial. If it is not up and answering within 90 seconds, it rolls back to the old firmware
-on its own.
+**Stop after this node** stops at the next safe point. If an apply stops part way, the
+changes stay pending: click Apply again and nodes that already have a change are skipped.
 
-**Stop after this node** stops the apply at the next safe point: after the node being
-changed is finished and checked, or during a soak.
-
-If the apply stops part way (a node failed its checks, or you stopped it), the changes stay
-pending. Click Apply again to finish them: nodes that already have a change are skipped.
-
-The apply needs the release key in the controller. Without it, Apply is refused.
-
-### Update from the Push page
-
-The **Push** page (under **System**) runs one rollout directly, without pending changes.
-Choose what to push (for firmware, the chip images in the data directory), the nodes and
-their order, the canary and the soak (1 minute to 1 hour). Run the **Dry run**, then
-**Roll out**. The page shows each node's progress, and what to do if it stops.
+Apply needs the release key in the controller; without it, it's refused.
 
 ### Update from the command line
 
-The same rollout, from the CLI. It signs with the controller's copy of the release key,
-`/data/keys/release.pem`. Give one `-image` for each chip image your nodes run (the
-`IMAGE` column of `espdns discover`). First the dry run:
+The same rollout, signed with the controller's copy of the key, `/data/keys/release.pem`.
+Give one `-image` per chip image your nodes run (the `IMAGE` column of `espdns discover`).
+Dry run first:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller \
   rollout -kind firmware -all -mdns 0 -data /data -key /data/keys/release.pem \
   -canary 192.0.2.53 \
-  -image /data/firmware/images/esp32p4-rev1 -image /data/firmware/images/esp32s3-octal \
+  -image /data/firmware/images/esp32p4-rev1 -image /data/firmware/images/esp32s3-eth \
+  -image /data/firmware/images/esp32s3-octal \
   -dry-run
 ```
 
-It reads every node, finds the image for each one, checks the safety rules for each step,
-and pushes nothing. It stops at the first problem: a node it can't reach, a chip image with
-no `-image`, a rule that fails. If it passes, run the same command without `-dry-run`.
+It stops at the first problem (an unreachable node, a chip image with no `-image`, a rule
+that fails) and pushes nothing. If it passes, run it again without `-dry-run`.
 
-- `-all -mdns 0` means every node in `settings.json`, and only those. `-host a,b` names the
-  nodes instead, in order.
-- `-canary` is the node changed first. Without it, the rollout uses `settings.json`'s
-  `"canary"` if it is one of the nodes, else the first node.
+- `-all -mdns 0`: every node in `settings.json`, and only those. `-host a,b` names them
+  instead, in order.
+- `-canary`: changed first. Without it, `settings.json`'s `"canary"` if it's one of the
+  nodes, else the first.
 - `-soak 5m` watches each node longer. The default is one minute.
-- A node that already runs the build is skipped (`already had it`).
-- The run ends with `done: ...`, or with `stopped at <node>` and the nodes it did not touch.
+- A node already on the build is skipped (`already had it`).
+- It ends with `done: ...`, or `stopped at <node>` plus the nodes it didn't touch.
 
 Check the result:
 
@@ -223,109 +209,233 @@ Check the result:
 docker compose run --rm --entrypoint /espdns espdns-controller status -all -mdns 0 -data /data
 ```
 
-Every node should be `healthy`, on the new firmware, with no `reboot pending`.
-
-Ctrl-C stops a CLI rollout at once. The node being changed is left as
-[When a rollout stops](#when-a-rollout-stops) describes.
+Every node should be `healthy`, on the new firmware, with no `reboot pending`. Ctrl-C stops a
+CLI rollout at once, leaving the current node as below.
 
 ### When a rollout stops
 
-A stopped rollout leaves at most one node changed or rolled back. The rest still answer.
-First look at every node (the Nodes page, or `status -all` as above). Then:
+At most one node is changed or rolled back; the rest still answer. Look at every node first
+(the Nodes page, or `status -all` as above). Then:
 
 - **`not started: no other node or DNS peer is answering`** or **`another node is
-  unhealthy`**: nothing was pushed to that node. Fix the other node or the DNS peer, then
-  run the dry run and the rollout again. Nodes already updated are skipped.
-- **The node rolled back** (it came back on its old firmware): it runs the old firmware
-  and should be healthy. Do not push the same build again. Find out why it failed first.
-- **The node took the update but is not healthy yet**: wait, and look again. A node on
-  trial rolls itself back within 90 seconds if it can't come up.
-- **A node shows `reboot pending`**: the rollout was cut off between the push and the
-  reboot. Reboot it under the same rules, from the node's details on the Nodes page
-  (**Reboot (pending)**, enabled only while a reboot is pending), or:
+  unhealthy`**: nothing was pushed to that node. Fix the other node or DNS peer, then
+  dry-run and roll out again. Nodes already updated are skipped.
+- **The node rolled back** (it's on its old firmware): it should be healthy. Don't push the
+  same build again until you know why it failed.
+- **The node took the update but isn't healthy yet**: wait and look again. A node on trial
+  rolls itself back within 90 seconds if it can't come up.
+- **A node shows `reboot pending`**: the rollout was cut off between push and reboot. Reboot
+  it under the same rules from its details on the Nodes page (**Reboot (pending)**), or:
 
   ```sh
   docker compose run --rm --entrypoint /espdns espdns-controller \
     reboot -host 192.0.2.54 -if-pending -mdns 0 -data /data -key /data/keys/release.pem
   ```
 
-- **A blocklist was sent back** (`reverted (back on the copy each had): ...`): a list
-  failed its checks, so every node that took it went back to the list it had before. Fix
-  the list, then start again from the dry run.
-- **A node did not answer**: if it is in the `not touched` list, it was never changed.
-  Find out why before you go on.
+- **A blocklist was sent back** (`reverted (back on the copy each had): ...`): it failed its
+  checks, so every node that took it went back to its previous list. Fix the list and start
+  again from the dry run.
+- **A node didn't answer**: if it's in the `not touched` list, it was never changed. Find out
+  why before you go on.
+
+> **Artie's tip:** a node that came home on its old firmware is doing its job. Find out why
+> before you send the same build again.
+
+## Taking a node out of service
+
+Every change waits for every node to answer. So a node that's off, broken or away holds up
+the rest of the flock. Take it out of service, and changes go on without it.
+
+On its node page:
+
+- **Take out of service.** It stays on Nodes, muted, with its last status. The controller
+  sends it nothing: an apply, a rollout, a blocklist refresh and a config push skip it and
+  say so. It doesn't count for the safety rules either, up or down. Works while the node is
+  offline. If it's up, it still answers DNS.
+- **Return to service.** The node must answer and trust the controller's release key. The
+  controller then sends it, on its own, what it missed: its settings, the hosted zones, the
+  allowed and blocked sites, its blocklist, and newer firmware if it's behind. Each gets a
+  dry run first, as an apply does. Only then does it count again. If it doesn't answer, it
+  stays out, and the page says why.
+- **Remove from the group.** It comes off your list of nodes. Its config file is kept, and
+  the node isn't touched: if it's up it keeps answering DNS, so take it off your router's
+  DNS servers too. While it's on your network it shows up under New device found, and you
+  can add it back the usual way.
+
+Each asks first, and each is in the action log. Remove is refused while a job runs on the node.
+
+Keys: a rotation won't start while a node is out of service (return it or remove it first),
+and a node in a rotation under way can't be taken out or removed.
+
+From the command line: [`espdns node out|in|remove`](reference/cli.md#node).
+
+> **Artie's tip:** out of service isn't out of mind. Bring it back, or remove it, before you
+> forget which router still points at it.
 
 ## Pinned nodes
 
-The controller signs a release for a node only when that node is **pinned** to its address.
-The pins are kept in `pins/` in the data directory, one file per node. Each holds the node's
-ID (its chip's MAC address), the address it is pinned to, and the last sequence number
-(*seq*) signed for it, per kind of release.
+The controller signs a release for a node only when it's **pinned** to its address. Pins
+live in `pins/` in the data directory, one file per node: its ID (the chip's MAC address),
+the pinned address, and the last sequence number (*seq*) signed for it, per kind of release.
 
-**Why.** A node's `/status` says who it is, but anything that answers on the node's address
-can send a `/status`: another device that took the address, or a spoofed reply. So the
-controller never signs for the ID a `/status` gives. It signs for the ID pinned to the
-address, with the next seq after the one it recorded. If the address answers as another
-node, the push is refused and nothing is signed.
+Why: anything on a node's address can send a `/status`, a device that took the address or a
+spoofed reply. So the controller signs for the ID pinned to the address, with the next seq
+it recorded, never for the ID a `/status` claims. If the address answers as another node,
+the push is refused.
 
-A node is pinned:
-
-- when it is adopted;
-- when `espdns recover` finds it ([Recovering from the nodes](#recovering-from-the-nodes));
-- when a config moves it to a new address, once it is confirmed there;
-- by hand, with `espdns pin`.
-
-List the pins and their seqs:
+A node is pinned when it's adopted, when `espdns recover` finds it
+([Recovering from the nodes](#recovering-from-the-nodes)), when a config moves it and it's
+confirmed at the new address, or by hand. List the pins and seqs:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data
 ```
 
-Pin a node by hand. The node must answer at that address as that ID. Read the ID from the
-`NODE` column of `espdns discover`, from the Adopt page, or from the node's label:
+Pin by hand when you replace a board and put the new one at the old address. The node must
+answer there as that ID (the `NODE` column of `espdns discover`, Details on its page, or its
+label):
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller \
   pin -data /data -host 192.0.2.54 -node <its ID>
 ```
 
-You need this when you replace a node's board and put the new board at the old address. The
-old board's pin is then moved off that address. Its seqs are kept, in case it comes back.
+The old board's pin moves off the address and keeps its seqs, in case it comes back.
 
-Identify (flickering a node's LED) is the one exception: it is signed for a node that is
-not adopted yet, so you can find the board in your hand. At worst an LED flickers.
+Identify (flickering the LED) is the one exception: it's signed for a node that isn't adopted
+yet, so you can find the board in your hand. At worst an LED flickers.
+
+## A node without keys (setup mode)
+
+A node trusts the two public keys in its keys partition, which Install over USB writes from
+the controller's `keys/release.pem` and `keys/recovery.pub` (no image is prepared until both
+are there). A node with no keys, or a damaged keys record, comes up in **setup mode**: it
+answers DNS on its board's defaults, reports `no keys`, and refuses every release. Nothing
+over the network can give it keys.
+
++ Add node shows it with **Write keys over USB**. Plug it in, choose **Write keys only (keeps
+settings)** and pick its port. The page writes the 8 KB keys partition at 0x1b000 and
+nothing else, reads it back, and restarts the board. If it can't reach the board, hold BOOT
+while you plug it in and try again.
+
+## Rotating keys
+
+Every node trusts two public keys: the release key the controller signs with, and the
+recovery key you keep offline. A rotation replaces either or both, as a KEYS release per
+node signed offline with the recovery key the nodes trust now. The why is in
+[security.md, Rotating keys](security.md#rotating-keys).
+
+Rotate:
+
+- **routinely**, to retire a long-used release key or move to your own keys. Each node keeps
+  the old key as its *retired key* until the push re-signs what it stores, right after;
+- **after a compromise** (the release key or data directory may have leaked), at once, with
+  `-compromised`. The nodes drop the old key straight away. Rotate from a controller you
+  trust again: rebuilt from an earlier backup, or from scratch.
+
+Every node in `settings.json` must be pinned, answering, and on firmware that takes KEYS
+releases (`seq.keys` in its `/status`).
+
+### 1. Prepare
+
+The account menu, **Rotate keys**, **Prepare**. Or:
+
+```sh
+docker compose run --rm --entrypoint /espdns espdns-controller \
+  key rotate prepare -data /data -new-release generate
+```
+
+| Flag | Meaning |
+|------|---------|
+| `-new-release` | `generate`: a new release key, made in the controller. Or a private key file (PEM, or base64 of one). Leave it out to keep the release key. |
+| `-new-recovery` | The new recovery key's **public** half (`recovery.pub`, raw or PEM). Leave it out to keep the recovery key. |
+| `-recovery-pub` | The recovery public key the nodes trust now, if the controller doesn't have it (`keys/recovery.pub`). |
+| `-compromised` | Drop the old release key on the nodes at once. Needs a new release key. |
+
+Nothing is sent. It writes each node's unsigned KEYS release and a `plan.json` into
+`keys/rotation/<id>/`, and the new release key into `keys/release.next.pem`. It says, per
+node, what can and can't be re-signed with the new key. After a compromise, a node with
+something the controller can't re-sign is refused: push that from the controller first, then
+prepare again.
+
+### 2. Sign it offline
+
+On the machine that holds your recovery key (it never goes to the controller), from the
+controller's directory. The container gets no network and only the rotation's directory:
+
+```sh
+docker run --rm -i --network none --user "$(id -u):$(id -g)" -v "$PWD/data/keys/rotation/<id>:/rotation" \
+  --entrypoint /espdns espdns-controller key rotate sign -dir /rotation -key - < recovery.pem
+```
+
+The page shows this command with the ID filled in. If `.env` sets `ESPDNS_DATA`, use that
+directory instead of `$PWD/data`; if it sets `ESPDNS_IMAGE`, use that image instead of
+`espdns-controller`.
+
+The key comes on standard input: a PKCS#8 or SEC1 PEM, or one line of base64 of either (as a
+password manager keeps it). Any key but the one your nodes trust is refused. It prints each
+node's new key fingerprints and writes its signed `release.bin` beside the unsigned files.
+The key is written nowhere.
+
+Signing on another machine: copy the rotation's directory there and back, or add each node's
+`release.bin` in the panel (**Signed elsewhere?**). `firmware/tools/release.py keys-sign
+--dir <the node's directory> --key recovery.pem` signs one node the same way.
+
+### 3. Push
+
+**Push** on the page, or:
+
+```sh
+docker compose run --rm --entrypoint /espdns espdns-controller key rotate push -data /data -dir <id>
+```
+
+One node at a time, under the fleet lock: the KEYS release, the new keys checked, then its
+config, hosted zones, overrides and blocklist re-signed and pushed, its health checked. A
+failure stops there and says why; fix it and push again to carry on from that node. Nodes
+taken out of `settings.json` are left out. Add `-node <its address>` to do one node per push.
+
+When every node reports the new keys, the controller swaps its own: `keys/release.next.pem`
+becomes `keys/release.pem`, the old one is kept as `keys/release.prev.pem`, and
+`keys/recovery.pub` becomes the new recovery key. After a compromise, delete
+`release.prev.pem` once you've looked at it. Then make a new backup.
+
+Discard a rotation no node has taken yet with **Discard**, or:
+
+```sh
+docker compose run --rm --entrypoint /espdns espdns-controller key rotate discard -data /data -dir <id>
+```
+
+The older copies a node keeps for a revert aren't re-signed, so after a compromise,
+reverting to one is refused.
 
 ## Backup and restore
 
 The controller keeps everything in one data directory (`ESPDNS_DATA` in `.env`, `./data` by
-default): `settings.json`, the node configs, the hosted zones, the blocklists, the pins, the
-action log, the login, the release key and the zone primary's token. The nodes do not need
-it to answer DNS. But without it you must import the secrets again and rewrite every config
-and zone.
+default): settings, node configs, hosted zones, blocklists, pins, the action log, the login
+and the release key. The nodes don't need it to answer DNS, but losing it means re-importing
+secrets and rewriting every config and zone.
 
 Back up before a risky change (a firmware update, an adoption, a config that moves a node)
 and after one that went well.
 
 ### What a backup is
 
-A backup is one file, encrypted with [age](https://age-encryption.org). It is encrypted to
-a passphrase of at least 12 characters, or to one or more age public keys. It holds the
-release key and the zone primary's token, encrypted. Keep the passphrase apart from the
-file.
+One file, encrypted with [age](https://age-encryption.org) to a passphrase of at least 12
+characters or to age public keys. It holds the release key (encrypted) and the recovery
+key's public half, never the recovery key itself. Keep the passphrase apart from the file.
 
-Left out: the fleet lock, temporary files, and `firmware/` (the chip images are large and
-you can import them again). The file is checked as a whole: a wrong passphrase, a changed
-byte or a file cut short is refused.
-
-A backup holds the fleet lock while it reads, so no change writes files meanwhile.
+Left out: the fleet lock, temporary files, `firmware/` (large, and you can import it again),
+and the unused zone primary API token an older controller kept (`keys/primary.token`; a
+restore skips one an older backup carries, and says so). A wrong passphrase, a changed byte
+or a file cut short is refused. A backup holds the fleet lock while it reads.
 
 ### Backup
 
-**From the web page.** Open **System**, then **Backup**. Type a passphrase and download the
-file. The page asks for your password again first.
+**On the web page:** **System**, then **Backup**. Type a passphrase and download. The page
+asks for your password first.
 
-**From the command line,** with the passphrase from an environment variable or the first
-line of a file. The backup goes to standard output:
+**On the command line,** with the passphrase from an environment variable or a file's first
+line. The backup goes to standard output:
 
 ```sh
 printenv ESPDNS_BACKUP_PASSPHRASE | docker compose run --rm -T --entrypoint /espdns \
@@ -335,28 +445,25 @@ docker compose run --rm -T --entrypoint /espdns espdns-controller \
   backup -data /data -out - < passphrase.txt > espdns-backup-2026-10-07.age
 ```
 
-To encrypt to an age public key instead of a passphrase, add `-recipient age1...` (repeat
-it for several keys). Add `-firmware` to include `firmware/`. If a change holds the fleet
-lock, the backup waits for it, up to 10 minutes (`-wait`).
+`-recipient age1...` encrypts to an age public key instead (repeat for several). `-firmware`
+includes `firmware/`. If a change holds the lock, the backup waits up to 10 minutes
+(`-wait`).
 
 ### Check a backup
 
-A dry run of a restore checks everything and writes nothing. It asks for the passphrase:
+A restore dry run checks the passphrase, every path, size and sum, the settings, the key and
+the login, and writes nothing:
 
 ```sh
 docker compose run --rm -v "$PWD/espdns-backup-2026-10-07.age:/backup.age:ro" \
   --entrypoint /espdns espdns-controller restore -data /data -in /backup.age -dry-run
 ```
 
-It lists every file in the backup and checks the passphrase, every path, size and sum,
-the settings, the key, the token and the login.
-
 ### Restore
 
-A restore goes into an empty data directory, with the controller stopped. On a new host,
-set up the controller as for a first install ([Getting started, step
-5](getting-started.md#5-start-the-controller): `.env` and an empty data directory), from a
-checkout with the same public keys in `firmware/keys/`.
+A restore goes into an empty data directory with the controller stopped. On a new host, set
+up `.env` and an empty data directory as in
+[Docker Compose](developer.md#docker-compose).
 
 1. Stop the controller:
 
@@ -365,20 +472,19 @@ checkout with the same public keys in `firmware/keys/`.
    ```
 
 2. Check the backup with the dry run above.
-3. Restore it. The passphrase is asked once:
+3. Restore it (the passphrase is asked once):
 
    ```sh
    docker compose run --rm -v "$PWD/espdns-backup-2026-10-07.age:/backup.age:ro" \
      --entrypoint /espdns espdns-controller restore -data /data -in /backup.age
    ```
 
-   With no terminal, add `-T` and give the passphrase as the first line of standard input
-   (`< passphrase.txt`). For a backup made with `-recipient`, give the age identity file
-   with `-identity` (mount it into the container as you mount the backup).
-
-   If the data directory is not empty, the restore refuses. Add `-force` to move what is
-   there into `.before-restore-<time>/` first. Nothing is deleted. Nothing is put in place
-   until every check has passed.
+   - No terminal: add `-T` and pipe the passphrase as the first line (`< passphrase.txt`).
+   - Made with `-recipient`: give the age identity file with `-identity`, mounted like the
+     backup.
+   - A data directory that isn't empty is refused; `-force` moves its contents into
+     `.before-restore-<time>/` first. Nothing is deleted, and nothing goes in place until
+     every check passes.
 
 4. Start the controller and log in with the restored login:
 
@@ -386,26 +492,32 @@ checkout with the same public keys in `firmware/keys/`.
    docker compose up -d
    ```
 
-5. If the backup had no firmware, load the chip images again
+5. If the backup had no firmware, load it again
    ([Get the firmware into the controller](#get-the-firmware-into-the-controller)).
 
 ## Recovering from the nodes
 
-With no backup, the nodes still run, and a new data directory can manage them again.
-`espdns recover` rebuilds what it can from the nodes. It only reads them.
+No backup? The nodes still run, and a fresh data directory can manage them again: the flock
+homes back to a new coop. `espdns recover` rebuilds what it can, and only reads the nodes.
 
-1. Set up a new controller with an empty data directory, as for a first install
-   ([Getting started, step 5](getting-started.md#5-start-the-controller)). Build it from a
-   checkout with the public keys your nodes trust in `firmware/keys/`.
-2. Import the release key the nodes trust. It is read from standard input:
+1. Set up a new controller with an empty data directory
+   ([Docker Compose](developer.md#docker-compose)).
+2. Import the release key the nodes trust, with their public keys to check it against (here
+   in `~/espdns-keys/`; Keep the controller safe in the account menu downloads
+   `release.pub`, and any node's `/status` shows both fingerprints):
 
    ```sh
-   docker compose run --rm -T --entrypoint /espdns espdns-controller \
-     key import -data /data -key - -pub /keys/release.pub -recovery-pub /keys/recovery.pub \
+   docker compose run --rm -T -v "$HOME/espdns-keys:/mykeys:ro" --entrypoint /espdns espdns-controller \
+     key import -data /data -key - -pub /mykeys/release.pub -recovery-pub /mykeys/recovery.pub \
      < "$HOME/espdns-keys/release.pem"
    ```
 
-3. Set the login. You are asked for a user name and the password twice:
+   Lost the release key? Then nothing reaches the nodes over the network. Make new keys (the
+   first run's Make your keys), give each node them over USB with **Write keys only (keeps
+   settings)** ([A node without keys](#a-node-without-keys-setup-mode)), then push each
+   node's config, zones and lists again.
+
+3. Set the login (a user name, then the password twice):
 
    ```sh
    docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
@@ -417,38 +529,26 @@ With no backup, the nodes still run, and a new data directory can manage them ag
    docker compose run --rm --entrypoint /espdns espdns-controller recover -data /data -dry-run
    ```
 
-   It finds nodes over mDNS and in `settings.json`. Add `-host 192.0.2.53,192.0.2.54` for
-   nodes mDNS can't reach. Anything on the network can answer mDNS as a node, so read the
-   list before you go on. `-mdns 0 -host ...` reads only the addresses you give.
+   It finds nodes over mDNS and in `settings.json`; add `-host 192.0.2.53,192.0.2.54` for
+   ones mDNS can't reach. Anything can answer mDNS as a node, so read the list before going
+   on. `-mdns 0 -host ...` reads only the addresses you give.
 
-5. Run it for real, without `-dry-run`.
+5. Run it without `-dry-run`. It writes `settings.json` if there's none, with the nodes in
+   service that trust your key (`-add-to-settings` adds them to an existing one); pins each
+   one; keeps each `/status` and a report in `recovered/<time>/`; and says which config file
+   here matches each node and whether the zone files here match what it serves.
 
-It then:
+The nodes can't give back config contents, hosted zone files, blocklists, the DNS peers, zone
+primary and canary in `settings.json`, or the history and push records. Add those settings
+yourself and write the missing configs and zones. Compare each config with what its node runs
+before you push it, and write every hosted zone before you push zones: a zones push replaces
+the whole set, so a zone left out stops being served.
 
-- writes `settings.json`, if there is none, with the nodes in service that trust your key
-  (`-add-to-settings` adds them to a `settings.json` that is already there);
-- pins each of those nodes to its address;
-- keeps each node's `/status` and a report in `recovered/<time>/`;
-- says for each node which config file here matches it, and whether the zone files here
-  are the same as the hosted zones it serves.
-
-What the nodes can't give back, because the firmware has no way to send it:
-
-- the contents of the node configs, the hosted zones' files and the blocklists;
-- the DNS peers, the zone primary and the canary in `settings.json`;
-- the history and the push records.
-
-Add the DNS peers, the zone primary and the canary to `settings.json` yourself. Write the
-missing configs and zones again. Compare each config with what its node runs before you push
-it. Write every hosted zone before you push zones: a zones push replaces a node's whole set,
-so a zone left out stops being served.
-
-The seqs need nothing: a new release's seq is the current time in milliseconds, which is
-above the node's last one as long as the controller's clock is right.
+Seqs need nothing: a new release's seq is the current time in milliseconds, above the node's
+last one as long as the controller's clock is right.
 
 ## Releases
 
-A release is one version of the firmware and the controller together, signed with a
-release key. [Releasing](releasing.md) explains what a release holds, how to check
-one with `espdns release verify`, and how to use it: the controller's image, the chip images
-for updates, and factory images for new nodes.
+A release is one version of firmware and controller together, its `SHA256SUMS` signed with
+the project's key; its chip images are key-neutral. [Releasing](releasing.md) covers what it
+holds and how to check one with `espdns release verify`.

@@ -1,0 +1,47 @@
+# espDNS controller. In its own folder, once:
+#
+#   mkdir -m 700 data
+#   printf 'ESPDNS_UID=%s\nESPDNS_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+#
+# then docker compose up -d and open http://127.0.0.1:8480 to set it up.
+#
+# Your keys and settings live in ./data, as your own files. Back it up.
+# Update: download the new release's compose.yaml over this one, then docker compose up -d.
+#
+# (The release fills in the image below; this template isn't run as it is.)
+name: espdns
+services:
+  espdns-controller:
+    image: "@ESPDNS_IMAGE@"
+    container_name: espdns-controller
+    restart: unless-stopped
+    # Host network: finds the nodes on your LAN. The web page is on this computer only.
+    network_mode: host
+    # You, from .env, so the files in ./data stay yours
+    user: "${ESPDNS_UID:?run the printf line at the top of this file}:${ESPDNS_GID:?run the printf line at the top of this file}"
+    command: ["-listen", "127.0.0.1:8480"]
+    # Locked down: no extra rights, read-only, limited memory and processes
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 2g
+    environment:
+      GOMEMLIMIT: 1800MiB
+    pids_limit: 256
+    # ./data next to this file. To keep it in a Docker volume instead, use "- data:/data",
+    # drop the user: line, and add at the end: volumes: {data: {}}
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/espdns-controller", "-healthcheck", "-listen", "127.0.0.1:8480"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3

@@ -1,0 +1,27 @@
+# ESP32-S3 with octal PSRAM (S3R8, S3R16V) and wired Ethernet (a W5500 over SPI): Waveshare
+# ESP32-S3-ETH. For wired S3 boards only: a Wi-Fi S3 board runs esp32s3-octal.
+#
+# esp32s3-octal, plus speed bought with internal RAM. A Wi-Fi S3 can't spare that RAM (the
+# XIAO ESP32S3 Sense on Wi-Fi bottoms out at 28.6 KB of internal RAM free on esp32s3-octal),
+# so these options are an image of their own. Measured on the Waveshare ESP32-S3-ETH, a
+# 3,000 qps flood, share answered:
+#   esp32s3-octal (the lean W5500 driver)                    30.5%
+#   + the 32 KB instruction cache                            64%,   heap free 75 KB
+#   + the SPI master and lwIP's packet path in IRAM          78.6%, heap free 62 KB, p50 30 ms
+# (both measured with lwIP core locking and the Ethernet input under its lock as well; the
+# options without those are not measured).
+#
+# The same chip, PSRAM and flash layout as esp32s3-octal: a node moves between the two over
+# the air (firmware/CMakeLists.txt, sibling images).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+# The instruction cache at 32 KB, not 16: the other 16 KB come out of internal SRAM.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+# The SPI master's transfer path (every W5500 frame) and lwIP's packet path run from IRAM,
+# not from flash through the cache.
+CONFIG_SPI_MASTER_IN_IRAM=y
+CONFIG_LWIP_IRAM_OPTIMIZATION=y

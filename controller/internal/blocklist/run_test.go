@@ -630,3 +630,23 @@ func TestRunZeroLimitsSizeOnly(t *testing.T) {
 		}
 	}
 }
+
+// Each is given every entry read, with its source's index (the Blocking page's index).
+func TestRunEach(t *testing.T) {
+	dir := t.TempDir()
+	a := names(t, dir, "a.txt", 3)
+	w := filepath.Join(dir, "w.txt")
+	if err := os.WriteFile(w, []byte("*.track.example.net\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int][]Entry{}
+	_, err := Run(context.Background(), Request{Sources: []Source{domains(a), {Kind: Wildcard, Path: w, Allow: true}},
+		Each: func(i int, e Entry) { got[i] = append(got[i], e) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got[0]) != 3 || got[0][2] != (Entry{Name: "ads2.example.com"}) || len(got[1]) != 1 ||
+		got[1][0] != (Entry{Name: "track.example.net", Suffix: true, Allow: true}) {
+		t.Errorf("%+v", got)
+	}
+}

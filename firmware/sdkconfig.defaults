@@ -8,9 +8,10 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_FATFS_LFN_HEAP=y
 
 # Every Ethernet driver the chip can use: the built-in MAC's PHYs are always in; the SPI
-# chips are opt-in.
+# chips are opt-in. The W5500's driver is our own copy (components/w5500), so ESP-IDF's
+# stays off; the SPI Ethernet types it needs stay on.
 CONFIG_ETH_USE_SPI_ETHERNET=y
-CONFIG_ETH_SPI_ETHERNET_W5500=y
+CONFIG_ETH_SPI_ETHERNET_W5500=n
 
 # Flash parts seen on supported boards
 CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y

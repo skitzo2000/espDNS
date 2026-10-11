@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
 	"github.com/skitzo2000/espdns/controller/internal/auth"
+	"github.com/skitzo2000/espdns/controller/internal/blocking"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
+	"github.com/skitzo2000/espdns/controller/internal/secfile"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
@@ -22,17 +26,19 @@ import (
 // auth's (POST /api/setup/password: only while none is set, only from this machine); the
 // rest is here:
 //
-//	GET  /api/setup      what is set up: the password, settings.json, the release key, the
-//	                     zone primary and its token, the nodes; first_run while there is
-//	                     neither a password nor settings.json; the first run's steps
+//	GET  /api/setup      what is set up: the password, settings.json, the keys (the release
+//	                     key, the recovery public key), the zone primary's address, the
+//	                     nodes; first_run while there is neither a password nor
+//	                     settings.json; the first run's steps, and "done" once every one is
+//	POST /api/setup/step {"step": "keys" | "primary" | "router" | "blocking"}: a step the
+//	                     browser can't see done (recovery.pem saved offline, the router
+//	                     told, blocking chosen) or one skipped (the zone primary, blocking):
+//	                     marked done in setup.json. keys only once both keys are there.
 //	GET  /api/settings   settings.json as the form edits it (every field, empty ones too), its
-//	                     version, the zone primary's kinds and whether its token is set (never
-//	                     the token)
-//	POST /api/settings   {"settings": {...}, "version", "primary_token", "remove_primary_token"}:
-//	                     settings.json replaced whole if still the version read; the token
-//	                     written (or removed) with it; the form again. The zone primary's
-//	                     pinned certificate (cert_sha256) is kept or taken away here, never
-//	                     set: it is set by confirming it (primarycert.go)
+//	                     version, and the zone primary as the Zones page shows it (the nodes
+//	                     in none of the networks it allows)
+//	POST /api/settings   {"settings": {...}, "version"}: settings.json replaced whole if still
+//	                     the version read; the form again
 //
 // The GETs are open as the other reads are while no password is set (the first run reads
 // them before one is); with a password they need a login. The POST needs a login. Nothing
@@ -53,6 +59,7 @@ type setupServer struct {
 
 func (s setupServer) routes(mux *routes) {
 	mux.HandleFunc("GET /api/setup", s.setup)
+	mux.HandleFunc("POST /api/setup/step", needLogin("the first run's steps need", s.mark))
 	mux.HandleFunc("GET /api/settings", s.get)
 	mux.HandleFunc("POST /api/settings", needLogin("changing the settings needs", s.save))
 }
@@ -69,23 +76,35 @@ func (s setupServer) setup(w http.ResponseWriter, r *http.Request) {
 	pwSet, pwErr := s.auth.State()
 	st, _, exists, err := settings.Read(settings.Path(s.dataDir))
 	_, keyErr := s.key.Key()
-	_, tokErr := keys.DataTokenSource{DataDir: s.dataDir}.Token()
+	_, recErr := keys.ReadRecovery(s.dataDir)
+	marked := readMarks(s.dataDir)
 	out := map[string]any{
 		"first_run":      !pwSet && !exists,
 		"password_set":   pwSet,
 		"settings_saved": exists,
 		"release_key":    keyErr == nil,
-		"primary":        st.ZonePrimary().Kind,
-		"primary_token":  tokErr == nil,
+		"recovery_key":   recErr == nil,
+		"keys_saved":     marked["keys"],
+		"primary":        st.ZonePrimary().Address,
 		"nodes":          len(st.Nodes),
-		"steps": []setupStep{
-			{Step: "password", Done: pwSet && pwErr == nil},
-			{Step: "release_key", Done: keyErr == nil},
-			{Step: "primary", Done: st.Primary != nil, Optional: true},
-			{Step: "first_node", Done: len(st.Nodes) >= 1},
-			{Step: "second_node", Done: len(st.Nodes) >= 2},
-		},
 	}
+	defs, _, _ := blocking.Load(s.dataDir)
+	steps := []setupStep{
+		{Step: "password", Done: pwSet && pwErr == nil},
+		// Make your keys: the release key (made here or imported), the recovery key's public
+		// half (made in the browser), and recovery.pem saved somewhere safe offline.
+		{Step: "keys", Done: keyErr == nil && recErr == nil && marked["keys"]},
+		{Step: "primary", Done: st.Primary != nil || marked["primary"], Optional: true},
+		{Step: "first_node", Done: len(st.Nodes) >= 1},
+		{Step: "second_node", Done: len(st.Nodes) >= 2},
+		{Step: "router", Done: marked["router"]},
+		{Step: "blocking", Done: len(defs.Lists) > 0 || marked["blocking"], Optional: true},
+	}
+	done := true
+	for _, x := range steps {
+		done = done && x.Done
+	}
+	out["steps"], out["done"], out["blocklists"] = steps, done, len(defs.Lists)
 	if pwErr != nil {
 		out["password_error"] = pwErr.Error()
 	}
@@ -95,10 +114,97 @@ func (s setupServer) setup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// The steps the browser marks done (POST /api/setup/step): the ones the controller can't
+// see done itself, or that were skipped. Kept in <data>/setup.json, {"done": [...]}.
+var markable = []string{"keys", "primary", "router", "blocking"}
+
+func marksPath(dataDir string) string { return filepath.Join(dataDir, "setup.json") }
+
+// readMarks is setup.json's steps; none when it isn't there or can't be read (the steps
+// are then shown again, which is harmless).
+func readMarks(dataDir string) map[string]bool {
+	m := map[string]bool{}
+	b, err := os.ReadFile(marksPath(dataDir))
+	if err != nil {
+		return m
+	}
+	var f struct {
+		Done []string `json:"done"`
+	}
+	if json.Unmarshal(b, &f) == nil {
+		for _, x := range f.Done {
+			if slices.Contains(markable, x) {
+				m[x] = true
+			}
+		}
+	}
+	return m
+}
+
+func (s setupServer) mark(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Step string `json:"step"`
+	}
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&body); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if !slices.Contains(markable, body.Step) {
+		fieldErr(w, "step", fmt.Errorf("one of %v (the others are done when what they set up is there)", markable))
+		return
+	}
+	if body.Step == "keys" {
+		// "I saved recovery.pem": only once there is a recovery key (and a release key) to
+		// have saved.
+		if _, err := s.key.Key(); err != nil {
+			fieldErr(w, "step", fmt.Errorf("make or import the release key first: %v", err))
+			return
+		}
+		if _, err := keys.ReadRecovery(s.dataDir); err != nil {
+			fieldErr(w, "step", fmt.Errorf("make the recovery key first: %v", err))
+			return
+		}
+	}
+	m := readMarks(s.dataDir)
+	m[body.Step] = true
+	if err := writeMarks(s.dataDir, m); err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	log.Printf("first run: %s marks %s done", auth.User(r.Context()), body.Step)
+	s.setup(w, r)
+}
+
+func writeMarks(dataDir string, m map[string]bool) error {
+	done := []string{}
+	for _, x := range markable {
+		if m[x] {
+			done = append(done, x)
+		}
+	}
+	b, _ := json.Marshal(map[string][]string{"done": done})
+	return secfile.WriteFile(marksPath(dataDir), append(b, '\n'))
+}
+
+// unmark takes a step's mark away (a new recovery key: the one saved isn't it), if it has one.
+func unmark(dataDir, step string) {
+	m := readMarks(dataDir)
+	if !m[step] {
+		return
+	}
+	delete(m, step)
+	if err := writeMarks(dataDir, m); err != nil {
+		log.Printf("first run: %s: not unmarked: %v", step, err)
+	}
+}
+
 // settingsForm is settings.json with every field, an empty one as [] or "" (primary null):
 // what the form shows and sends back.
 type settingsForm struct {
 	Nodes        []string        `json:"nodes"`
+	OutOfService []string        `json:"out_of_service"`
 	DNSPeers     []string        `json:"dns_peers"`
 	DNSPeerZones []string        `json:"dns_peer_zones"`
 	Canary       string          `json:"canary"`
@@ -106,6 +212,8 @@ type settingsForm struct {
 	Primary      *primary.Config `json:"primary"`
 	// InternalSources: the internal allowlist for blocklist URL sources
 	InternalSources []string `json:"internal_sources"`
+	// BlocklistRefresh: how often downloaded blocklists are checked ("" the default)
+	BlocklistRefresh string `json:"blocklist_refresh"`
 }
 
 func formOf(s settings.Settings) settingsForm {
@@ -115,16 +223,9 @@ func formOf(s settings.Settings) settingsForm {
 		}
 		return v
 	}
-	return settingsForm{Nodes: nz(s.Nodes), DNSPeers: nz(s.DNSPeers), DNSPeerZones: nz(s.DNSPeerZones),
-		Canary: s.Canary, NoDHCP: nz(s.NoDHCP), Primary: s.Primary, InternalSources: nz(s.InternalSources)}
-}
-
-// primaryKind is a kind of zone primary the form offers.
-type primaryKind struct {
-	Kind    string `json:"kind"`
-	Name    string `json:"name"`
-	API     bool   `json:"api"`               // driven over its API, with an address and a token
-	Example string `json:"example,omitempty"` // an API address, for the form's hint
+	return settingsForm{Nodes: nz(s.Nodes), OutOfService: nz(s.OutOfService), DNSPeers: nz(s.DNSPeers), DNSPeerZones: nz(s.DNSPeerZones),
+		Canary: s.Canary, NoDHCP: nz(s.NoDHCP), Primary: s.Primary, InternalSources: nz(s.InternalSources),
+		BlocklistRefresh: s.BlocklistRefresh}
 }
 
 func (s setupServer) view() (map[string]any, error) {
@@ -136,37 +237,9 @@ func (s setupServer) view() (map[string]any, error) {
 		}
 		out["error"] = err.Error() // shown, and replaced whole by the next save
 	}
-	var kinds []primaryKind
-	for _, k := range primary.Kinds() {
-		d, _ := primary.Lookup(k)
-		kinds = append(kinds, primaryKind{Kind: d.Kind, Name: d.Name, API: d.API, Example: d.Example})
-	}
-	tok := map[string]any{"set": false}
-	t, terr := keys.DataTokenSource{DataDir: s.dataDir}.Token()
-	switch {
-	case terr == nil:
-		tok["set"] = true
-	case !errors.Is(terr, keys.ErrNoToken):
-		tok["error"] = terr.Error() // there but not usable (its mode, its owner): never the token
-	}
-	// Whether the primary is reached from here or changed by hand, and why: from the
-	// settings and the token only, nothing is asked of it (GET /api/primary reads its lists).
-	zp := st.ZonePrimary()
-	if zp.IsZero() {
-		zp.Kind = primary.KindManual
-	}
-	ready := map[string]any{"kind": zp.Kind, "api": zp.URL, "by_hand": true}
-	if zp.CertSHA256 != "" {
-		ready["cert_sha256"] = zp.CertSHA256
-	}
-	if p, err := primary.Open(zp, t, primary.Options{}); err != nil {
-		ready["why"] = err.Error()
-	} else if why := primary.Why(p); why != "" {
-		ready["why"] = why
-	} else {
-		ready["by_hand"] = false
-	}
-	out["primary_kinds"], out["primary_token"], out["primary_state"] = kinds, tok, ready
+	// The zone primary as the Zones page shows it: which nodes' addresses are in none of
+	// the networks it allows.
+	out["primary"] = primaryFacts(st)
 	return out, nil
 }
 
@@ -189,10 +262,8 @@ func fieldErr(w http.ResponseWriter, field string, err error) {
 
 func (s setupServer) save(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Settings           json.RawMessage `json:"settings"`
-		Version            *string         `json:"version"`
-		PrimaryToken       string          `json:"primary_token"`
-		RemovePrimaryToken bool            `json:"remove_primary_token"`
+		Settings json.RawMessage `json:"settings"`
+		Version  *string         `json:"version"`
 	}
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10))
 	d.DisallowUnknownFields()
@@ -218,33 +289,6 @@ func (s setupServer) save(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// A plain http address is let through in a settings.json already written (the primary
-	// paused), never saved here.
-	if st.Primary != nil {
-		if err := st.Primary.Check(); err != nil {
-			fieldErr(w, "primary", err)
-			return
-		}
-	}
-	zp := st.ZonePrimary()
-	d2, _ := primary.Lookup(zp.Kind)
-	var tok string
-	switch {
-	case body.PrimaryToken != "" && body.RemovePrimaryToken:
-		fieldErr(w, "primary_token", errors.New("a token to set, or the token removed: not both"))
-		return
-	case body.PrimaryToken != "" && zp.IsZero():
-		fieldErr(w, "primary_token", fmt.Errorf("no zone primary to use the token with: set \"primary\" (%v take a token)", primary.APIKinds()))
-		return
-	case body.PrimaryToken != "" && !d2.API:
-		fieldErr(w, "primary_token", fmt.Errorf("a zone primary of kind %s takes no token (only %v, over their API)", zp.Kind, primary.APIKinds()))
-		return
-	case body.PrimaryToken != "":
-		if tok, err = keys.ParseToken("primary_token", []byte(body.PrimaryToken)); err != nil {
-			fieldErr(w, "primary_token", err)
-			return
-		}
-	}
 	path := settings.Path(s.dataDir)
 	var old settings.Settings
 	save := settings.SaveIf
@@ -254,40 +298,8 @@ func (s setupServer) save(w http.ResponseWriter, r *http.Request) {
 	err = save(path, *body.Version, st, func() error {
 		// The file as it is now (the version checked, the writes held off): what changed.
 		old, _, _, _ = settings.Read(path)
-		// A pin is set by confirming the certificate the primary presents, never by a save:
-		// one may only be kept, for the same primary, or taken away. Checked first, whether a
-		// token is given or removed or not: a save with a token sets no pin either.
-		if pin := zp.CertSHA256; pin != "" && (pin != old.ZonePrimary().CertSHA256 || !old.ZonePrimary().SameTarget(zp)) {
-			why := "it is set by confirming the certificate the primary presents (GET, then POST /api/primary/certificate)"
-			if pin == old.ZonePrimary().CertSHA256 {
-				why = "it is the certificate of " + old.ZonePrimary().URL + ": leave it out, then confirm the new primary's certificate"
-			}
-			return &settings.FieldError{Field: "primary", Err: fmt.Errorf(`"cert_sha256" can't be set here: %s`, why)}
-		}
-		// A token given or removed: the old one goes first, and a new one is written only
-		// once the settings it is for are (after). A save that fails halfway leaves no
-		// token, never one beside a primary it wasn't given for.
-		if tok != "" || body.RemovePrimaryToken {
-			return keys.RemoveToken(keys.TokenPath(s.dataDir))
-		}
-		// The token kept goes only to the primary it was saved for: one moved to another
-		// kind or address with it would be sent there, so the save must give it again (who
-		// moves it shows they hold it) or remove it.
-		if _, terr := (keys.DataTokenSource{DataDir: s.dataDir}).Token(); d2.API && !errors.Is(terr, keys.ErrNoToken) &&
-			!old.ZonePrimary().SameTarget(zp) {
-			return &settings.FieldError{Field: "primary_token", Err: fmt.Errorf(
-				"the saved token is for %s, not %s: give it again (primary_token), or remove it", primaryName(old.ZonePrimary()), zp)}
-		}
 		return nil
-	}, func() error {
-		if tok == "" {
-			return nil
-		}
-		if _, err := keys.ImportDataToken(s.dataDir, tok, true); err != nil {
-			return fmt.Errorf("settings.json saved, but not the zone primary's token (give it again): %w", err)
-		}
-		return nil
-	})
+	}, nil)
 	var fe *settings.FieldError
 	switch {
 	case errors.As(err, &fe):
@@ -301,12 +313,6 @@ func (s setupServer) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	what := changedFields(old, st)
-	switch {
-	case tok != "":
-		what = append(what, "primary token set")
-	case body.RemovePrimaryToken:
-		what = append(what, "primary token removed")
-	}
 	user := auth.User(r.Context())
 	log.Printf("settings: saved by %s: %v", user, what)
 	if err := actionlog.Append(s.dataDir, actionlog.Entry{Event: "save", ID: "settings-" + time.Now().UTC().Format("20060102-150405"),
@@ -319,14 +325,6 @@ func (s setupServer) save(w http.ResponseWriter, r *http.Request) {
 	s.get(w, r)
 }
 
-// primaryName is a zone primary as an error names it: none set is "none".
-func primaryName(c primary.Config) string {
-	if c.IsZero() {
-		return "none"
-	}
-	return c.String()
-}
-
 // changedFields names the fields of settings.json that differ (never their values: the
 // action log says what changed, the file says to what).
 func changedFields(a, b settings.Settings) []string {
@@ -336,12 +334,15 @@ func changedFields(a, b settings.Settings) []string {
 		same bool
 	}{
 		{"nodes", slices.Equal(a.Nodes, b.Nodes)},
+		{"out_of_service", slices.Equal(a.OutOfService, b.OutOfService)},
 		{"dns_peers", slices.Equal(a.DNSPeers, b.DNSPeers)},
 		{"dns_peer_zones", slices.Equal(a.DNSPeerZones, b.DNSPeerZones)},
 		{"canary", a.Canary == b.Canary},
 		{"no_dhcp", slices.Equal(a.NoDHCP, b.NoDHCP)},
-		{"primary", a.ZonePrimary() == b.ZonePrimary() && (a.Primary == nil) == (b.Primary == nil)},
+		{"primary", a.ZonePrimary().Address == b.ZonePrimary().Address && slices.Equal(a.ZonePrimary().Allows, b.ZonePrimary().Allows) &&
+			slices.Equal(a.ZonePrimary().Zones, b.ZonePrimary().Zones)},
 		{"internal_sources", slices.Equal(a.InternalSources, b.InternalSources)},
+		{"blocklist_refresh", a.BlocklistRefresh == b.BlocklistRefresh},
 	} {
 		if !f.same {
 			out = append(out, f.name)

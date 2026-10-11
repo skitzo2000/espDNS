@@ -1,7 +1,7 @@
 # Node endpoints
 
-Every node runs a small HTTP server on port 80. The controller uses it to watch and change
-the node. You can read the same endpoints for monitoring.
+Every node runs a small HTTP server on port 80. The controller watches and changes the node
+through it, and you can read the same endpoints for monitoring.
 
 Back to the [reference index](README.md).
 
@@ -12,25 +12,66 @@ Back to the [reference index](README.md).
 | GET | [`/metrics`](#metrics) | anyone | Prometheus metrics. |
 | GET | [`/querylog`](#querylog) | private addresses only | The node's query log. |
 | POST | `/ota` | private addresses only | A signed firmware release. |
-| POST | `/release` | private addresses only | Any other signed release (config, zones, blocklist, overrides, control). |
+| POST | [`/release`](#release-kinds) | private addresses only | Any other signed release (config, zones, blocklist, overrides, control, keys). |
 
 Rules for every request:
 
 - **Host check.** The `Host` header must name the node: its IPv4 address, its mDNS name
   (`<hostname>.local`), or the `name` from its node config, with or without a port. Anything
-  else, an IPv6 literal, or no `Host` gets `421 Misdirected Request`. This stops DNS
-  rebinding attacks from a web page.
+  else, an IPv6 literal, or no `Host` gets `421 Misdirected Request`, which stops DNS
+  rebinding from a web page.
 - **No body on a GET.** A GET with a body gets `400`.
-- **Deadlines.** Each request has one deadline for its headers and reply. A slow client is
+- **Deadlines.** Each request has one deadline for its headers and reply; a slow client is
   cut off.
 - **Private addresses.** `/querylog`, `/ota` and `/release` answer `403` unless the client's
   address is in a private IPv4 range (RFC 1918) or the shared address space (RFC 6598).
 - **Signed releases.** `/ota` and `/release` take only releases signed with a key the node
-  trusts, bound to the node's ID. You send them with the controller or the
-  [espdns CLI](cli.md), never by hand. How they are signed and checked is in
-  [Architecture](../architecture.md#signed-releases-and-pins).
+  trusts, bound to the node's ID. Send them with the controller or the [espdns CLI](cli.md),
+  never by hand. How they're signed and checked:
+  [Architecture](../architecture.md#signed-releases-and-pins). A node with no keys (setup
+  mode, health reason `no keys`) answers both `403` *this node has no keys: install it with
+  the controller's Install over USB (or write keys over USB)*.
 
-You can read a node from the controller's container with the CLI:
+### Release kinds
+
+| Kind | Name | Endpoint | Signed with | Target |
+|---|---|---|---|---|
+| 1 | firmware | `/ota` | release key | this node, or any node |
+| 2 | config | `/release` | release key | this node only |
+| 3 | zones | `/release` | release key | this node, or any node |
+| 4 | blocklist | `/release` | release key | this node, or any node |
+| 5 | overrides | `/release` | release key | this node, or any node |
+| 6 | control | `/release` | release key | this node, or any node |
+| 7 | keys | `/release` | **recovery key only** | this node only |
+
+A **KEYS release** (kind 7) rewrites the keys the node trusts ([Security, Key
+rotation](../security.md#key-rotation)).
+
+- Refused `403`: one signed with the release key, addressed to any node, or with a seq not
+  above the last KEYS one; and any KEYS release on a node whose keys aren't from its keys
+  partition (`keys_source` other than `partition` or `seeded`).
+- Payload, 138 bytes: `EDKR`, version 1, flags (bit 0: keep the old release key as the
+  retired key), the new release public key and the new recovery public key (65 bytes each).
+  A malformed one is refused `400`.
+- The node writes the keys slot it isn't using, reads it back, and uses the new keys at once,
+  without a reboot. It replies:
+
+```json
+{
+  "ok": true,
+  "message": "ok, keys generation 3 in use: release 0123456789abcdef, recovery fedcba9876543210, retired 1111222233334444",
+  "keys": ["0123456789abcdef", "fedcba9876543210"],
+  "keys_retired": "1111222233334444",
+  "keys_gen": 3,
+  "reboot_pending": false,
+  "rebooting": false
+}
+```
+
+The controller prepares one for each node, you sign it offline with the recovery key, and
+the controller pushes it one node at a time ([`key rotate`](cli.md#key-rotate)).
+
+To read a node from the controller's container with the CLI:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller status -data /data -host 192.0.2.53 -json
@@ -86,11 +127,12 @@ While `identify` runs, the LED flickers white instead.
 `listeners failed`, `no link`, `no address`, `sd card`, `blocking`, `zone expired`,
 `zone refresh failing`, `forwarders failing`, `low memory`, `no board definition`, `config`,
 `config on trial`, `hosted zones`, `reboot pending`, `listeners stalled`, `service failed`,
-`service restarting`, `older copy`, `forwarder task stalled`, `forwarders slow`.
+`service restarting`, `older copy`, `forwarder task stalled`, `forwarders slow`, `overloaded`,
+`no keys`.
 
 ## /status
 
-Everything the node reports, as one JSON object. The controller polls it. Fields appear in
+Everything the node reports, as one JSON object, polled by the controller. Fields appear in
 this order.
 
 ### Build and identity
@@ -112,8 +154,12 @@ this order.
 | `board_source` | Where the board definition came from: `partition`, `fallback` or `none`. |
 | `board_error` | Why the board definition was refused, or `""`. |
 | `fallback_board` | The built-in fallback board's name, or `""`. |
-| `keys` | Fingerprints of the two keys the node trusts: `[release, recovery]`. |
-| `seq` | The highest release sequence number applied, per kind: `firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`. |
+| `keys` | Fingerprints of the two keys the node trusts: `[release, recovery]`; `""` for none. |
+| `keys_source` | Where they came from: `partition` (a valid slot of the keys partition), `seeded` (this boot wrote the partition from a seed built into the firmware, `partition` from the next), `corrupt` (a damaged keys record, never written over), `embedded` (the partition can't be used; the firmware's seed is used) or `none` (no keys). `none`, or `corrupt` on firmware with no seed, is setup mode ([Security](../security.md#the-keys-decide-who-can-change-a-node)). A release's firmware has no seed. Missing: firmware from before the keys partition. |
+| `keys_retired` | Fingerprint of the retired release key a KEYS release kept, or `null` ([Release kinds](#release-kinds)). It verifies only what the node stored before; never a push. |
+| `keys_gen` | The keys partition slot's generation, or `null` when the keys aren't from it. A KEYS release moves it on. |
+| `keys_error` | What is wrong with the keys, or `""`. |
+| `seq` | The highest release sequence number applied, per kind: `firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`, `keys`. |
 | `degraded` | `true` while any degrading reason applies. |
 | `heap_free` | Free internal RAM, bytes. |
 | `psram_free` | Free PSRAM, bytes. |
@@ -221,8 +267,8 @@ holds), `entries`, `oldest` and `newest` (sequence numbers), `boot_id`.
 ### reboot
 
 `pending` (`true` while a release waits for a reboot), `reasons`, and `since_s`. The reasons
-are `config: address`, `config: wifi`, `config: zones`, `blocklist: size` and `firmware`. The
-node never reboots itself for a release: the controller reboots nodes one at a time.
+are `config: address`, `config: wifi`, `config: zones`, `blocklist: size` and `firmware`. A
+node never reboots itself for a release; the controller reboots nodes one at a time.
 
 ## /metrics
 
@@ -236,7 +282,7 @@ Prometheus text format (`text/plain; version=0.0.4`). Open to anyone, like `/hea
 | `espdns_health_state` | gauge | `state` | 1 for the current health state, 0 for the others. |
 | `espdns_health_reason` | gauge | `reason` | 1 while that health reason applies. |
 | `espdns_reboot_pending` | gauge | | 1 while a release waits for a reboot. |
-| `espdns_release_seq` | gauge | `kind` (`firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`) | Highest release seq applied. |
+| `espdns_release_seq` | gauge | `kind` (`firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`, `keys`) | Highest release seq applied. |
 | `espdns_link_up` | gauge | | 1 while the network link is up. |
 | `espdns_wifi_rssi_dbm` | gauge | | Wi-Fi signal (Wi-Fi nodes only). |
 | `espdns_clock_synced` | gauge | | 1 once the clock is set over SNTP. |

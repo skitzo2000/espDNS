@@ -10,14 +10,15 @@
  *   POST /ota     signed firmware release: header (release.h) + dns2.bin; reboots into it,
  *                 or with "X-OTA-Reboot: later" (or ?reboot=0) stages it: reboot pending
  *   POST /release signed release of another kind: header + payload (config, settings.h;
- *                 hosted zones, hosted.h; blocklist, overrides and control, blocking.h)
+ *                 hosted zones, hosted.h; blocklist, overrides and control, blocking.h;
+ *                 KEYS, keys.h: new keys, signed with the recovery key, in use at once)
  *
  * Every request must name this node in its Host header (its address, its .local name or its
  * configured name; else 421), and runs against a deadline; a release's payload, once its
  * signed header verified, in a worker task of its own (httpguard.h).
  *
- * Only public keys are built in (keys/release.pub, keys/recovery.pub), so a build holds no
- * secret. A new image boots on trial and must pass ota_confirm_when_healthy() or the
+ * The keys it trusts are public keys from its keys partition (keys_node.h), so a build holds
+ * no secret. A new image boots on trial and must pass ota_confirm_when_healthy() or the
  * bootloader rolls back.
  */
 #pragma once
@@ -34,8 +35,12 @@ void ota_start(void);
 bool ota_peer_private(httpd_req_t *req);
 /* If this boot is a trial after an update: mark it good once healthy, else roll back. */
 void ota_confirm_when_healthy(void);
-/* What this node trusts and who it is (usable from boot, after board_load). */
+/* What this node trusts and who it is (usable from boot, after board_load): what a push is
+ * checked with. */
 const rel_trust_t *ota_trust(void);
+/* The same, plus the retired release key a KEYS release kept (release.h): what a stored slot
+ * (config, zones, lists) is checked with when it is loaded. Never for a push. */
+const rel_trust_t *ota_trust_stored(void);
 /* The highest seq applied for a release kind (NVS); 0 if none ever was. */
 uint64_t ota_seq(uint8_t kind);
 /* True while a release (firmware or another kind) is being received. */

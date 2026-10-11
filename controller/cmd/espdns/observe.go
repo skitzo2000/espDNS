@@ -123,6 +123,10 @@ func printMetrics(w io.Writer, host string, m fleet.Metrics) {
 			v("espdns_fwd_shed_total", "group", "zones"), m.Sum("espdns_fwd_expired_total"),
 			v("espdns_fwd_tcp_retries_total"), v("espdns_fwd_select_errors_total"))
 	}
+	if full, ok := m.Value("espdns_udp_queue_full_seconds_total"); ok {
+		fmt.Fprintf(w, "  UDP queue full %s since boot (more queries than the node can answer: the rest dropped), %.0f shed past its deadline\n",
+			secs(full), v("espdns_udp_queue_expired_total"))
+	}
 	if _, ok := m.Value("espdns_cache_entries"); ok {
 		hits, misses := v("espdns_cache_hits_total"), v("espdns_cache_misses_total")
 		rate := 0.0

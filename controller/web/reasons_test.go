@@ -9,7 +9,7 @@ import (
 )
 
 // Every health reason the firmware can report (firmware/main/health.c, REASON_NAME) is
-// explained on the Nodes page (nodes.js, REASONS), so a degraded node always says why in
+// explained on the node page (nodeview.js, REASONS), so a degraded node always says why in
 // words: "forwarders slow" among them.
 func TestHealthReasonsExplained(t *testing.T) {
 	c, err := os.ReadFile("../../firmware/main/health.c")
@@ -26,7 +26,7 @@ func TestHealthReasonsExplained(t *testing.T) {
 	if len(names) < 20 {
 		t.Fatalf("%d reason names read from health.c", len(names))
 	}
-	js, err := fs.ReadFile(Files, "nodes.js")
+	js, err := fs.ReadFile(Files, "nodeview.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestHealthReasonsExplained(t *testing.T) {
 		name := n[1]
 		key := regexp.MustCompile(`(?m)^\s*(?:"` + regexp.QuoteMeta(name) + `"|` + regexp.QuoteMeta(name) + `):\s*\["(warn|bad|info)", "[^"]+`)
 		if !key.MatchString(r) {
-			t.Errorf("health reason %q has no explanation in nodes.js REASONS", name)
+			t.Errorf("health reason %q has no explanation in nodeview.js REASONS", name)
 		}
 	}
 }

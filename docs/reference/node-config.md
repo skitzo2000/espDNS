@@ -1,12 +1,10 @@
 # Node config
 
-A node config is a JSON file that sets how one node runs: its name, address, Wi-Fi,
-forwarders, zones, blocking and more. The controller keeps node configs in
-`<data>/configs/<name>.json`. It sends one to a node as a signed config release (adoption,
-a config push, a rollout, or an apply).
-
-The controller checks a config with the same rules the node uses. A config the controller
-accepts is one the node takes.
+A node config is a JSON file that sets how one node runs: name, address, Wi-Fi, forwarders,
+zones, blocking and more. The controller keeps them in `<data>/configs/<name>.json` and sends
+one as a signed config release (adoption, a config push, a rollout, or an apply). It checks
+a config with the node's own rules, so a config the controller accepts is one the node
+takes.
 
 Back to the [reference index](README.md).
 
@@ -25,10 +23,10 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
 ## Rules for the whole file
 
 - Every key is optional. `{}` is a valid config.
-- Unknown keys are refused, so a typo is an error, not a setting that does nothing.
+- Unknown keys are refused, so a typo is an error, not a setting that silently does nothing.
 - The file holds one JSON object and nothing after it.
-- The node receives the config as compact JSON. It must be at most 16,192 bytes. A node whose
-  flash has no config partition yet keeps configs in NVS, which holds at most 4,000 bytes.
+- The node receives it as compact JSON, at most 16,192 bytes. A node whose flash has no
+  config partition yet keeps configs in NVS, which holds at most 4,000 bytes.
 
 ## Example
 
@@ -52,10 +50,10 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
 
 ## Keys
 
-"Applies" says when a change takes effect on a running node: **live** (at once), or at the
+"Applies" says when a change takes effect on a running node: **live** (at once) or at the
 next **reboot**. A node with a change waiting for a reboot reports it in `/status`
-`reboot.reasons` (see [node-endpoints.md](node-endpoints.md#status)). The controller then
-reboots it one node at a time.
+`reboot.reasons` (see [node-endpoints.md](node-endpoints.md#status)), and the controller
+reboots nodes one at a time.
 
 ### Top level
 
@@ -89,11 +87,9 @@ compared in lower case.
 | `address` | The node's static address with its prefix length (`192.0.2.53/24`), or `"dhcp"` for a network with a DHCP server. | Required in `network`. A static address: IPv4, prefix 8 to 30, not the network's own or broadcast address. |
 | `gateway` | The default gateway. | Required with a static address. Refused with `"dhcp"`. Must be another address inside the node's network. |
 
-A node never asks DHCP for an address on its own. It uses DHCP only when a layer says
-`"dhcp"`. Adoption never gives `"dhcp"` to a node on a network listed in `settings.json`
-`no_dhcp` (see [settings.md](settings.md#fields)).
-
-A change of address applies at a reboot.
+A node uses DHCP only when a layer says `"dhcp"`; it never asks on its own. Adoption never
+gives `"dhcp"` to a node on a network in `settings.json` `no_dhcp` (see
+[settings.md](settings.md#fields)). A change of address applies at a reboot.
 
 ### wifi
 
@@ -104,8 +100,8 @@ A change of address applies at a reboot.
 | `tx_power_dbm` | Transmit power in dBm. Left out: the board's cap, else the chip's default. | 2 to 20. | live |
 | `power_save` | Wi-Fi power saving. | `true` or `false`. Default `false`. | live |
 
-The dashboard never shows the Wi-Fi password in a reply, unless you ask to reveal it and enter
-your password again.
+The dashboard never shows the Wi-Fi password unless you ask to reveal it and enter your
+password again.
 
 ### forward_zones
 
@@ -133,8 +129,9 @@ Zones the node copies from the zone primary over AXFR/IXFR, kept fresh by NOTIFY
 | `soa_poll_s` | Check the primary's serial at least this often, in seconds. Default `60`. | 10 to 86400. | live |
 | `retry_s` | Wait this long after a failed check, in seconds. Default `30`. | 5 to 3600. | live |
 
-The node must be on each zone's transfer and NOTIFY lists at the primary. Adoption adds it, or
-tells you the change to make by hand (see [settings.md](settings.md#primary)).
+The primary must allow zone transfers from the node's network. Set that up once on the
+primary for all your nodes' networks; adoption tells you when a node's address is in none of
+the networks you listed (see [settings.md](settings.md#primary)).
 
 ### hosted
 
@@ -142,7 +139,7 @@ tells you the change to make by hand (see [settings.md](settings.md#primary)).
 |-----|---------|
 | `enabled` | `false` turns the hosted zones service off. Default `true`. |
 
-The hosted zones themselves are not in the config. They are pushed as their own release.
+The hosted zones themselves aren't in the config; they're pushed as their own release.
 
 ### time
 
@@ -174,7 +171,7 @@ The hosted zones themselves are not in the config. They are pushed as their own 
 
 ## Services
 
-The services a node runs follow from its config:
+A node runs these services, following its config:
 
 | Service | Runs while |
 |---------|-----------|
@@ -213,8 +210,6 @@ It prints `ok` with the size, then the payload the node would get. The payload i
 Wi-Fi password, so mind where the output goes.
 
 Add `-host <address>` to also check it against that node (read only), or
-`-board <catalog board>` to check its memory plan on a catalog board. See
-[cli.md](cli.md#config).
-
-The dashboard's config editor runs the same checks
-(`POST /api/configs/{name}/check`, see [api.md](api.md#node-configs)).
+`-board <catalog board>` to check its memory plan on a catalog board ([cli.md](cli.md#config)).
+The dashboard's config editor runs the same checks (`POST /api/configs/{name}/check`, see
+[api.md](api.md#node-configs)).

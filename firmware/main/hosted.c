@@ -112,7 +112,7 @@ static const char *slot_load(int slot, rel_manifest_t *m, hz_set_t **out, char *
     int fd = open(path, O_RDONLY);
     if (fd < 0)
         return errno == ENOENT ? "missing" : "slot unreadable";
-    const char *why = blk_slot_read(fd, ota_trust(), REL_ZONES, m);
+    const char *why = blk_slot_read(fd, ota_trust_stored(), REL_ZONES, m);
     uint8_t *buf = NULL;
     if (!why && m->payload_len > limit())
         why = "bundle bigger than this board's limit";
@@ -141,7 +141,7 @@ static const char *slot_header(int slot, rel_manifest_t *m)
     int fd = open(path, O_RDONLY);
     if (fd < 0)
         return errno == ENOENT ? "missing" : "slot unreadable";
-    const char *why = blk_slot_read(fd, ota_trust(), REL_ZONES, m);
+    const char *why = blk_slot_read(fd, ota_trust_stored(), REL_ZONES, m);
     close(fd);
     return why;
 }

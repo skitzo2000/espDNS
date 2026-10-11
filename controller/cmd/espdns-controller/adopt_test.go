@@ -16,28 +16,24 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
-	"github.com/skitzo2000/espdns/controller/internal/faketech"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
-	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
-const techToken = "0123456789abcdef-test-token"
-
 // adoptEnv is the controller's adoption on a fake network: a node in service in
-// settings.json (203.0.113.51), one to adopt (203.0.113.52), a fake Technitium in settings.json
-// with its token imported, the job runner with the adoption's kinds.
+// settings.json (203.0.113.51), one to adopt (203.0.113.52), the zone primary in
+// settings.json allowing zone transfers from 203.0.113.0/24, the job runner with the
+// adoption's kinds.
 type adoptEnv struct {
 	t      *testing.T
 	dir    string
 	lan    *fakenode.Lan
 	peer   *fakenode.Node
 	node   *fakenode.Node
-	tech   *faketech.Server
 	key    *ecdsa.PrivateKey
 	runner *jobs.Runner
 	adopt  *adoptKind
@@ -51,7 +47,7 @@ func newAdoptEnv(t *testing.T) *adoptEnv {
 	for i, name := range []string{"dns1", "new"} {
 		n := fakenode.New(name, [6]byte{2, 0, 0, 0, 0, byte(0x51 + i)}, "esp32p4-rev1", "p4-ip101", release.PublicRaw(e.key))
 		n.Addr, n.Gateway, n.Unadopted, n.DownFor = []string{"203.0.113.51", "203.0.113.52"}[i], "203.0.113.1", i == 1, 20*time.Millisecond
-		n.Secondary = []string{"home.example"} // its board's settings: the zone from Technitium
+		n.Secondary = []string{"home.example"} // its board's settings: the zone from the primary
 		e.lan.Add(n)
 		if i == 0 {
 			e.peer = n
@@ -59,34 +55,25 @@ func newAdoptEnv(t *testing.T) *adoptEnv {
 			e.node = n
 		}
 	}
-	e.tech = faketech.New(techToken, "home.example", "lab.example")
-	ts := httptest.NewTLSServer(e.tech) // its own certificate, pinned below
-	t.Cleanup(ts.Close)
 	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"},
-		Primary: &primary.Config{Kind: primary.KindTechnitium, URL: ts.URL,
-			CertSHA256: primary.Fingerprint(ts.Certificate())}}); err != nil {
+		Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}}); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(configs.Path(e.dir), "n2.json"), []byte(`{"name": "dns2", "forwarders": ["9.9.9.9"], `+
 		`"secondary": {"primary": "203.0.113.254", "zones": ["home.example", "lab.example"]}}`))
 	writeFile(t, filepath.Join(configs.Path(e.dir), "n1.json"), []byte(`{"name": "dns1", "secondary": {"zones": ["home.example"]}}`))
-	if _, err := keys.ImportToken(keys.TokenPath(e.dir), techToken, false); err != nil {
-		t.Fatal(err)
-	}
 	hc := e.lan.HTTP()
 	act := actions{dataDir: e.dir, key: keyOf{e.key}, known: func() []string { return e.seen },
 		client: func() *fleet.Client {
 			return &fleet.Client{HTTP: hc, DNS: e.lan, PeerDNS: e.lan, Poll: 10 * time.Millisecond}
 		}}
 	e.adopt = &adoptKind{actions: act, secret: newSecret(), used: &usedRuns{}, nodes: e.found,
-		token: keys.DataTokenSource{DataDir: e.dir},
-		job:   func(id string) (jobs.Job, bool) { return e.runner.Get(id) },
+		job: func(id string) (jobs.Job, bool) { return e.runner.Get(id) },
 		adjust: func(a *fleet.Adopt) {
 			a.ConfirmWait = 5 * time.Second
 		}}
 	e.runner = jobs.New(e.dir, map[string]jobs.Kind{
 		"adopt":        func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.kind(raw) },
-		"primary":      func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.primaryKind(raw) },
 		"settings-add": func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsAdd(raw) }})
 	e.runner.Logf = t.Logf
 	runJobs(t, e.runner)
@@ -153,11 +140,10 @@ func progressOf(t *testing.T, j jobs.Job) adoptProgress {
 	return p
 }
 
-// The Adopt page's flow: a dry run (Technitium read, what it would change shown per zone,
-// nothing changed), then the adoption after it: each step followed, the zones' lists
-// changed, the node moved and confirmed, the config it runs recorded by the controller,
-// its address added to settings.json as asked. The token is nowhere in the job's record,
-// its log or the action log.
+// The Adopt page's flow: a dry run (nothing changed), then the adoption after it: each step
+// followed, nothing said about the zone primary (the node's address is in a network it
+// allows), the node moved and confirmed, the config it runs recorded by the controller,
+// its address added to settings.json as asked, the job in the action log.
 func TestAdoptPage(t *testing.T) {
 	e := newAdoptEnv(t)
 	addr := map[string]any{"address": "203.0.113.60/24"}
@@ -170,8 +156,8 @@ func TestAdoptPage(t *testing.T) {
 		t.Fatal(dry.State, dry.Error, dry.Log)
 	}
 	p := progressOf(t, dry)
-	if !p.DryRun || p.Address != "203.0.113.60" || len(p.Primary.Edits) != 2 || p.Primary.Edits[0].Applied ||
-		!strings.Contains(strings.Join(p.Primary.Edits[0].Changes, "; "), "zone transfer name servers 203.0.113.60") {
+	if !p.DryRun || p.Address != "203.0.113.60" || p.Primary.Advice != "" || p.Primary.Primary != "203.0.113.254" ||
+		!slices.Equal(p.Primary.Zones, []string{"home.example", "lab.example"}) || len(p.Hints) != 0 {
 		t.Fatalf("%+v", p)
 	}
 	for _, s := range p.Steps {
@@ -179,7 +165,7 @@ func TestAdoptPage(t *testing.T) {
 			t.Errorf("dry run step %d: %s", s.N, s.State)
 		}
 	}
-	if len(e.tech.Sets()) != 0 || slices.Contains(e.node.Events(), "push config") {
+	if slices.Contains(e.node.Events(), "push config") {
 		t.Fatal("the dry run changed something")
 	}
 	// The dry run is of this request only.
@@ -197,8 +183,7 @@ func TestAdoptPage(t *testing.T) {
 			t.Errorf("step %d: %s %s", s.N, s.State, s.Detail)
 		}
 	}
-	if !strings.HasPrefix(p.Outcome, "adopted: node "+e.node.ID()+" on 203.0.113.60") || len(p.Primary.Edits) != 2 ||
-		!p.Primary.Edits[1].Applied {
+	if !strings.HasPrefix(p.Outcome, "adopted: node "+e.node.ID()+" on 203.0.113.60") || p.Primary.Advice != "" {
 		t.Fatalf("%+v", p)
 	}
 	var res adoptResult
@@ -218,24 +203,9 @@ func TestAdoptPage(t *testing.T) {
 	if _, err := e.start("adopt", e.web(map[string]any{"address": "203.0.113.60/24", "after": dry.ID})); err == nil {
 		t.Fatal("a dry run followed twice")
 	}
-	// The token: never in a record or a log.
-	for _, jj := range e.runner.List() {
-		full, _ := e.runner.Get(jj.ID)
-		b, _ := json.Marshal(full)
-		if strings.Contains(string(b), techToken) {
-			t.Fatalf("job %s holds the token", jj.ID)
-		}
-	}
-	recs, _ := os.ReadDir(filepath.Join(e.dir, actionlog.Dir, jobs.JobsDir))
-	for _, r := range recs {
-		b, _ := os.ReadFile(filepath.Join(e.dir, actionlog.Dir, jobs.JobsDir, r.Name()))
-		if strings.Contains(string(b), techToken) {
-			t.Fatal(r.Name(), "holds the token")
-		}
-	}
 	al, _ := actionlog.Tail(e.dir, 100)
 	b, _ := json.Marshal(al)
-	if strings.Contains(string(b), techToken) || !strings.Contains(string(b), "job adopt") {
+	if !strings.Contains(string(b), "job adopt") {
 		t.Fatal("action log:", string(b))
 	}
 }
@@ -268,10 +238,40 @@ func TestAdoptPageRefuses(t *testing.T) {
 		{e.web(map[string]any{"config": "fleet.json", "dry_run": true}), "settings"},
 		{e.web(map[string]any{"address": "dhcp", "gateway": "203.0.113.1", "dry_run": true}), "only with a static address"},
 		{e.web(map[string]any{"dry_run": true, "add_to_settings": true}), "for the adoption after a dry run"},
+		// + Add node's ("static"): dhcp only reserved; else a fixed address with its prefix and
+		// a gateway in its network, never none (the config's).
+		{e.web(map[string]any{"static": true, "address": "dhcp", "dry_run": true}), "dhcp only once"},
+		{e.web(map[string]any{"static": true, "dry_run": true}), "gets a fixed address"},
+		{e.web(map[string]any{"static": true, "address": "203.0.113.60", "dry_run": true}), "gets a fixed address"},
+		{e.web(map[string]any{"static": true, "address": "203.0.113.60/0", "dry_run": true}), "gets a fixed address"},
+		{e.web(map[string]any{"static": true, "address": "203.0.113.60/24", "dry_run": true}), `"gateway": give the gateway`},
+		{e.web(map[string]any{"static": true, "address": "203.0.113.60/24", "gateway": "192.0.2.1", "dry_run": true}), "its next hop"},
 		{e.web(map[string]any{"dry_run": true, "force": true}), "unknown field"},
+		{e.web(map[string]any{"dry_run": true, "primary_done": true}), "unknown field"},
 	} {
 		if _, err := e.start("adopt", tc.params); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: %v, want %q", tc.params, err, tc.want)
+		}
+	}
+	// The preview refuses the same; a static address with its prefix and gateway passes, and
+	// so does dhcp reserved.
+	for _, tc := range []struct {
+		params map[string]any
+		code   int
+		want   string
+	}{
+		{map[string]any{"address": "dhcp"}, 400, "dhcp only once"},
+		{map[string]any{"address": ""}, 400, "gets a fixed address"},
+		{map[string]any{"address": "203.0.113.60/24"}, 400, "give the gateway"},
+		{map[string]any{"address": "203.0.113.60/24", "gateway": "203.0.113.1"}, 200, ""},
+		{map[string]any{"address": "dhcp", "reserved": true}, 200, ""},
+	} {
+		w := httptest.NewRecorder()
+		tc.params["static"] = true
+		b, _ := json.Marshal(e.web(tc.params))
+		e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
+		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
+			t.Errorf("preview static %v: %d %s", tc.params, w.Code, w.Body)
 		}
 	}
 	// A node answering with the ID of another node the controller knows.
@@ -294,7 +294,7 @@ func TestAdoptPageRefuses(t *testing.T) {
 	if p := progressOf(t, j); j.State != jobs.Failed || p.Steps[1].State != "failed" || !strings.Contains(j.Error, "in use") {
 		t.Fatalf("%s %s %+v", j.State, j.Error, p.Steps)
 	}
-	if slices.Contains(e.node.Events(), "push config") || len(e.tech.Sets()) != 0 {
+	if slices.Contains(e.node.Events(), "push config") {
 		t.Fatal("changed:", e.node.Events())
 	}
 }
@@ -342,125 +342,61 @@ func TestAdoptPageRefusesFellBack(t *testing.T) {
 	if p := progressOf(t, j); j.State != jobs.Failed || p.Steps[1].State != "failed" || !strings.Contains(j.Error, "adopted already") {
 		t.Fatalf("%s %s %+v", j.State, j.Error, p.Steps)
 	}
-	if len(e.tech.Calls()) != 0 || slices.Contains(e.peer.Events(), "push config") {
-		t.Fatal("changed:", e.tech.Calls(), e.peer.Events())
+	if slices.Contains(e.peer.Events(), "push config") {
+		t.Fatal("changed:", e.peer.Events())
 	}
 }
 
-// Without a token: the dry run names the changes per zone to make by hand; the adoption is
-// refused until the page says they are done, then goes ahead without calling Technitium.
-func TestAdoptPageManual(t *testing.T) {
+// A node whose address is in none of the networks the zone primary allows: the preview,
+// the dry run and the adoption say once what to set up there, and the adoption goes ahead
+// with nothing to confirm. GET /api/adopt says which nodes in settings.json aren't covered.
+func TestAdoptPagePrimaryAdvice(t *testing.T) {
 	e := newAdoptEnv(t)
-	os.Remove(keys.TokenPath(e.dir))
+	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"},
+		Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"198.51.100.0/24"}}}); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Your zone primary must allow zone transfers from 203.0.113.52: allow its network (e.g. 203.0.113.0/24) there once."
+	w := httptest.NewRecorder()
+	b, _ := json.Marshal(e.web(nil))
+	e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
+	var pv adoptPreview
+	json.Unmarshal(w.Body.Bytes(), &pv)
+	if w.Code != 200 || pv.Advice != want || pv.Refusal != "" {
+		t.Fatalf("%d %+v %s", w.Code, pv, w.Body)
+	}
 	dry := e.run("adopt", e.web(map[string]any{"dry_run": true}))
 	p := progressOf(t, dry)
-	if dry.State != jobs.Done || len(p.Primary.Manual) != 2 || p.Primary.API != "" ||
-		!strings.Contains(p.Primary.Manual[1], "zone lab.example, Zone Options: add 203.0.113.52 to Zone Transfer") ||
-		!strings.Contains(p.Primary.Why, "no zone primary API token") {
-		t.Fatalf("%s %+v", dry.State, p.Primary)
+	if dry.State != jobs.Done || p.Primary.Advice != want || !slices.Contains(p.Hints, want) || countLog(dry, "must allow") != 1 {
+		t.Fatalf("%s %+v %v", dry.State, p, dry.Log)
 	}
-	if _, err := e.start("adopt", e.web(map[string]any{"after": dry.ID})); err == nil ||
-		!strings.Contains(err.Error(), "make them, then say they are done") {
-		t.Fatal(err)
+	j := e.run("adopt", e.web(map[string]any{"after": dry.ID}))
+	if p := progressOf(t, j); j.State != jobs.Done || p.Primary.Advice != want || !slices.Contains(p.Hints, want) {
+		t.Fatal(j.State, j.Error, p)
 	}
-	j := e.run("adopt", e.web(map[string]any{"after": dry.ID, "primary_done": true}))
-	if j.State != jobs.Done || len(e.tech.Calls()) != 0 || !progressOf(t, j).Primary.Done {
-		t.Fatal(j.State, j.Error, e.tech.Calls())
+	w = httptest.NewRecorder()
+	e.adopt.list(w, httptest.NewRequest("GET", "/api/adopt", nil))
+	var l struct {
+		Primary struct {
+			Address   string   `json:"address"`
+			Allows    []string `json:"allows"`
+			Uncovered []string `json:"uncovered"`
+		} `json:"primary"`
 	}
-}
-
-// The Technitium view: each secondary zone of the configs, its lists, and whether each node
-// in settings.json carrying it is in them; a missing one allowed as a job (the adoption's
-// edit), an entry that is no node in settings.json removed only when asked, never a node
-// in settings.json; no token in the reply.
-func TestTechnitiumLists(t *testing.T) {
-	e := newAdoptEnv(t)
-	e.tech.SetZone("home.example", faketech.Zone{Transfer: "AllowOnlySpecifiedNameServers", TransferList: []string{"203.0.113.40"},
-		Notify: "SpecifiedNameServers", NotifyList: []string{"203.0.113.40"}})
-	get := func() map[string]any {
-		w := httptest.NewRecorder()
-		e.adopt.lists(w, httptest.NewRequest("GET", "/api/primary", nil))
-		if strings.Contains(w.Body.String(), techToken) {
-			t.Fatal("the token in the reply")
-		}
-		var out map[string]any
-		json.Unmarshal(w.Body.Bytes(), &out)
-		return out
+	json.Unmarshal(w.Body.Bytes(), &l)
+	if l.Primary.Address != "203.0.113.254" || !slices.Equal(l.Primary.Allows, []string{"198.51.100.0/24"}) ||
+		!slices.Equal(l.Primary.Uncovered, []string{"203.0.113.51"}) {
+		t.Fatalf("%s", w.Body)
 	}
-	out := get()
-	zs, _ := out["zones"].([]any)
-	if len(zs) != 2 || out["error"] != nil {
-		t.Fatalf("%v", out)
-	}
-	home := zs[0].(map[string]any)
-	ns := home["nodes"].([]any)
-	if home["zone"] != "home.example" || len(ns) != 1 || ns[0].(map[string]any)["transfer"] != false ||
-		len(home["extra"].([]any)) != 1 || home["extra"].([]any)[0].(map[string]any)["addr"] != "203.0.113.40" {
-		t.Fatalf("%v", home)
-	}
-	// Fix: the node in settings.json allowed in (the job kind "primary"; its old name,
-	// "technitium", is no kind).
-	if _, err := e.start("technitium", map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "allow"}); err == nil {
-		t.Fatal(`the old job kind "technitium" taken`)
-	}
-	j := e.run("primary", map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "allow"})
-	if j.State != jobs.Done || j.Kind != "primary" {
-		t.Fatal(j.Error)
-	}
-	if z, _ := e.tech.Zone("home.example"); !slices.Equal(z.TransferList, []string{"203.0.113.40", "203.0.113.51"}) ||
-		!slices.Equal(z.NotifyList, []string{"203.0.113.40", "203.0.113.51"}) {
-		t.Fatal(z)
-	}
-	ns = get()["zones"].([]any)[0].(map[string]any)["nodes"].([]any)
-	if ns[0].(map[string]any)["transfer"] != true || ns[0].(map[string]any)["notify"] != true {
-		t.Fatal(ns)
-	}
-	for _, tc := range []struct {
-		params map[string]any
-		want   string
-	}{
-		{map[string]any{"zone": "home.example", "address": "203.0.113.40", "action": "allow"}, "not a node in settings.json"},
-		{map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "remove"}, "take it out of settings.json first"},
-		{map[string]any{"zone": "other.example", "address": "203.0.113.51", "action": "allow"}, "no secondary zone"},
-		{map[string]any{"zone": "home.example", "address": "203.0.113.051", "action": "allow"}, "not an IPv4"},
-		{map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "add"}, `"allow" or "remove"`},
-	} {
-		if _, err := e.start("primary", tc.params); err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%v: %v", tc.params, err)
-		}
-	}
-	j = e.run("primary", map[string]any{"zone": "home.example", "address": "203.0.113.40", "action": "remove"})
-	if z, _ := e.tech.Zone("home.example"); j.State != jobs.Done || !slices.Equal(z.TransferList, []string{"203.0.113.51"}) {
-		t.Fatal(j.Error, z)
-	}
-	// Never removed from here, though not in settings.json: a node the controller finds (the
-	// one being adopted, or one adopted and not listed yet), a DNS peer, the zone's primary.
-	e.tech.SetZone("home.example", faketech.Zone{Transfer: "AllowOnlySpecifiedNameServers",
-		TransferList: []string{"203.0.113.51", "203.0.113.52", "203.0.113.53", "203.0.113.254"}, Notify: "SpecifiedNameServers"})
-	s, _ := settings.Load(settings.Path(e.dir))
-	s.DNSPeers = []string{"203.0.113.53"}
-	if err := settings.Save(settings.Path(e.dir), s); err != nil {
-		t.Fatal(err)
-	}
-	for addr, want := range map[string]string{"203.0.113.52": "a node the controller finds", "203.0.113.53": "a DNS peer",
-		"203.0.113.254": "the zone's primary"} {
-		if _, err := e.start("primary", map[string]any{"zone": "home.example", "address": addr, "action": "remove"}); err == nil ||
-			!strings.Contains(err.Error(), want) {
-			t.Errorf("%s: %v, want %q", addr, err, want)
-		}
-	}
-	for _, x := range get()["zones"].([]any)[0].(map[string]any)["extra"].([]any) {
-		if x.(map[string]any)["in_use"] == nil {
-			t.Errorf("%v: offered for removal", x)
-		}
-	}
-	// Without a token: the view says why, and no job is queued.
-	os.Remove(keys.TokenPath(e.dir))
-	if out := get(); !strings.Contains(out["by_hand"].(string), "no zone primary API token") {
-		t.Fatal(out)
-	}
-	if _, err := e.start("primary", map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "allow"}); err == nil {
-		t.Fatal("queued without a token")
+	// A config with no secondary zones: nothing to say about a primary.
+	writeFile(t, filepath.Join(configs.Path(e.dir), "plain.json"), []byte(`{"name": "dns3"}`))
+	b, _ = json.Marshal(e.web(map[string]any{"config": "plain.json"}))
+	w = httptest.NewRecorder()
+	e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
+	pv = adoptPreview{}
+	json.Unmarshal(w.Body.Bytes(), &pv)
+	if pv.Advice != "" {
+		t.Fatal(pv)
 	}
 }
 
@@ -478,7 +414,7 @@ func TestSettingsAdd(t *testing.T) {
 	e2.node.Unadopted = false
 	j := e2.run("settings-add", map[string]any{"node": "203.0.113.52"})
 	s, _ := settings.Load(settings.Path(e2.dir))
-	if j.State != jobs.Done || !slices.Equal(s.Nodes, []string{"203.0.113.51", "203.0.113.52"}) || s.ZonePrimary().Kind != "technitium" {
+	if j.State != jobs.Done || !slices.Equal(s.Nodes, []string{"203.0.113.51", "203.0.113.52"}) || s.ZonePrimary().Address != "203.0.113.254" {
 		t.Fatal(j.Error, s)
 	}
 }
@@ -523,69 +459,13 @@ func TestAdoptPageNoDHCP(t *testing.T) {
 	}
 }
 
-// The manual kind (any primary), end to end on the page: the preview and the dry run list
-// the change per zone in any primary's terms, the adoption is refused until the page says
-// it is made ("primary_done"), then goes ahead with nothing called; the Zone primary view
-// reads no lists, shows what each node in settings.json carrying a zone needs, and queues
-// no job. The token (still imported) is never used.
-func TestAdoptPageManualKind(t *testing.T) {
-	e := newAdoptEnv(t)
-	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"},
-		Primary: &primary.Config{Kind: primary.KindManual}}); err != nil {
-		t.Fatal(err)
+// countLog is how many of j's log lines hold s.
+func countLog(j jobs.Job, s string) int {
+	n := 0
+	for _, l := range j.Log {
+		if strings.Contains(l.Text, s) {
+			n++
+		}
 	}
-	w := httptest.NewRecorder()
-	b, _ := json.Marshal(e.web(nil))
-	e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
-	var pv adoptPreview
-	json.Unmarshal(w.Body.Bytes(), &pv)
-	if w.Code != 200 || pv.PrimaryKind != "manual" || pv.PrimaryAPI != "" || len(pv.Manual) != 2 ||
-		!strings.Contains(pv.Manual[0], "zone home.example: allow 203.0.113.52 to transfer the zone (AXFR/IXFR)") ||
-		!strings.Contains(pv.PrimaryWhy, "kind manual") {
-		t.Fatalf("%d %+v %s", w.Code, pv, w.Body)
-	}
-	dry := e.run("adopt", e.web(map[string]any{"dry_run": true}))
-	p := progressOf(t, dry)
-	if dry.State != jobs.Done || p.Primary.Kind != "manual" || len(p.Primary.Manual) != 2 || p.Primary.API != "" ||
-		len(p.Primary.Edits) != 0 || !strings.Contains(p.Primary.Manual[1], "zone lab.example: allow 203.0.113.52") {
-		t.Fatalf("%s %+v", dry.State, p.Primary)
-	}
-	if _, err := e.start("adopt", e.web(map[string]any{"after": dry.ID})); err == nil ||
-		!strings.Contains(err.Error(), "make them, then say they are done") {
-		t.Fatal(err)
-	}
-	j := e.run("adopt", e.web(map[string]any{"after": dry.ID, "primary_done": true}))
-	if j.State != jobs.Done || len(e.tech.Calls()) != 0 || !progressOf(t, j).Primary.Done {
-		t.Fatal(j.State, j.Error, e.tech.Calls())
-	}
-	// The view: no lists, what each node needs. dns1 (203.0.113.51) carries home.example.
-	w = httptest.NewRecorder()
-	e.adopt.lists(w, httptest.NewRequest("GET", "/api/primary", nil))
-	var out struct {
-		Primary map[string]any `json:"primary"`
-		ByHand  string         `json:"by_hand"`
-		Zones   []primaryZone  `json:"zones"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &out)
-	if out.Primary["kind"] != "manual" || out.Primary["api"] != false || !strings.Contains(out.ByHand, "kind manual") ||
-		len(out.Zones) != 2 || out.Zones[0].Lists != nil || len(out.Zones[0].Nodes) != 1 ||
-		!strings.Contains(out.Zones[0].Nodes[0].Manual, "zone home.example: allow 203.0.113.51 to transfer") {
-		t.Fatalf("%s", w.Body)
-	}
-	if _, err := e.start("primary", map[string]any{"zone": "home.example", "address": "203.0.113.51", "action": "allow"}); err == nil ||
-		!strings.Contains(err.Error(), "by hand") {
-		t.Fatal(err)
-	}
-	if len(e.tech.Calls()) != 0 {
-		t.Fatal(e.tech.Calls())
-	}
-	// No "primary" at all is the manual kind too (a fresh install), saying so.
-	settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"}})
-	os.Remove(keys.TokenPath(e.dir))
-	w = httptest.NewRecorder()
-	e.adopt.lists(w, httptest.NewRequest("GET", "/api/primary", nil))
-	json.Unmarshal(w.Body.Bytes(), &out)
-	if out.Primary["kind"] != "manual" || out.Primary["set"] != false || !strings.Contains(out.ByHand, `no zone primary in settings.json`) {
-		t.Fatalf("%s", w.Body)
-	}
+	return n
 }

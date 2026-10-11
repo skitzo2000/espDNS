@@ -114,39 +114,3 @@ func TestReadKeyStdin(t *testing.T) {
 		}
 	}
 }
-
-// The zone primary token: the file first, then $ESPDNS_PRIMARY_TOKEN, then the variable
-// -primary-token-env names; the old names ($ESPDNS_TECHNITIUM_TOKEN, $TECHNITIUM_API_TOKEN)
-// only when -primary-token-env names one.
-func TestPrimaryToken(t *testing.T) {
-	for _, e := range []string{envPrimaryToken, "ESPDNS_TECHNITIUM_TOKEN", "TECHNITIUM_API_TOKEN", "TOKEN_NAMED"} {
-		t.Setenv(e, "")
-	}
-	if tok, err := primaryToken("", "TOKEN_NAMED"); tok != "" || err != nil {
-		t.Errorf("no token: %q %v", tok, err)
-	}
-	t.Setenv("TECHNITIUM_API_TOKEN", " token \n")
-	t.Setenv("ESPDNS_TECHNITIUM_TOKEN", "espdns")
-	if tok, _ := primaryToken("", ""); tok != "" {
-		t.Errorf("an old name read: %q", tok)
-	}
-	if tok, _ := primaryToken("", "TECHNITIUM_API_TOKEN"); tok != "token" {
-		t.Errorf("-primary-token-env TECHNITIUM_API_TOKEN: %q", tok)
-	}
-	t.Setenv("TOKEN_NAMED", "named")
-	if tok, _ := primaryToken("", "TOKEN_NAMED"); tok != "named" {
-		t.Errorf("-primary-token-env's first: %q", tok)
-	}
-	t.Setenv(envPrimaryToken, "primary")
-	if tok, _ := primaryToken("", "TOKEN_NAMED"); tok != "primary" {
-		t.Errorf("$ESPDNS_PRIMARY_TOKEN first: %q", tok)
-	}
-	file := filepath.Join(t.TempDir(), "token")
-	os.WriteFile(file, []byte("file\n"), 0o600)
-	if tok, _ := primaryToken(file, ""); tok != "file" {
-		t.Errorf("file first: %q", tok)
-	}
-	if _, err := primaryToken(file+".missing", ""); err == nil {
-		t.Error("missing file accepted")
-	}
-}

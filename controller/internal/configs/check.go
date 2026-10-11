@@ -170,7 +170,7 @@ func (s Spec) HostedClash(st release.NodeStatus) error {
 			for _, hz := range st.Hosted.Zones {
 				if strings.EqualFold(strings.TrimSuffix(n, "."), strings.TrimSuffix(hz.Name, ".")) {
 					return fmt.Errorf("%s makes %s a %s of %s, which serves it as a hosted zone: a zone has one source. "+
-						"Push the hosted zones without it first (the Push page, or espdns rollout -kind zones), "+
+						"Apply the hosted zones without it first (Zones, then Apply; or espdns rollout -kind zones), "+
 						"or leave it out of the config", s.Path, strings.ToLower(strings.TrimSuffix(n, ".")), what, s.Host)
 				}
 			}

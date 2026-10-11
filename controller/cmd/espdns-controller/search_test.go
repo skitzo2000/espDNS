@@ -42,7 +42,7 @@ func TestSearchAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := settings.Save(settings.Path(dir), settings.Settings{Nodes: []string{"192.0.2.11"},
-		Primary: &primary.Config{Kind: primary.KindTechnitium, URL: "https://192.0.2.254:53443"}}); err != nil {
+		Primary: &primary.Config{Address: "192.0.2.254"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := zonefiles.Save(dir, "home.example.zone", []byte("$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. "+

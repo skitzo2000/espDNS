@@ -35,31 +35,47 @@ func releaseKey(t *testing.T) (pem []byte, pubFile string) {
 	return pem, pubFile
 }
 
-// app is an ESP app image as the release reads one: the descriptor's version, no address built in
+// app is an ESP app image as the release reads one: the descriptor's version, no address
+// built in, key-neutral (the keys partition marker, no seed)
 func app(version string) []byte {
 	b := make([]byte, 32+256)
 	b[0] = 0xE9
 	binary.LittleEndian.PutUint32(b[32:], 0xABCD5432)
 	copy(b[48:], version)
-	return append(b, "espdns:builtin-address=\x00"...)
+	return append(b, "espdns:builtin-address=\x00espdns:keys=partition-v1\x00"...)
+}
+
+// keysTable is a partition table binary with the keys partition (data 0x42 at 0x1b000, 8 KB),
+// as every export since there is one has, and a partition named what the table is.
+func keysTable(what string) []byte {
+	entry := func(name string, sub byte, off, size uint32) []byte {
+		e := make([]byte, 32)
+		e[0], e[1], e[2], e[3] = 0xAA, 0x50, 1, sub
+		binary.LittleEndian.PutUint32(e[4:], off)
+		binary.LittleEndian.PutUint32(e[8:], size)
+		copy(e[12:28], name)
+		return e
+	}
+	t := append(entry("keys", 0x42, 0x1b000, 0x2000), entry(what, 0x40, 0x12000, 0x1000)...)
+	return append(t, bytes.Repeat([]byte{0xFF}, 32)...)
 }
 
 // One exported chip image for each of the catalog's boards' images
 func chipImages(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for img, chip := range map[string]string{"esp32p4-rev1": "esp32p4", "esp32s3-octal": "esp32s3"} {
+	for img, chip := range map[string]string{"esp32p4-rev1": "esp32p4", "esp32s3-eth": "esp32s3", "esp32s3-octal": "esp32s3"} {
 		d := filepath.Join(dir, img)
 		os.MkdirAll(d, 0o755)
 		boot := make([]byte, 32)
 		boot[0] = 0xE9
-		for n, b := range map[string][]byte{"bootloader.bin": boot, "partitions-8mb.bin": []byte("t8"), "partitions-4mb.bin": []byte("t4"),
+		for n, b := range map[string][]byte{"bootloader.bin": boot, "partitions-8mb.bin": keysTable("t8"), "partitions-4mb.bin": keysTable("t4"),
 			"ota_data_initial.bin": []byte("ota"), "app.bin": app(version)} {
 			os.WriteFile(filepath.Join(d, n), b, 0o644)
 		}
 		info, _ := json.Marshal(map[string]any{"image": img, "chip": chip, "chip_family": "ESP32", "version": version,
 			"offsets": map[string]int{"bootloader.bin": 0, "partitions-8mb.bin": 0x8000, "partitions-4mb.bin": 0x8000,
-				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000}})
+				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000, "keys": 0x1b000}})
 		os.WriteFile(filepath.Join(d, "image.json"), info, 0o644)
 	}
 	return dir
@@ -106,12 +122,13 @@ func TestReleaseCommands(t *testing.T) {
 		}
 	}
 	got, err = runRelease(t, "", "verify", "-dir", out, "-pub", pub)
-	if err != nil || !strings.Contains(got, "espdns-0.0.4-factory-ws-s3-eth.bin: OK") || !strings.Contains(got, "files as signed") {
+	if err != nil || !strings.Contains(got, "espdns-0.0.4-image-esp32s3-eth.tar.gz: OK") || !strings.Contains(got, "3 files as signed") ||
+		strings.Contains(got, "factory") {
 		t.Fatalf("verify: %v\n%s", err, got)
 	}
 	data := t.TempDir()
 	got, err = runRelease(t, "", "import", "-dir", out, "-pub", pub, "-data", data)
-	if err != nil || !strings.Contains(got, "esp32p4-rev1, esp32s3-octal") {
+	if err != nil || !strings.Contains(got, "esp32p4-rev1, esp32s3-eth, esp32s3-octal") {
 		t.Fatalf("import: %v %s", err, got)
 	}
 	if _, err := os.Stat(filepath.Join(data, "firmware", "images", "esp32s3-octal", "image.json")); err != nil {
@@ -132,7 +149,7 @@ func TestReleaseCommands(t *testing.T) {
 	lk.Release()
 
 	// Changed after signing: verify names the file
-	f := filepath.Join(out, "espdns-0.0.4-factory-p4-ip101.bin")
+	f := filepath.Join(out, "espdns-0.0.4-image-esp32p4-rev1.tar.gz")
 	os.WriteFile(f, []byte("tampered"), 0o644)
 	if _, err := runRelease(t, "", "verify", "-dir", out, "-pub", pub); err == nil || !strings.Contains(err.Error(), filepath.Base(f)) {
 		t.Errorf("verify tampered: %v", err)

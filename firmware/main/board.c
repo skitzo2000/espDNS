@@ -21,6 +21,7 @@
 #include "esp_vfs_fat.h"
 #include "sdkconfig.h"
 #include "sdmmc_cmd.h"
+#include "w5500_eth.h"
 #include "soc/soc_caps.h"
 #if SOC_SDMMC_HOST_SUPPORTED
 #include "driver/sdmmc_host.h"
@@ -59,6 +60,7 @@ static char s_error[96];
 const char *board_source(void) { return s_source; }
 const char *board_error(void) { return s_error; }
 const char *board_image(void) { return ESPDNS_IMAGE; }
+const char *board_image_sibling(void) { return ESPDNS_IMAGE_SIBLING; }
 #ifdef ESPDNS_FALLBACK
 const char *board_fallback_name(void) { return ESPDNS_FALLBACK; }
 #else
@@ -71,7 +73,9 @@ static bool use_definition(const char *json, size_t len, char *why, size_t whyle
     board_desc_t b;
     if (!board_def_parse(json, len, &b, why, whylen))
         return false;
-    if (strcmp(b.image, ESPDNS_IMAGE) != 0) {
+    /* Or its sibling's (firmware/CMakeLists.txt): a node moved to this image over the air
+     * keeps the definition it was flashed with. */
+    if (strcmp(b.image, ESPDNS_IMAGE) != 0 && !(ESPDNS_IMAGE_SIBLING[0] && !strcmp(b.image, ESPDNS_IMAGE_SIBLING))) {
         snprintf(why, whylen, "board %s is for image %s, this is %s", b.name, b.image, ESPDNS_IMAGE);
         return false;
     }
@@ -231,9 +235,9 @@ static bool eth_new_emac(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
 #endif
 }
 
+/* The W5500: our own copy of the driver (components/w5500), on every chip. */
 static bool eth_new_w5500(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
 {
-#if CONFIG_ETH_SPI_ETHERNET_W5500
     if (!spi_buses_init())
         return false;
     esp_err_t err = gpio_install_isr_service(0);
@@ -258,10 +262,6 @@ static bool eth_new_w5500(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
     phy_cfg.reset_gpio_num = board.eth.reset;
     *phy = esp_eth_phy_new_w5500(&phy_cfg);
     return *mac && *phy;
-#else
-    ESP_LOGE(TAG, "eth: W5500 driver not built in (CONFIG_ETH_SPI_ETHERNET_W5500)");
-    return false;
-#endif
 }
 
 bool board_eth_install(esp_eth_handle_t *out)

@@ -2,7 +2,7 @@
 // backup and for a config's Wi-Fi password, and the login's backoff per client, in the
 // browser: the pages keep the session's token in localStorage and send it with every API
 // request (common.js api), a job's events come through with it (common.js events), and the
-// Backup and Configs pages ask for the password in a dialog (common.js askPassword).
+// account panel's backup asks for the password in a dialog (common.js askPassword).
 const { test, expect } = require("@playwright/test");
 const { login, apiGet } = require("./session");
 
@@ -35,25 +35,38 @@ test("a cookie planted by another port doesn't hide the session", async ({ page,
   await login(page);
   // A narrower Path is sent first: the controller tries every cookie of its name.
   await context.addCookies([{ name: cookieName, value: "planted", domain: "127.0.0.1", path: "/api", httpOnly: false, sameSite: "Strict" }]);
-  await page.goto("jobs.html");
-  await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
+  await page.goto("zones.html");
+  await expect(page.getByRole("button", { name: /^Account: / })).toBeVisible();
   expect((await apiGet(page, "api/nodes")).status).toBe(200);
 });
 
 test("a job's events come through with the token", async ({ page }) => {
   await login(page);
-  await page.goto("jobs.html");
-  await page.locator("#check").click();
-  await expect(page.locator("#job")).toBeVisible();
-  await expect(page.locator("#job-state")).toHaveText(/^(done|failed)$/, { timeout: 30000 });
-  await expect(page.locator("#log")).not.toBeEmpty();
+  // The check job, followed as the pages follow a job (common.js events).
+  const end = await page.evaluate(async () => {
+    const c = await import("./common.js");
+    const j = await c.post("api/jobs", { kind: "check" });
+    return new Promise(resolve => {
+      const es = c.events(`api/jobs/${encodeURIComponent(j.id)}/events`);
+      let lines = 0;
+      es.addEventListener("log", () => { lines++; });
+      es.addEventListener("end", e => { es.close(); resolve({ state: JSON.parse(e.data).state, lines }); });
+      es.addEventListener("gone", () => resolve({ state: "gone", lines }));
+    });
+  });
+  expect(end.state).toMatch(/^(done|failed)$/);
+  expect(end.lines).toBeGreaterThan(0);
 });
 
 async function startBackup(page) {
-  await page.goto("backup.html");
-  await page.locator("#pass").fill("an e2e backup passphrase");
-  await page.locator("#pass2").fill("an e2e backup passphrase");
-  await page.locator("#go").click();
+  await page.goto("./");
+  if (!await page.locator("#bp").isVisible()) {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.locator("aside.drawer summary", { hasText: "Keep the controller safe" }).click();
+  }
+  await page.locator("#bp").fill("an e2e backup passphrase");
+  await page.locator("#bp2").fill("an e2e backup passphrase");
+  await page.locator("#bp-go").click();
   const d = page.locator("dialog.reauth");
   await expect(d).toBeVisible();
   return d;
@@ -65,7 +78,7 @@ test("a backup asks for the password again", async ({ page }) => {
   let d = await startBackup(page);
   await d.getByRole("button", { name: "Cancel" }).click();
   await expect(d).toHaveCount(0);
-  await expect(page.locator("#status")).toHaveText(/Not downloaded/);
+  await expect(page.locator("#bp-msg")).toHaveText(/Not downloaded/);
   // A wrong password, then the right one.
   d = await startBackup(page);
   await d.locator("input[type=password]").fill("not the password");
@@ -75,7 +88,7 @@ test("a backup asks for the password again", async ({ page }) => {
   const download = page.waitForEvent("download");
   await d.getByRole("button", { name: "Continue" }).click();
   expect((await download).suggestedFilename()).toMatch(/^espdns-backup-\d{8}-\d{6}\.age$/);
-  await expect(page.locator("#status")).toHaveText(/^Saved espdns-backup-/);
+  await expect(page.locator("#bp-msg")).toHaveText(/^Saved espdns-backup-/);
   // The API without a grant: refused, asking for it.
   const r = await page.evaluate(async () => {
     const r = await fetch("api/backup", { method: "POST", body: JSON.stringify({ passphrase: "an e2e backup passphrase" }),
@@ -100,20 +113,19 @@ test("a config's Wi-Fi password is shown only with the password again", async ({
   expect(bare.status).toBe(403);
   expect(bare.json.reauth).toBe(true);
   expect(bare.text).not.toContain("an e2e wifi secret");
-  // The page: Show asks for the password; cancelled, the text keeps its stand-in.
-  await page.goto("configs.html#config=e2e-wifi.json");
-  const show = page.getByRole("button", { name: "Show the Wi-Fi password" });
-  await show.click();
+  // With a grant (askPassword's dialog, as the pages ask): the password comes back.
+  await page.evaluate(() => { window.__grant = import("./common.js").then(c => c.askPassword("e2e")); });
   const d = page.locator("dialog.reauth");
   await expect(d).toBeVisible();
-  await d.getByRole("button", { name: "Cancel" }).click();
-  await expect(d).toHaveCount(0);
-  await expect(page.locator("#text")).not.toHaveValue(/an e2e wifi secret/);
-  // Given: the text has the password.
-  await show.click();
   await d.locator("input[type=password]").fill(process.env.E2E_PASSWORD);
   await d.getByRole("button", { name: "Continue" }).click();
-  await expect(page.locator("#text")).toHaveValue(/an e2e wifi secret/);
+  await expect(d).toHaveCount(0);
+  const revealed = await page.evaluate(async () => {
+    const grant = await window.__grant;
+    const r = await fetch("api/configs/e2e-wifi.json?reveal=1", { headers: { "X-Reauth": grant, "X-Session-Token": localStorage.getItem("espdns.session") } });
+    return r.text();
+  });
+  expect(revealed).toContain("an e2e wifi secret");
 });
 
 test("three wrong passwords end the session", async ({ page }) => {

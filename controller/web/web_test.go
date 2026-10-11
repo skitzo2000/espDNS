@@ -12,9 +12,22 @@ import (
 
 const ewt = "vendor/esp-web-tools"
 
-// SHA256SUMS lists every embedded file of the vendored esp-web-tools, and each one's bytes
-// are the ones it lists: nothing was edited, added or left out since `make vendor-ewt`.
+// The vendored directories, each with the files it must have: esp-web-tools (`make
+// vendor-ewt`) and esptool-js (`make vendor-etj`).
+var vendored = map[string][]string{
+	ewt:                 {"install-button.js", "LICENSE", "THIRD_PARTY.md", "VERSION"},
+	"vendor/esptool-js": {"bundle.js", "LICENSE", "THIRD_PARTY.md", "VERSION"},
+}
+
+// SHA256SUMS lists every embedded file of each vendored directory, and each one's bytes are
+// the ones it lists: nothing was edited, added or left out since it was vendored.
 func TestVendorSums(t *testing.T) {
+	for dir, must := range vendored {
+		vendorSums(t, dir, must)
+	}
+}
+
+func vendorSums(t *testing.T, ewt string, must []string) {
 	sums, err := fs.ReadFile(Files, ewt+"/SHA256SUMS")
 	if err != nil {
 		t.Fatal(err)
@@ -52,13 +65,30 @@ func TestVendorSums(t *testing.T) {
 			scripts++
 		}
 	}
-	for _, name := range []string{"install-button.js", "LICENSE", "THIRD_PARTY.md", "VERSION"} {
+	for _, name := range must {
 		if !listed[name] {
-			t.Errorf("%s: missing", name)
+			t.Errorf("%s/%s: missing", ewt, name)
 		}
 	}
-	if scripts < 2 {
-		t.Errorf("%d scripts", scripts)
+	if scripts < 1 {
+		t.Errorf("%s: %d scripts", ewt, scripts)
+	}
+}
+
+// esptool-js's bundle is one module: no import of anything (pako and atob-lite are inlined),
+// and it exports what usb.js uses.
+func TestEsptoolBundle(t *testing.T) {
+	b, err := fs.ReadFile(Files, "vendor/esptool-js/bundle.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := importSpec.FindAllString(string(b), -1); len(m) > 0 {
+		t.Errorf("bundle.js imports %v", m)
+	}
+	for _, name := range []string{"ESPLoader", "Transport"} {
+		if !regexp.MustCompile(`export\{[^}]*\bas ` + name + `\b`).Match(b) {
+			t.Errorf("bundle.js doesn't export %s", name)
+		}
 	}
 }
 

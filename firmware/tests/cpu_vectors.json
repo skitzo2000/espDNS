@@ -5,6 +5,8 @@
   "want": {"dfs": true, "max_mhz": 400, "min_mhz": 200, "apb_mhz": 100}},
  {"name": "S3 octal: on, idle at 80", "image": "esp32s3-octal", "cpu": null,
   "want": {"dfs": true, "max_mhz": 240, "min_mhz": 80, "apb_mhz": 80}},
+ {"name": "S3 octal, wired: on, idle at 80", "image": "esp32s3-eth", "cpu": null,
+  "want": {"dfs": true, "max_mhz": 240, "min_mhz": 80, "apb_mhz": 80}},
  {"name": "S3 quad: on, idle at 80", "image": "esp32s3-quad", "cpu": null,
   "want": {"dfs": true, "max_mhz": 240, "min_mhz": 80, "apb_mhz": 80}},
  {"name": "ESP32: off (the EMAC keeps it at 240)", "image": "esp32", "cpu": null,

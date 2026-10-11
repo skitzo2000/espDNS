@@ -140,3 +140,18 @@ func TestPackFormat(t *testing.T) {
 		t.Fatalf("header % x", part[:16])
 	}
 }
+
+// MayRunOnWiFi: no Ethernet, Ethernet of kind none, or Ethernet that may not be fitted.
+func TestMayRunOnWiFi(t *testing.T) {
+	for _, c := range []struct {
+		eth  *Ethernet
+		want bool
+	}{
+		{nil, true}, {&Ethernet{Kind: "none"}, true}, {&Ethernet{Kind: "w5500", Optional: true}, true},
+		{&Ethernet{Kind: "w5500"}, false}, {&Ethernet{Kind: "emac"}, false},
+	} {
+		if got := (Board{Ethernet: c.eth}).MayRunOnWiFi(); got != c.want {
+			t.Errorf("%+v: %v, want %v", c.eth, got, c.want)
+		}
+	}
+}

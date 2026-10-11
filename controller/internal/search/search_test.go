@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -395,5 +396,57 @@ func TestWithinAnyCase(t *testing.T) {
 	a := Run(context.Background(), in, "nas.lab.example")
 	if r, ok := find(a, TypeZone, "Lab.Example"); !ok || r.Match != "within" {
 		t.Errorf("%+v", a.Results)
+	}
+}
+
+// Hosts: each address of a hosted zone's A and AAAA records, named by the first of its
+// names; wildcards and other types left out.
+func TestHosts(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := zonefiles.Save(dir, "home.example.zone", []byte("$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. "+
+		"( 5 3600 600 604800 300 )\n  IN NS ns1\nns1 IN A 192.0.2.53\nprinter IN A 192.0.2.40\nlaser IN A 192.0.2.40\n"+
+		"* IN A 192.0.2.99\nnas IN AAAA 2001:db8::5\nwww IN CNAME printer\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Hosts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"192.0.2.53": "ns1.home.example", "192.0.2.40": "laser.home.example", "2001:db8::5": "nas.home.example"}
+	if !maps.Equal(h, want) {
+		t.Errorf("hosts %v, want %v", h, want)
+	}
+	if h, err := Hosts(t.TempDir()); err != nil || len(h) != 0 {
+		t.Errorf("no zones: %v %v", h, err)
+	}
+}
+
+// Hosts: a reverse zone's PTR records name their addresses, ahead of the A records.
+func TestHostsPTR(t *testing.T) {
+	dir := t.TempDir()
+	soa := "$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. ( 5 3600 600 604800 300 )\n  IN NS ns1.home.example.\n"
+	if _, err := zonefiles.Save(dir, "home.example.zone", []byte(soa+"printer IN A 192.0.2.40\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zonefiles.Save(dir, "2.0.192.in-addr.arpa.zone", []byte(soa+
+		"40 IN PTR Office-Printer.home.example.\n7 IN PTR kids-tablet.home.example.\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zonefiles.Save(dir, "8.b.d.0.1.0.0.2.ip6.arpa.zone", []byte(soa+
+		"5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 IN PTR nas.home.example.\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Hosts(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"192.0.2.40": "office-printer.home.example", "192.0.2.7": "kids-tablet.home.example", "2001:db8::5": "nas.home.example"}
+	if !maps.Equal(h, want) {
+		t.Errorf("hosts %v, want %v", h, want)
+	}
+	for _, bad := range []string{"1.2.0.192.in-addr.arpa.x", "2.0.192.in-addr.arpa", "300.2.0.192.in-addr.arpa", "01.2.0.192.in-addr.arpa", "a.ip6.arpa"} {
+		if a := ptrAddr(bad); a != "" {
+			t.Errorf("ptrAddr(%q) = %q", bad, a)
+		}
 	}
 }

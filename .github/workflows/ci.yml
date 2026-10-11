@@ -6,7 +6,7 @@
 # The firmware jobs run in the pinned ESP-IDF image itself (firmware/Makefile IDF_IMAGE; each
 # job checks it is the same version) and call the Makefile with NATIVE=1, which runs its
 # commands directly instead of in docker. Nothing here signs anything and no secret is used:
-# a build embeds only the committed public keys (firmware/keys/*.pub); releases are signed
+# the builds are key-neutral (no KEYS_SEED: no public key built in); releases are signed
 # by a person (docs/releasing.md), never by CI.
 #
 # Every image and action is pinned by digest (an image) or commit (an action), the tag it
@@ -141,6 +141,7 @@ jobs:
           - image: esp32c6
           - image: esp32p4
           - image: esp32p4-rev1
+          - image: esp32s3-eth
           - image: esp32s3-octal
           - image: esp32s3-quad
           # Transitional images: a chip image with a catalog board and a node's address built
@@ -190,7 +191,7 @@ jobs:
             echo "::error::the build has compiler warnings"; exit 1
           fi
 
-      - name: Export the chip image (dist/images/, as the controller's builder imports it)
+      - name: Export the chip image (dist/images/, as the controller imports it)
         if: matrix.image != ''
         run: |
           . "$IDF_PATH/export.sh" >/dev/null

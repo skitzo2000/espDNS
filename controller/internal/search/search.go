@@ -106,8 +106,8 @@ type Result struct {
 	// data (a record's), client, source (a list's), covers (a rule for the name's parent),
 	// summary, file, typed (the query itself).
 	Match string `json:"match"`
-	// State is a node's health ("offline" when it doesn't answer), a zone's state, a rule's
-	// allow or block.
+	// State is a node's health ("offline" when it doesn't answer, "out of service" when taken
+	// out of it), a zone's state, a rule's allow or block.
 	State string `json:"state,omitempty"`
 	// Zone is the zone a record is in.
 	Zone string `json:"zone,omitempty"`
@@ -323,6 +323,9 @@ func (s *search) nodes() error {
 			if st.Health != nil && st.Health.State != "" {
 				state = st.Health.State
 			}
+		}
+		if n.OutOfService {
+			state = "out of service"
 		}
 		text := "a node at " + n.Addr
 		if st.Board != "" {

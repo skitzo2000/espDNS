@@ -31,6 +31,9 @@ type TrustReport struct {
 	Unlisted    []string // nodes found only over mDNS that trust it: not counted
 	Other       []string // nodes that trust another release key ("addr (fingerprint)")
 	Unread      []string // nodes not read ("addr: why")
+	// Bootstrap: no node is listed in settings.json, so a new fleet's first key is taken
+	// (no node could vouch for one yet, and none would reject it).
+	Bootstrap bool
 }
 
 // Lines are the report for a person.
@@ -55,6 +58,9 @@ func (r TrustReport) Lines() []string {
 	for _, u := range r.Unread {
 		out = append(out, "not read: "+u)
 	}
+	if r.Bootstrap {
+		out = append(out, "no node is listed in settings.json yet: taken as the new fleet's release key (Install over USB writes it to each new node)")
+	}
 	return out
 }
 
@@ -65,6 +71,12 @@ func (r TrustReport) Lines() []string {
 // trusts is refused: the controller would sign releases every node rejects. So is the
 // recovery key (recoveryPub, or slot 1 on any node, listed or not): it is kept offline,
 // never in the controller.
+//
+// A new fleet's first key (bootstrap): with no node in settings.json (Listed) nothing can
+// vouch for a key and no node would reject it, so any key that isn't the recovery key is
+// taken; Install over USB then writes it to each new node. Once a node is listed, or when a
+// public key file is given to compare with (recovering a fleet whose key it is), the checks
+// above apply.
 func Trust(k *ecdsa.PrivateKey, pubFile string, pub, recoveryPub []byte, nodes []NodeKeys) (TrustReport, error) {
 	raw := release.PublicRaw(k)
 	fp := release.Fingerprint(raw)
@@ -95,6 +107,10 @@ func Trust(k *ecdsa.PrivateKey, pubFile string, pub, recoveryPub []byte, nodes [
 		}
 	}
 	slices.Sort(r.Trusting)
+	if len(pub) == 0 && !slices.ContainsFunc(nodes, func(n NodeKeys) bool { return n.Listed }) {
+		r.Bootstrap = true
+		return r, nil
+	}
 	if !r.PubMatch && len(r.Trusting) == 0 {
 		why := "no node in settings.json trusts it"
 		if !slices.ContainsFunc(nodes, func(n NodeKeys) bool { return n.Listed }) {

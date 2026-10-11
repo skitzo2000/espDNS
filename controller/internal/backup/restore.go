@@ -68,7 +68,7 @@ type Contents struct {
 }
 
 // checked are the files a restore checks as the controller reads them.
-var checked = []string{settings.File, auth.File, keys.Dir + "/" + keys.File, keys.Dir + "/" + keys.TokenFile}
+var checked = []string{settings.File, auth.File, keys.Dir + "/" + keys.File}
 
 // mode is the mode a restored entry gets, whatever the backup says: the controller user's
 // only, as the controller makes everything in the data directory (internal/secfile), a
@@ -166,7 +166,9 @@ func Restore(src io.Reader, ids []age.Identity, dataDir string, o RestoreOptions
 	if err != nil {
 		return c, err
 	}
-	if c.Checked, err = validate(small); err != nil {
+	checked, err := validate(small)
+	c.Checked = append(checked, c.Checked...) // and the old tokens left out (read)
+	if err != nil {
 		return c, err
 	}
 	if o.DryRun {
@@ -339,6 +341,17 @@ func read(src io.Reader, ids []age.Identity, stage string, c *Contents) (map[str
 			return nil, fmt.Errorf("%w: over %d bytes in all", ErrRefused, int64(MaxTotal))
 		}
 		e.Size = h.Size
+		if keys.IsOldToken(rel) {
+			// An older controller's zone primary API token: no longer used, never put back.
+			// Read for its sum only.
+			s, err := extract(tr, h.Size, "", rel, nil)
+			if err != nil {
+				return nil, damaged(err)
+			}
+			files[rel] = s
+			c.Checked = append(c.Checked, rel+": an old zone primary API token, no longer used: not restored (revoke it on the primary)")
+			continue
+		}
 		var keep *bytes.Buffer
 		if slices.Contains(checked, rel) && h.Size <= 1<<20 {
 			keep = &bytes.Buffer{}
@@ -429,7 +442,7 @@ func extract(r io.Reader, size int64, stage, rel string, keep *bytes.Buffer) (Fi
 }
 
 // validate checks the files the controller can't run without, as it reads them: the
-// settings parse, the release key is a key, the token a token, the login a user and an
+// settings parse, the release key is a key, the login a user and an
 // argon2id hash. A file a backup doesn't have is said so, not refused.
 func validate(small map[string][]byte) ([]string, error) {
 	var out []string
@@ -458,8 +471,6 @@ func validate(small map[string][]byte) ([]string, error) {
 				out = append(out, rel+": a release key, fingerprint "+keys.Fingerprint(k))
 				continue
 			}
-		case keys.Dir + "/" + keys.TokenFile:
-			_, err = keys.ParseToken(rel, b)
 		}
 		if err != nil {
 			return out, fmt.Errorf("the backup's %s can't be used: %w: nothing restored", rel, err)
@@ -479,9 +490,6 @@ func validatePlaced(dataDir string) error {
 		return err
 	}
 	if _, err := (keys.FileSource{Path: keys.Path(dataDir)}).Key(); err != nil && !errors.Is(err, keys.ErrNoKey) {
-		return err
-	}
-	if _, err := (keys.DataTokenSource{DataDir: dataDir}).Token(); err != nil && !errors.Is(err, keys.ErrNoToken) {
 		return err
 	}
 	return nil

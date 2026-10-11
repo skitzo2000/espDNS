@@ -42,6 +42,8 @@ import (
 	"time"
 
 	"filippo.io/age"
+
+	"github.com/skitzo2000/espdns/controller/internal/keys"
 )
 
 // The format.
@@ -128,7 +130,8 @@ func (o Options) now() time.Time {
 
 // excluded says what the backup leaves out by rule, for the manifest.
 func (o Options) excluded() []string {
-	ex := []string{"fleet.lock (the lock's note)", "temporary files (names starting with \".\")"}
+	ex := []string{"fleet.lock (the lock's note)", "temporary files (names starting with \".\")",
+		"an old zone primary API token (keys/primary.token: no longer used)"}
 	if !o.Firmware {
 		ex = append(ex, "firmware/ (the boards' builds and the chip images: load them again with espdns release import)")
 	}
@@ -139,7 +142,7 @@ func (o Options) excluded() []string {
 func (o Options) skip(rel string, dir bool) bool {
 	base := path.Base(rel)
 	switch {
-	case rel == "fleet.lock":
+	case rel == "fleet.lock", !dir && keys.IsOldToken(rel):
 		return true
 	case !strings.Contains(rel, "/") && strings.HasPrefix(rel, "."):
 		return true // a restore's own (.restore-*, .before-restore-*), or anything hidden at the top

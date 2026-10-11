@@ -234,10 +234,10 @@ func TestNodeSettingsAPI(t *testing.T) {
 		t.Errorf("a refused edit changed the pending ones: %+v", got)
 	}
 
-	// A move to another address: refused, as the apply's config rollout refuses it (the
-	// Configs page's push moves a node and confirms it there).
+	// A move to another address: not a pending change, as the apply's config rollout refuses
+	// it; said with the address it moves to, for the page's Move it (TestNodeMove).
 	if code, b := e.edit(n.id(), after.Version, `{"network":{"address":"192.0.2.60/23","gateway":"192.0.2.1"}}`); code != 400 ||
-		!strings.Contains(b, `"field":"network"`) || !strings.Contains(b, "Configs page") {
+		!strings.Contains(b, `"field":"network"`) || !strings.Contains(b, `"move":"192.0.2.60"`) {
 		t.Errorf("move: %d %s", code, b)
 	}
 	// A third edit stacks too (live: blocking switched off).
@@ -322,7 +322,14 @@ func TestNodeSettingsWhichFile(t *testing.T) {
 		t.Fatalf("stacked on a new file: %d %s", code, b)
 	}
 	// peer runs a pushed config (source "node") and no file here is its.
-	if code, b := e.do("GET", "/api/nodes/"+peer.id()+"/settings", ""); code != http.StatusConflict || !strings.Contains(b, "Configs page") {
+	// It is to be written here: a file named for it, a draft from what it reports.
+	code, b = e.do("GET", "/api/nodes/"+peer.id()+"/settings", "")
+	var unrec struct {
+		Write []configToWrite `json:"write"`
+	}
+	json.Unmarshal([]byte(b), &unrec)
+	if code != http.StatusConflict || !strings.Contains(b, "no copy of") || len(unrec.Write) != 1 ||
+		!strings.HasSuffix(unrec.Write[0].File, ".json") || !strings.Contains(unrec.Write[0].Draft, `"name"`) {
 		t.Errorf("unrecorded: %d %s", code, b)
 	}
 	// other is known (found over mDNS) but not in settings.json: read, not changed.
@@ -484,4 +491,61 @@ func mustParse(t *testing.T, s string) *nodecfg.Config {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// A move: only the address, written to the node's config file at once (the Wi-Fi password
+// kept), nothing pushed (the page runs config-push next); put back by its hash when that
+// doesn't go through; refused while changes of the file wait to apply.
+func TestNodeMove(t *testing.T) {
+	k := newTestKey(t)
+	n, peer := newCfgNode(t, k), newCfgNode(t, k)
+	n.cfg.Name, peer.cfg.Name = "dns-a", "dns-b"
+	orig := `{"name":"dns-a",` + nsWifi + `}`
+	e := newSettingsEnv(t, k, settings.Settings{Nodes: []string{n.addr, peer.addr}},
+		map[string]string{"dns-a.json": orig, "dns-b.json": `{"name":"dns-b"}`}, n, peer)
+	move := func(version, edit string) (int, string) {
+		return e.do("POST", "/api/nodes/"+n.id()+"/move", `{"version":"`+version+`","settings":`+edit+`}`)
+	}
+	const to = `{"network":{"address":"192.0.2.60/23","gateway":"192.0.2.1"}}`
+	r := e.get(n.id())
+	if code, b := move(r.Version, `{"name":"dns-z","network":{"address":"192.0.2.60/23","gateway":"192.0.2.1"}}`); code != 400 ||
+		!strings.Contains(b, "only the address") {
+		t.Errorf("more than the address: %d %s", code, b)
+	}
+	if code, b := move(r.Version, `{"tz":"UTC0"}`); code != 400 {
+		t.Errorf("no address: %d %s", code, b)
+	}
+	if code, b := move("stale", to); code != http.StatusConflict {
+		t.Errorf("stale version: %d %s", code, b)
+	}
+	code, b := move(r.Version, to)
+	var mv struct{ File, Node, To, Hash string }
+	json.Unmarshal([]byte(b), &mv)
+	if code != 200 || mv.File != "dns-a.json" || mv.Node != n.addr || mv.To != "192.0.2.60" || mv.Hash == "" {
+		t.Fatalf("move: %d %s", code, b)
+	}
+	f, _ := configs.Read(e.dir, "dns-a.json")
+	if f.Hash != mv.Hash || !strings.Contains(string(f.Text), "192.0.2.60/23") || !strings.Contains(string(f.Text), "a secret pass") ||
+		len(n.took()) != 0 || len(e.changes()) != 0 {
+		t.Fatalf("written %s, pushed %v", f.Text, n.took())
+	}
+	// Put back: only by the hash the move wrote.
+	if code, b := e.do("POST", "/api/nodes/"+n.id()+"/move/undo", `{"hash":"other"}`); code != http.StatusConflict {
+		t.Errorf("undo, wrong hash: %d %s", code, b)
+	}
+	if code, b := e.do("POST", "/api/nodes/"+n.id()+"/move/undo", `{"hash":"`+mv.Hash+`"}`); code != 200 {
+		t.Fatalf("undo: %d %s", code, b)
+	}
+	if f, _ := configs.Read(e.dir, "dns-a.json"); string(f.Text) != orig {
+		t.Errorf("put back %s", f.Text)
+	}
+	// A change of the file waiting: apply or discard it first.
+	r = e.get(n.id())
+	if code, b := e.edit(n.id(), r.Version, `{"tz":"Europe/Paris"}`); code != 200 {
+		t.Fatalf("edit: %d %s", code, b)
+	}
+	r = e.get(n.id())
+	if code, b := move(r.Version, to); code != http.StatusConflict || !strings.Contains(b, "waiting to apply") {
+		t.Errorf("pending: %d %s", code, b)
+	}
 }

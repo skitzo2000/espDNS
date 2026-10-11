@@ -360,10 +360,15 @@ type Rates struct {
 	FwdExpired   uint64            `json:"fwd_expired"`       // upstream queries that ended unanswered
 	TCPRetries   uint64            `json:"tcp_retries"`       // truncated answers asked again over TCP
 	SelectErrors uint64            `json:"select_errors"`     // the forward loop's select() errors
-	ServFail     uint64            `json:"servfail"`
-	Dropped      uint64            `json:"dropped"`
-	Reboots      int               `json:"reboots"`
-	BusyShare    *float64          `json:"busy_share,omitempty"` // of the time, the full clock held for DNS
+	// Of the time, the UDP receive queue was full (the node dropped what came meanwhile:
+	// more than it can answer); per node only (none over the fleet, as BusyShare). And the
+	// queries shed for waiting in it past its deadline.
+	QueueFullShare *float64 `json:"queue_full_share,omitempty"`
+	QueueExpired   uint64   `json:"queue_expired"`
+	ServFail       uint64   `json:"servfail"`
+	Dropped        uint64   `json:"dropped"`
+	Reboots        int      `json:"reboots"`
+	BusyShare      *float64 `json:"busy_share,omitempty"` // of the time, the full clock held for DNS
 }
 
 func f64(v float64) *float64 {
@@ -390,10 +395,11 @@ func ms(counts [NB]uint64, q float64) *float64 {
 func rates(t Totals) Rates {
 	r := Rates{Secs: t.Secs, Queries: t.Queries(), Results: map[string]uint64{}, UpQueries: t.UpQ,
 		UpFailures: t.UpFail, UpTimeouts: t.UpTime, FwdShed: t.Shed, FwdExpired: t.Expired, TCPRetries: t.TCPRetry,
-		SelectErrors: t.SelErr, Reboots: t.Reboots}
+		SelectErrors: t.SelErr, QueueExpired: t.QExpired, Reboots: t.Reboots}
 	if t.Secs > 0 {
 		r.QPS = f64(float64(r.Queries) / t.Secs)
 		r.BusyShare = f64(math.Min(1, t.BusyDNS/t.Secs))
+		r.QueueFullShare = f64(math.Min(1, t.QFull/t.Secs))
 	}
 	for i, n := range Results {
 		r.Results[n] = t.Results[i]
@@ -532,12 +538,12 @@ func (s *Store) Dashboard() Dashboard {
 	}
 	d.Fleet.Nodes = len(d.Nodes)
 	d.Fleet.Hour = rates(fleetHour)
-	d.Fleet.Hour.QPS, d.Fleet.Hour.BusyShare = nil, nil
+	d.Fleet.Hour.QPS, d.Fleet.Hour.BusyShare, d.Fleet.Hour.QueueFullShare = nil, nil, nil
 	if anyHour {
 		d.Fleet.Hour.QPS = f64(qpsHour)
 	}
 	d.Fleet.Now = rates(fleetNow)
-	d.Fleet.Now.QPS, d.Fleet.Now.BusyShare = nil, nil
+	d.Fleet.Now.QPS, d.Fleet.Now.BusyShare, d.Fleet.Now.QueueFullShare = nil, nil, nil
 	if anyNow {
 		d.Fleet.Now.QPS = f64(qpsNow)
 	}
@@ -612,8 +618,8 @@ func (s *Store) logNodes() []LogNode {
 func (s *Store) Top(node string) Top {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Top{Queried: []TopName{}, Blocked: []TopName{}}
-	all, blocked := map[string]int{}, map[string]int{}
+	t := Top{Queried: []TopName{}, Blocked: []TopName{}, Clients: []TopName{}}
+	all, blocked, clients := map[string]int{}, map[string]int{}, map[string]int{}
 	s.log.each(func(e *Entry) {
 		if node != "" && e.Node != node {
 			return
@@ -629,11 +635,14 @@ func (s *Store) Top(node string) Top {
 		}
 		name := strings.ToLower(e.QName)
 		all[name]++
+		if e.Client != nil {
+			clients[*e.Client]++
+		}
 		if Blocks(e.Result) {
 			blocked[name]++
 			t.Blocks++
 		}
 	})
-	t.Queried, t.Blocked = top(all), top(blocked)
+	t.Queried, t.Blocked, t.Clients = top(all), top(blocked), top(clients)
 	return t
 }

@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -57,8 +61,8 @@ func (f *fakeZonePrimary) calls() []string {
 }
 
 // The zone inventory and the lookup over HTTP: a login (its session token) needed; every
-// zone with its source and the fleet's state, never a node's; the zone primary without its
-// token; a lookup that finds the fleet's zone, a zone on the primary (over DNS, from the
+// zone with its source and the fleet's state, never a node's; the zone primary, naming no
+// node; a lookup that finds the fleet's zone, a zone on the primary (over DNS, from the
 // fake), and none; a name that isn't one refused before any query.
 func TestZoneInventoryAPI(t *testing.T) {
 	dir := t.TempDir()
@@ -66,10 +70,7 @@ func TestZoneInventoryAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := settings.Save(settings.Path(dir), settings.Settings{Nodes: []string{"192.0.2.11", "192.0.2.12"},
-		Primary: &primary.Config{Kind: primary.KindTechnitium, URL: "https://192.0.2.254:53443"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := keys.ImportDataToken(dir, "a-secret-token", false); err != nil {
+		Primary: &primary.Config{Address: "192.0.2.254", Allows: []string{"192.0.2.0/24"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := zonefiles.Save(dir, "home.example.zone", []byte("$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. "+
@@ -138,11 +139,11 @@ func TestZoneInventoryAPI(t *testing.T) {
 	if inv.Fleet != 2 || inv.Nodes != 2 || strings.Join(inv.Primaries, ",") != "192.0.2.254" {
 		t.Errorf("inventory: %+v", inv.Inventory)
 	}
-	if inv.Primary["kind"] != "technitium" || inv.Primary["url"] != "https://192.0.2.254:53443" || inv.Primary["api"] != true ||
-		inv.Primary["set"] != true {
+	if inv.Primary["address"] != "192.0.2.254" || fmt.Sprint(inv.Primary["allows"]) != "[192.0.2.0/24]" || inv.Primary["set"] != true ||
+		inv.Primary["uncovered"] != nil {
 		t.Errorf("primary: %v", inv.Primary)
 	}
-	for _, leak := range []string{"a-secret-token", "192.0.2.11", "192.0.2.12"} {
+	for _, leak := range []string{"192.0.2.11", "192.0.2.12"} {
 		if strings.Contains(body, leak) {
 			t.Errorf("the inventory holds %q: %s", leak, body)
 		}
@@ -185,18 +186,240 @@ func TestZoneInventoryAPI(t *testing.T) {
 	}
 }
 
-// The primaries a lookup asks: settings.json's first (its API's host), then the configs',
+// The primaries a lookup asks: settings.json's first (its address), then the configs',
 // each once; none set up, only the configs'.
 func TestLookupPrimaries(t *testing.T) {
 	inv := inventory.Inventory{Primaries: []string{"192.0.2.253", "192.0.2.254"}}
-	s := settings.Settings{Primary: &primary.Config{Kind: primary.KindTechnitium, URL: "https://192.0.2.254:53443"}}
+	s := settings.Settings{Primary: &primary.Config{Address: "192.0.2.254"}}
 	if got := strings.Join(primaries(s, inv), ","); got != "192.0.2.254,192.0.2.253" {
 		t.Errorf("got %s", got)
 	}
-	if got := strings.Join(primaries(settings.Settings{Primary: &primary.Config{Kind: primary.KindManual}}, inv), ","); got != "192.0.2.253,192.0.2.254" {
-		t.Errorf("manual: %s", got)
+	if got := strings.Join(primaries(settings.Settings{Primary: &primary.Config{Allows: []string{"192.0.2.0/24"}}}, inv), ","); got != "192.0.2.253,192.0.2.254" {
+		t.Errorf("no address: %s", got)
 	}
 	if got := primaries(settings.Settings{}, inventory.Inventory{}); len(got) != 0 {
 		t.Errorf("none: %v", got)
+	}
+}
+
+// fakeTransfer is a primary's zone transfer: the zones it sends, who asked for what. No
+// query leaves the test.
+type fakeTransfer struct {
+	mu    sync.Mutex
+	at    string
+	zones map[string][]dns.RR
+	asked []string
+}
+
+func (f *fakeTransfer) Transfer(_ context.Context, p, zone string) ([]dns.RR, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, p+" "+zone)
+	rrs, ok := f.zones[zone]
+	if p != f.at || !ok {
+		return nil, errors.New("dns: bad xfr rcode: 5")
+	}
+	return rrs, nil
+}
+
+// A copied zone's records (GET /api/zone-records): a login needed; read from the primary
+// the configs name, by one transfer; a hosted or forward zone, or no zone, refused before any
+// transfer; a refused transfer said in words.
+func TestZoneRecordsAPI(t *testing.T) {
+	dir := t.TempDir()
+	if err := auth.SetPassword(auth.Path(dir), "admin", testPassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.Save(settings.Path(dir), settings.Settings{Nodes: []string{"192.0.2.11"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configs.Save(dir, "a.json", []byte(`{"name": "a", "secondary": {"primary": "192.0.2.254", "zones": ["lab.example", "gone.example"]},
+		"forward_zones": [{"zone": "corp.example", "forwarder": "198.51.100.53"}]}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	rr := func(s string) dns.RR {
+		r, err := dns.NewRR(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	soa := rr("lab.example. 3600 IN SOA ns1.lab.example. hostmaster.lab.example. 7 3600 600 604800 300")
+	ft := &fakeTransfer{at: "192.0.2.254", zones: map[string][]dns.RR{"lab.example": {soa,
+		rr("lab.example. 3600 IN NS ns1.lab.example."), rr("NAS.lab.example. 300 IN A 192.0.2.10"), rr(`lab.example. 300 IN TXT "hello there"`)}}}
+	ns := []nodes.Node{{Addr: "192.0.2.11", Online: true, Status: map[string]any{"zones": []any{map[string]any{"name": "lab.example", "serial": 7}}}}}
+	v := inventoryServer{dataDir: dir, nodes: func() []nodes.Node { return ns }, xfr: ft}
+	get := func(name string) (int, string) {
+		w := httptest.NewRecorder()
+		v.records(w, httptest.NewRequest("GET", "/api/zone-records?name="+name, nil))
+		return w.Code, w.Body.String()
+	}
+
+	code, body := get("Lab.Example.")
+	if code != 200 {
+		t.Fatalf("lab: %d %s", code, body)
+	}
+	var got struct {
+		Name    string       `json:"name"`
+		Primary string       `json:"primary"`
+		Serial  uint32       `json:"serial"`
+		Records []zoneRecord `json:"records"`
+		More    int          `json:"more"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "lab.example" || got.Primary != "192.0.2.254" || got.Serial != 7 || len(got.Records) != 4 || got.More != 0 {
+		t.Fatalf("lab: %+v", got)
+	}
+	if r := got.Records[2]; r.Owner != "nas.lab.example." || r.Type != "A" || r.TTL != 300 || r.Data != "192.0.2.10" {
+		t.Errorf("A: %+v", r)
+	}
+	if r := got.Records[3]; r.Type != "TXT" || r.Data != `"hello there"` {
+		t.Errorf("TXT: %+v", r)
+	}
+
+	// Refused before any transfer: a forward zone, no zone, not a name.
+	before := len(ft.asked)
+	for name, want := range map[string]int{"corp.example": 404, "nowhere.example": 404, "a..b": 400} {
+		if code, body := get(name); code != want {
+			t.Errorf("%s: %d %s", name, code, body)
+		}
+	}
+	if len(ft.asked) != before {
+		t.Errorf("a refused read transferred: %v", ft.asked)
+	}
+	// A zone the primary won't send: said, with where it was asked.
+	code, body = get("gone.example")
+	if code != http.StatusBadGateway || !strings.Contains(body, "192.0.2.254") || !strings.Contains(body, `"kind":"refused"`) || !strings.Contains(body, "REFUSED") || !strings.Contains(body, `"error":"your primary DNS server`) {
+		t.Errorf("gone: %d %s", code, body)
+	}
+
+	// Over HTTP, the route needs a login.
+	s := &server{dataDir: dir, auth: auth.New(auth.Path(dir)), runner: jobs.New(dir, map[string]jobs.Kind{}),
+		key: keys.FileSource{Path: keys.Path(dir)}, builder: newBuilder(t.TempDir(), t.TempDir(), t.TempDir()),
+		nodes: func() []nodes.Node { return ns }}
+	h, _ := s.handler()
+	if w := serve(h, httptest.NewRequest("GET", "http://127.0.0.1:8480/api/zone-records?name=lab.example", nil)); w.Code != http.StatusUnauthorized {
+		t.Errorf("without a session: %d", w.Code)
+	}
+}
+
+// A primary that takes the transfer and sends nothing: the read ends when its context does,
+// not after the per-message timeouts.
+func TestAXFRContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // held open, silent, until the test ends
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = axfr{port: port}.Transfer(ctx, "127.0.0.1", "lab.example")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %v", d)
+	}
+}
+
+// A transfer's failure, sorted for the page: the rcode the primary answered with, a
+// timeout, no connection; the technical detail kept apart.
+func TestXFRFailure(t *testing.T) {
+	timeout := &net.OpError{Op: "read", Net: "tcp", Err: timeoutErr{}}
+	for _, c := range []struct {
+		err          error
+		kind, detail string
+		source       string
+	}{
+		{&xfrError{source: "192.0.2.5", err: errors.New("dns: bad xfr rcode: 5")}, xfrRefused, "rcode 5 (REFUSED)", "192.0.2.5"},
+		{errors.New("dns: bad xfr rcode: 9"), xfrRefused, "rcode 9 (NOTAUTH)", ""},
+		{errors.New("dns: bad xfr rcode: 3"), xfrUnknown, "rcode 3 (NXDOMAIN)", ""},
+		{errors.New("dns: bad xfr rcode: 10"), xfrUnknown, "rcode 10 (NOTZONE)", ""},
+		{errors.New("dns: bad xfr rcode: 2"), xfrFailed, "rcode 2 (SERVFAIL)", ""},
+		{&xfrError{source: "192.0.2.5", err: dns.ErrSoa}, xfrUnknown, dns.ErrSoa.Error(), "192.0.2.5"},
+		{fmt.Errorf("x: %w", context.DeadlineExceeded), xfrTimeout, "no answer in time", ""},
+		{&xfrError{source: "192.0.2.5", err: timeout}, xfrTimeout, "no answer in time", "192.0.2.5"},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}, xfrUnreachable, "dial tcp: connect: connection refused", ""},
+		{errors.New("something else"), xfrFailed, "something else", ""},
+	} {
+		f := xfrFailure(c.err)
+		if f.Kind != c.kind || f.Detail != c.detail || f.Source != c.source {
+			t.Errorf("%v: %+v", c.err, f)
+		}
+		if s := f.say("192.0.2.254"); !strings.Contains(s, "(192.0.2.254)") || strings.Contains(s, "rcode") {
+			t.Errorf("%v: said %q", c.err, s)
+		}
+	}
+}
+
+// loopback is the real transfer, to a primary on loopback whatever the config names (a
+// config can't name 127.0.0.1).
+type loopback struct{ port string }
+
+func (l loopback) Transfer(ctx context.Context, _, zone string) ([]dns.RR, error) {
+	return axfr{port: l.port}.Transfer(ctx, "127.0.0.1", zone)
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+// A primary on loopback that refuses the transfer: the route says so, with the address the
+// controller connected from (127.0.0.1 here), which the page offers to copy.
+func TestZoneRecordsRefusedSource(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &dns.Server{Listener: ln, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeRefused)
+		w.WriteMsg(m)
+	})}
+	go srv.ActivateAndServe()
+	defer srv.Shutdown()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+
+	dir := t.TempDir()
+	if _, err := configs.Save(dir, "a.json", []byte(`{"name": "a", "secondary": {"primary": "192.0.2.254", "zones": ["lab.example"]}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	v := inventoryServer{dataDir: dir, nodes: func() []nodes.Node { return nil }, xfr: loopback{port}}
+	w := httptest.NewRecorder()
+	v.records(w, httptest.NewRequest("GET", "/api/zone-records?name=lab.example", nil))
+	var got map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if w.Code != http.StatusBadGateway || got["kind"] != xfrRefused || got["source"] != "127.0.0.1" || got["primary"] != "192.0.2.254" ||
+		got["detail"] != "rcode 5 (REFUSED)" || !strings.HasPrefix(got["error"], "your primary DNS server (192.0.2.254) refused") {
+		t.Errorf("%d %v", w.Code, got)
+	}
+
+	// Nothing listening: unreachable, no source.
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, closed, _ := net.SplitHostPort(ln2.Addr().String())
+	ln2.Close()
+	_, err = axfr{port: closed}.Transfer(context.Background(), "127.0.0.1", "lab.example")
+	if f := xfrFailure(err); f.Kind != xfrUnreachable || f.Source != "" {
+		t.Errorf("closed port: %+v (%v)", f, err)
 	}
 }

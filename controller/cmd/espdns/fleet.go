@@ -114,7 +114,7 @@ func (o *fleetOpts) plan(ctx context.Context, c *fleet.Client, targets []string)
 	if p.DNSPeers, err = o.dnsPeers.peers(o.settingsPath()); err != nil {
 		return p, err
 	}
-	ns, err := o.known(ctx, c)
+	ns, err := rolling.Counted(ctx, c, rolling.Request{DataDir: *o.data, Settings: *o.settings, MDNS: *o.mdns, Peers: o.peers}, log.Printf)
 	if err != nil {
 		return p, err
 	}
@@ -308,11 +308,11 @@ func rolloutRequest(args []string) (rolling.Request, *fleetOpts, error) {
 	fs.Var(&zoneFiles, "zone", "zones: a zone master file, <zone>.zone or origin=path (comma-separated or repeat)")
 	empty := fs.Bool("empty", false, "zones: remove every hosted zone")
 	file := fs.String("file", "", "blocklist or overrides: the file from espdns blocklist")
-	catalog := fs.String("catalog", defaultCatalog, "config: the board catalog, for the memory plan of a node on firmware from before it")
+	catalog := fs.String("catalog", defaultCatalog, "the board catalog: config, for the memory plan of a node on firmware from before it; firmware, for the image a node's board runs")
 	checks := checkFlags(fs)
 	fs.Parse(args)
 	kind, err := release.ParseKind(*kindName)
-	if err != nil || kind == release.Control {
+	if err != nil || kind == release.Control || kind == release.Keys {
 		return rolling.Request{}, o, errors.New("need -kind firmware, config, zones, blocklist or overrides")
 	}
 	return rolling.Request{Kind: kind, Hosts: hosts, All: *all, Canary: *canary, Soak: *soak, AllowDegraded: allowDeg,

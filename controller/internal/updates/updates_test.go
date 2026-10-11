@@ -155,8 +155,13 @@ func TestReport(t *testing.T) {
 	if dns2.Name != "dns2" || dns2.Runs.Text != "0.0.1" || dns2.Newest.Source != "builds/p4-board" || dns2.Why != "Update available: 0.0.1 → 0.0.4" {
 		t.Errorf("dns2 %+v", dns2)
 	}
-	if w := r.Nodes[9].Why; w != "Update available: 0.0.4 → 0.0.4 (a later build of it)" {
-		t.Errorf("a later build: %q", w)
+	// A later build of the version it runs: said as that, never "0.0.4 → 0.0.4", and
+	// offered for the node alone, not in "Update all".
+	if u := r.Nodes[9]; u.Why != "A newer build of 0.0.4 (built Oct 7 2026 09:30)" || !u.Rebuild || !u.Offered() || u.Announced() {
+		t.Errorf("a later build: %+v", u)
+	}
+	if r.Nodes[0].Rebuild {
+		t.Error("a new version: a rebuild")
 	}
 	if w := r.Nodes[10].Why; w != "It runs 0.0.4, built later than any build of it here" {
 		t.Errorf("an earlier build: %q", w)
@@ -168,7 +173,7 @@ func TestReport(t *testing.T) {
 		t.Errorf("pending: %+v", u)
 	}
 	// Offered: listed, available, none pending.
-	if !slices.Equal(r.Available, []string{"192.0.2.52", "192.0.2.61"}) {
+	if !slices.Equal(r.Available, []string{"192.0.2.52"}) {
 		t.Errorf("available %v", r.Available)
 	}
 }
@@ -223,6 +228,67 @@ func TestPlan(t *testing.T) {
 	}
 	if s := summary([]string{"a"}, []string{"1", "2"}, "3"); s != "Update a to 3" {
 		t.Errorf("from two: %q", s)
+	}
+}
+
+// A node with a build for its board takes that build, never its chip image's, however much
+// later the image's is: a board's build is made for its pins and partitions. Without one, it
+// takes its chip image's.
+func TestBoardBuildFirst(t *testing.T) {
+	dir, catalog := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(catalog, "ws-s3-eth.json"), []byte(`{"image": "esp32s3-octal"}`))
+	write(t, filepath.Join(dir, "firmware/builds/ws-s3-eth/dns2.bin"), fakenode.AppBuilt("0.0.1", "00000000000000b1", "Oct  3 2026", "09:00:00"))
+	write(t, filepath.Join(dir, "firmware/images/esp32s3-octal/image.json"), []byte(`{"image": "esp32s3-octal", "chip": "esp32s3"}`))
+	write(t, filepath.Join(dir, "firmware/images/esp32s3-octal/app.bin"), fakenode.AppBuilt("0.0.1", "00000000000000c1", "Oct  6 2026", "08:00:00"))
+	builds := Builds(dir, catalog)
+	r := For([]Node{
+		// Runs its board's build: up to date, the image's later build of 0.0.1 notwithstanding.
+		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000b1", "Oct  3 2026 09:00:00", "dns3")},
+		// An earlier build of its board's version: the board's build, a newer build of 0.0.1.
+		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000a1", "Oct  1 2026 09:00:00", "dns4")},
+		// A board without a build of its own: the chip image's.
+		{Host: "192.0.2.55", Listed: true, Status: status("esp32s3-octal", "other-s3", "0.0.0", "00000000000000a2", "Oct  1 2026 09:00:00", "dns5")},
+	}, builds, nil)
+	if u := r.Nodes[0]; u.State != Current || u.Newest.Source != "builds/ws-s3-eth" || u.Rebuild {
+		t.Errorf("dns3: %+v", u)
+	}
+	if u := r.Nodes[1]; u.State != Available || !u.Rebuild || u.Newest.Source != "builds/ws-s3-eth" || u.Why != "A newer build of 0.0.1 (built Oct 3 2026 09:00)" {
+		t.Errorf("dns4: %+v", u)
+	}
+	if u := r.Nodes[2]; u.State != Available || u.Rebuild || u.Newest.Source != "images/esp32s3-octal" || u.Why != "Update available: 0.0.0 → 0.0.1" {
+		t.Errorf("dns5: %+v", u)
+	}
+	// "Update all" is the new version only; the rebuild is updated on its own, said as one.
+	if !slices.Equal(r.Available, []string{"192.0.2.55"}) {
+		t.Errorf("available %v", r.Available)
+	}
+	offers, err := r.Plan([]string{"192.0.2.54"}, nil)
+	if err != nil || len(offers) != 1 || offers[0].Summary != "Update dns4 to a newer build of 0.0.1" {
+		t.Errorf("rebuild: %+v %v", offers, err)
+	}
+	if err := changes.CheckSummary(offers[0].Summary); err != nil {
+		t.Error(err)
+	}
+}
+
+// A board whose catalog image is now its image's sibling (boards.Siblings): its board's
+// build, of the sibling, is its update, as a rollout moves it there over the air. A node of
+// another board on the same image, with no build of its own, stays on its image's.
+func TestBoardBuildSibling(t *testing.T) {
+	dir, catalog := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(catalog, "ws-s3-eth.json"), []byte(`{"image": "esp32s3-eth"}`))
+	write(t, filepath.Join(dir, "firmware/builds/ws-s3-eth/dns2.bin"), fakenode.AppBuilt("0.0.2", "00000000000000b2", "Oct  9 2026", "09:00:00"))
+	write(t, filepath.Join(dir, "firmware/images/esp32s3-eth/image.json"), []byte(`{"image": "esp32s3-eth", "chip": "esp32s3"}`))
+	write(t, filepath.Join(dir, "firmware/images/esp32s3-eth/app.bin"), fakenode.AppBuilt("0.0.3", "00000000000000c3", "Oct  9 2026", "10:00:00"))
+	r := For([]Node{
+		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000b1", "Oct  3 2026 09:00:00", "dns3")},
+		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3-octal", "xiao-s3-sense", "0.0.1", "00000000000000a1", "Oct  3 2026 09:00:00", "dns4")},
+	}, Builds(dir, catalog), nil)
+	if u := r.Nodes[0]; u.State != Available || u.Newest == nil || u.Newest.Source != "builds/ws-s3-eth" {
+		t.Errorf("dns3: %+v", u)
+	}
+	if u := r.Nodes[1]; u.State != NoBuild {
+		t.Errorf("dns4: %+v", u)
 	}
 }
 

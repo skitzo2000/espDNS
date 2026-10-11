@@ -186,13 +186,18 @@ func (e *redirectError) Error() string {
 	return fmt.Sprintf("refused a redirect to %s://%s (%s)", e.scheme, e.host, e.why)
 }
 
-// get GETs a source's URL. internal is the internal allowlist (Request.Internal). A
-// refusal comes back as itself, not as Go's error naming the whole URL (its query may
-// hold a key).
-func (f *Fetch) get(ctx context.Context, u string, internal []string) (*http.Response, error) {
+// get GETs a source's URL, with hdr's headers (a conditional GET's validators; nil none).
+// internal is the internal allowlist (Request.Internal). A refusal comes back as itself,
+// not as Go's error naming the whole URL (its query may hold a key).
+func (f *Fetch) get(ctx context.Context, u string, internal []string, hdr http.Header) (*http.Response, error) {
 	hr, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
+	}
+	for k, vs := range hdr {
+		for _, v := range vs {
+			hr.Header.Add(k, v)
+		}
 	}
 	host := ""
 	if InternalHost(hr.URL.Hostname(), internal) {

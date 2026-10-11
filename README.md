@@ -1,68 +1,65 @@
 # espDNS
 
-espDNS is a full-featured DNS server for small, low-power ESP32 boards. Two or more nodes
-answer for your network together, so one can be down or updating while clients keep
-resolving. A web controller, run with Docker Compose, sets the nodes up and keeps them
-updated.
+<img src="docs/img/artie.webp" alt="Artie A. Record, the espDNS pigeon" width="160" align="right">
 
-> **Status: alpha (0.0.x).** It runs a real network today, but anything may still change
-> between versions, including file formats and commands. Read the
-> [changelog](CHANGELOG.md) before you update.
+Meet Artie A. Record, the espDNS pigeon. He carries your answers.
+
+A full-featured DNS server for small, low-power ESP32 boards. Run two or more nodes and
+they flock together: one can be down or updating while clients keep resolving. A web
+controller, run with Docker Compose, sets them up and keeps them updated.
+
+> **Status: alpha (0.0.x).** It runs a real network today, but anything may change between
+> versions. Read the [changelog](CHANGELOG.md) before you update.
 
 ## Features
 
 **On each node**
 
-- **Hosted zones.** Make and edit your own zones in the controller. They reach the nodes as
-  a signed bundle and apply live.
+- **Hosted zones.** Edit your own zones in the controller; they arrive signed and apply live.
 - **Secondary zones.** Copy zones from any standards-compliant primary (BIND, Knot,
-  PowerDNS, Windows DNS, Technitium and others) by zone transfer, with NOTIFY. Zones are
-  kept on the microSD card, so a node keeps answering when the primary is down.
-- **Forwarders.** Names the node does not hold go to upstream resolvers. Forward zones send
-  chosen names to their own servers. Recursion is for private client addresses only.
+  PowerDNS, Windows DNS, Technitium and others) by zone transfer, kept fresh by SOA checks
+  and NOTIFY. Kept on the microSD card, so nodes answer while the primary is down.
+- **Forwarders.** Names the node doesn't hold go upstream. Forward zones send chosen names
+  to their own servers. Recursion is for private client addresses only.
 - **Cache.** In PSRAM, sized per board.
-- **Blocklists.** Downloaded lists (adblock, hosts, domains, wildcard and RPZ formats, by
-  URL or file) and your own lists, with allow lists. The controller compiles them, refuses
-  a build whose size changes too much, and sends the same list to every node. You can
-  pause blocking for a while, or go back to the previous list.
+- **Blocklists.** Adblock, hosts, domains, wildcard and RPZ lists by URL or file, plus
+  your own block and allow lists. Compiled by the controller, refused if the size changes
+  too much, and the same on every node. Pause blocking, or roll back to the previous list.
 - **Overrides.** Your own block and allow rules on top of the lists, applied live.
-- **Query log and charts.** Each node keeps a ring of recent queries. The controller shows
-  the log and traffic charts. Every node also serves Prometheus metrics at `/metrics`.
-- **Health.** Each node reports its state at `/health` and on an LED, and restarts a
-  failed service on its own.
+- **Query log and charts.** Recent queries and traffic charts in the controller, plus
+  Prometheus metrics at `/metrics` on every node.
+- **Health.** State at `/health` and on an LED; failed services restart on their own.
 
 **Across the fleet**
 
-- **Two or more nodes answering together.** Hand out every node as a DNS server. There is
-  no leader and no shared state, and **a node never depends on the controller**: turn the
-  controller off and DNS goes on.
+- **Two or more nodes answering together.** No leader, no shared state, and **a node never
+  depends on the controller**: turn it off and DNS goes on.
 - **Signed rolling updates.** Firmware, config, zones and lists are signed releases (ECDSA
   P-256), each bound to one node and refused if replayed. The controller updates one node
   at a time and never takes down the last healthy one.
-- **A web controller.** Find and adopt nodes, edit their settings, zones and lists, review
-  pending changes and apply them, flash new boards from the browser, back up and restore.
-  The `espdns` command line tool is in the same Docker image.
+- **A web controller.** Adopt nodes, edit settings, zones and lists, review and apply
+  changes, flash new boards from the browser, back up and restore. The `espdns` CLI ships
+  in the same Docker image.
 
 ## Quick start
 
-You need a Linux machine with Docker, Docker Compose v2.17 or newer and git, two supported
-boards with microSD cards, and Chrome or Edge to flash them. Then:
+You need a Linux machine with Docker, Chrome or Edge, and two boards from the
+[catalog](docs/hardware.md).
 
-1. Clone the repository: `git clone https://github.com/skitzo2000/espdns.git`.
-2. Make your own release key, and build the firmware with it, in the ESP-IDF Docker image.
-   Nodes take changes only from the key built into their firmware, so you need your own.
-3. Start the controller with `docker compose up -d --build` in `controller/`, and set its
-   login with the `espdns passwd` command.
-4. Import your release key and your firmware into the controller.
-5. Flash each board from the controller's builder page, then adopt it.
-6. Hand out both nodes as DNS servers from your router's DHCP settings.
+```sh
+mkdir -p -m 700 espdns/data && cd espdns
+curl -fsSLO https://github.com/skitzo2000/espdns/releases/latest/download/compose.yaml
+printf 'ESPDNS_UID=%s\nESPDNS_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+docker compose up -d
+```
 
-[Getting started](docs/getting-started.md) gives every command, step by step.
+Open http://127.0.0.1:8480 and follow the setup. [Getting started](docs/getting-started.md)
+walks through it.
 
 ## Supported boards
 
 A board is a JSON file in the [board catalog](boards/README.md), not code. The firmware is
-built once per chip, and the board file says how the board is wired.
+built once per chip; the board file says how the board is wired.
 
 | Board | Chip | Network | Tier |
 |---|---|---|---|
@@ -71,23 +68,24 @@ built once per chip, and the board file says how the board is wired.
 | Seeed XIAO ESP32S3 Sense (`xiao-s3-sense`) | ESP32-S3, 8 MB PSRAM | Wi-Fi, or Ethernet with an added W5500 | Tested |
 
 Wire your nodes if you can; Wi-Fi is a best-effort fallback. Firmware is also built for the
-classic ESP32, ESP32-C3, ESP32-C6, newer ESP32-P4 silicon and ESP32-S3 with quad PSRAM, but
-no board with those chips is tested yet. Boards without PSRAM have no working memory sizes
-yet. You can describe your own board in the controller's builder.
+classic ESP32, ESP32-C3, ESP32-C6, newer ESP32-P4 silicon and quad-PSRAM ESP32-S3, with no
+tested board yet (nor working memory sizes for boards without PSRAM). Describe your own
+board in the controller's builder.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Make your keys, build the firmware, start the controller, flash and adopt two nodes |
+| [Getting started](docs/getting-started.md) | Start the controller and run the setup |
+| [Developer guide](docs/developer.md) | Docker Compose, the command line, setup in detail, how firmware is checked, your own build |
 | [Hardware](docs/hardware.md) | The tested boards, what a board needs, and describing your own board |
 | [Zones and forwarding](docs/zones.md) | Hosted, secondary and forward zones, and the default forwarders |
 | [Blocking](docs/blocking.md) | Blocklists, overrides, pausing, the query log and the charts |
-| [Operations](docs/operations.md) | Updating the controller and the nodes, pinned nodes, backup, restore and recovery |
+| [Operations](docs/operations.md) | Updating the controller and the nodes, pinned nodes, nodes without keys, rotating keys, backup, restore and recovery |
 | [Troubleshooting](docs/troubleshooting.md) | Health states and reasons, LED patterns and common problems |
 | [Architecture](docs/architecture.md) | How the nodes and the controller work, and why |
-| [Security model](docs/security.md) | Keys, signed releases, the threat model and the known gaps |
-| [Releasing](docs/releasing.md) | How a release is built, signed and checked, and how to use one |
+| [Security model](docs/security.md) | Keys and the keys partition, key rotation, signed releases, the threat model and the known gaps |
+| [Releasing](docs/releasing.md) | How a release is built, signed with the project's key and checked, and how to use one or your own build |
 | [Reference](docs/reference/README.md) | Every CLI command, setting, node config key, API route and node endpoint |
 | [Board catalog](boards/README.md) | The board file format, memory and CPU settings |
 | [Changelog](CHANGELOG.md) | What each version changed |
@@ -108,10 +106,10 @@ yet. You can describe your own board in the controller's builder.
 ## Versions
 
 The firmware and the controller share one version, set in [`VERSION`](VERSION). It stays
-0.0.x while espDNS is in alpha. To see the controller's version, from `controller/`:
+0.0.x during alpha. The controller's version:
 
 ```sh
-docker compose run --rm -T --entrypoint /espdns espdns-controller version
+docker exec espdns-controller /espdns version
 ```
 
 A node reports its version in `http://<node>/status`.
@@ -119,10 +117,13 @@ A node reports its version in `http://<node>/status`.
 ## License
 
 espDNS is free software under the GNU Affero General Public License, version 3 only
-(AGPL-3.0-only); the full text is in [`LICENSE`](LICENSE). If you run a changed version
-for others over a network, the AGPL asks you to offer them its source.
+(AGPL-3.0-only), free as a bird; see [`LICENSE`](LICENSE). Run a changed version for
+others over a network and the AGPL asks you to offer them its source.
 
-The vendored ESP Web Tools bundle in
-[`controller/web/vendor/esp-web-tools/`](controller/web/vendor/esp-web-tools/) keeps its
-own license, Apache-2.0, which is compatible with the AGPL-3.0. Its `LICENSE` and
-`THIRD_PARTY.md` there list it and the code it bundles.
+Two vendored parts keep their AGPL-compatible Apache-2.0 license:
+
+- ESP Web Tools in [`controller/web/vendor/esp-web-tools/`](controller/web/vendor/esp-web-tools/):
+  see its `LICENSE` and `THIRD_PARTY.md`.
+- The W5500 driver in [`firmware/components/w5500/`](firmware/components/w5500/), a changed
+  copy of ESP-IDF's: see its `LICENSE`, each file's SPDX header, and its `README.md` (the
+  ESP-IDF version it came from and what espDNS changed).

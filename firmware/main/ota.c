@@ -27,6 +27,8 @@
 #include "hosted.h"
 #include "httpguard.h"
 #include "jsonw.h"
+#include "keys.h"
+#include "keys_node.h"
 #include "led.h"
 #include "mbedtls/sha256.h"
 #include "net.h"
@@ -45,12 +47,6 @@
 
 static const char *TAG = "ota";
 
-/* Public keys this node trusts (keys/release.pub, keys/recovery.pub: raw P-256 points). */
-extern const uint8_t release_pub_start[] asm("_binary_release_pub_start");
-extern const uint8_t release_pub_end[] asm("_binary_release_pub_end");
-extern const uint8_t recovery_pub_start[] asm("_binary_recovery_pub_start");
-extern const uint8_t recovery_pub_end[] asm("_binary_recovery_pub_end");
-
 #ifdef DNS2_BENCH_BLOCKLIST
 #include "bench_http.h"
 /* A bench build never passes: it rolls back by itself after this long. */
@@ -58,11 +54,18 @@ extern const uint8_t recovery_pub_end[] asm("_binary_recovery_pub_end");
 #else
 #define HEALTH_TIMEOUT_S 90
 #endif
+/* The DNS2_TEST_NO_KEYS test build: on trial, it stays up in setup mode this long, then
+ * rolls back (confirm_task); within HEALTH_TIMEOUT_S. */
+#define NO_KEYS_HOLD_S   60
+/* Setup mode (keys_node.h): no keys, so no release can be verified, and none is ever taken
+ * on trust over the network. */
+#define NO_KEYS_MSG "this node has no keys: install it with the controller's Install over USB (or write keys over USB)\n"
 #define CHUNK            4096
 #define SEQ_NS           "espdns"
 
-static rel_trust_t s_trust;
-static char s_key_fp[REL_NKEYS][17]; /* first 8 bytes of SHA-256(public key), hex */
+/* What a push is checked with, and what the stored slots are checked with at boot: the same,
+ * and in the second the retired release key a KEYS release kept (release.h). */
+static rel_trust_t s_trust, s_stored;
 
 static volatile bool s_busy;
 
@@ -227,6 +230,17 @@ static uint64_t seq_get(uint8_t kind)
     return v;
 }
 
+/* The last seq of a kind a release must be above: NVS's, and for KEYS also the seq the
+ * keys slot in use was written with, so a replay stays refused even if recording it in NVS
+ * failed. */
+static uint64_t last_seq(uint8_t kind)
+{
+    uint64_t v = seq_get(kind);
+    if (kind == REL_KEYS && keys_node_seq() > v)
+        v = keys_node_seq();
+    return v;
+}
+
 static bool seq_set(uint8_t kind, uint64_t v)
 {
     char key[8];
@@ -258,29 +272,47 @@ static void why_msg(char *msg, size_t cap, const char *why, uint64_t seq, uint64
         snprintf(msg, cap, "%s\n", why);
 }
 
-/* The built-in keys and who this node is. Needed before ota_start: the settings check
- * their stored config at boot. */
+/* The keys this node trusts (keys_node.h: the keys partition's, seeded from the ones built
+ * into a KEYS_SEED= build when the partition holds no keys record) and who it is. Needed before ota_start: the settings
+ * check their stored config at boot. */
 static void trust_init(void)
 {
     if (s_trust.board)
         return;
-    const uint8_t *keys[REL_NKEYS][2] = { { release_pub_start, release_pub_end },
-                                          { recovery_pub_start, recovery_pub_end } };
+    keys_node_load();
     for (int i = 0; i < REL_NKEYS; i++) {
-        uint8_t h[32];
-        bool ok = keys[i][1] - keys[i][0] == REL_PUBKEY_LEN && keys[i][0][0] == 0x04;
-        s_trust.keys[i] = ok ? keys[i][0] : NULL;
-        if (ok) {
-            mbedtls_sha256(keys[i][0], REL_PUBKEY_LEN, h, 0);
-            for (int j = 0; j < 8; j++)
-                sprintf(s_key_fp[i] + 2 * j, "%02x", h[j]);
-        } else {
-            ESP_LOGE(TAG, "built-in public key %d is malformed: releases signed with it are refused", i);
-        }
+        s_trust.keys[i] = keys_node_key(i);
+        if (!s_trust.keys[i])
+            ESP_LOGE(TAG, "no %s key: releases signed with it are refused", i ? "recovery" : "release");
     }
     esp_efuse_mac_get_default(s_trust.node_id);
     s_trust.board_alt = board_fallback_name()[0] ? board_fallback_name() : NULL;
+    /* The sibling image's releases too: a node that moved here from it over the air (or
+     * moves back) keeps its stored config, zones and lists, signed for the image it ran
+     * then, and takes firmware signed for the image it reported. */
+    s_trust.sibling = board_image_sibling()[0] ? board_image_sibling() : NULL;
+    s_trust.retired = NULL; /* never for a push */
+    s_stored = s_trust;
+    s_stored.retired = keys_node_retired();
+    if (s_stored.retired)
+        ESP_LOGW(TAG, "retired release key %s: what this node stored before its keys were rotated still loads",
+                 keys_node_fp(2));
     s_trust.board = board_image();
+    s_stored.board = s_trust.board;
+}
+
+/* Uses the keys a KEYS release just wrote (keys_node_apply), with the update lock held:
+ * each key's pointer switches at once, so a check running meanwhile (a stored slot, another
+ * push's header) uses the old key or the new one. */
+static void trust_swap(void)
+{
+    keys_node_apply();
+    for (int i = 0; i < REL_NKEYS; i++) {
+        const uint8_t *k = keys_node_key(i);
+        __atomic_store_n(&s_trust.keys[i], k, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_stored.keys[i], k, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&s_stored.retired, keys_node_retired(), __ATOMIC_RELEASE);
 }
 
 const rel_trust_t *ota_trust(void)
@@ -289,7 +321,13 @@ const rel_trust_t *ota_trust(void)
     return &s_trust;
 }
 
-uint64_t ota_seq(uint8_t kind) { return seq_get(kind); }
+const rel_trust_t *ota_trust_stored(void)
+{
+    trust_init();
+    return &s_stored;
+}
+
+uint64_t ota_seq(uint8_t kind) { return last_seq(kind); }
 
 bool ota_busy(void) { return s_busy; }
 
@@ -346,6 +384,8 @@ static bool ota_head(httpd_req_t *req, rjob_t *j)
 {
     if (!peer_is_private(req))
         return head_fail(req, "403 Forbidden", "private networks only\n");
+    if (keys_node_setup())
+        return head_fail(req, "403 Forbidden", NO_KEYS_MSG);
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part || req->content_len <= REL_HEADER_LEN || req->content_len - REL_HEADER_LEN > part->size)
         return head_fail(req, "400 Bad Request", "bad image size\n");
@@ -494,6 +534,8 @@ static bool release_head(httpd_req_t *req, rjob_t *j)
 {
     if (!peer_is_private(req))
         return head_fail(req, "403 Forbidden", "private networks only\n");
+    if (keys_node_setup())
+        return head_fail(req, "403 Forbidden", NO_KEYS_MSG);
     if (req->content_len <= REL_HEADER_LEN)
         return head_fail(req, "400 Bad Request", "bad release size\n");
     const char *why;
@@ -502,10 +544,18 @@ static bool release_head(httpd_req_t *req, rjob_t *j)
         return head_fail(req, "400 Bad Request", "receive failed\n");
     uint8_t kind = j->hdr[8];
     uint64_t limit = seq_limit();
-    if (kind != REL_CONFIG && !hosted_kind(kind) && !blocking_kind(kind))
+    if (kind != REL_CONFIG && kind != REL_KEYS && !hosted_kind(kind) && !blocking_kind(kind))
         why = kind == REL_FIRMWARE ? "firmware releases go to /ota" : "release kind not supported here";
     else
-        why = rel_verify(j->hdr, &s_trust, seq_get(kind), limit, &j->m);
+        why = rel_verify(j->hdr, &s_trust, last_seq(kind), limit, &j->m);
+    /* KEYS: the recovery key, this node by its ID, keys from the keys partition */
+    if (!why && kind == REL_KEYS)
+        why = rel_keys_check(&j->m, &s_trust);
+    if (!why && kind == REL_KEYS && j->m.payload_len != KEYS_REL_LEN)
+        why = "a keys release's payload is 138 bytes";
+    uint32_t gen;
+    if (!why && kind == REL_KEYS && !keys_node_gen(&gen))
+        why = "this node's keys are not from its keys partition: write its keys over USB";
     if (!why && j->m.payload_len != req->content_len - REL_HEADER_LEN)
         why = "payload length does not match the manifest";
     if (why) {
@@ -516,9 +566,63 @@ static bool release_head(httpd_req_t *req, rjob_t *j)
     return true;
 }
 
+/* A KEYS release (keys.h), in the worker with the update lock held: the payload, the slot
+ * not in use written and read back, the seq recorded, then the new keys in use at once (no
+ * reboot). The reply carries them:
+ *   {"ok":true,"message":"...","keys":["<release>","<recovery>"],"keys_retired":"<fp>"|null,
+ *    "keys_gen":n,"reboot_pending":b,"rebooting":b} */
+static esp_err_t keys_body(httpd_req_t *req, const rel_manifest_t *m)
+{
+    uint8_t p[KEYS_REL_LEN], sha[32];
+    keys_rel_t r;
+    char err[160];
+    const char *why = NULL;
+    if (!recv_all(req, p, sizeof(p)))
+        why = "receive failed";
+    else if (mbedtls_sha256(p, sizeof(p), sha, 0) != 0 || memcmp(sha, m->sha256, 32) != 0)
+        why = "payload does not match the signed hash";
+    else if ((why = keys_rel_parse(p, sizeof(p), &r)) != NULL)
+        ;
+    else
+        why = keys_node_write(&r, m->seq, err, sizeof(err));
+    if (why) {
+        busy_give();
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s\n", why);
+        return fail(req, "400 Bad Request", msg);
+    }
+    /* The slot holds the seq too (last_seq): a failure here leaves the replay refused. */
+    if (!seq_set(REL_KEYS, m->seq))
+        ESP_LOGE(TAG, "KEYS release seq %llu: could not record its seq in NVS (the keys slot has it)",
+                 (unsigned long long)m->seq);
+    trust_swap();
+    busy_give();
+
+    uint32_t gen = 0;
+    keys_node_gen(&gen);
+    const char *ret = keys_node_fp(2);
+    char msg[192], e[400], j[640], rj[24] = "null";
+    snprintf(msg, sizeof(msg), "ok, keys generation %lu in use: release %s, recovery %s, retired %s",
+             (unsigned long)gen, keys_node_fp(0), keys_node_fp(1), ret[0] ? ret : "none");
+    if (ret[0])
+        snprintf(rj, sizeof(rj), "\"%s\"", ret);
+    json_esc(e, sizeof(e), msg);
+    ESP_LOGW(TAG, "%s", msg);
+    ota_http_reply(req);
+    size_t n = (size_t)snprintf(j, sizeof(j),
+                                "{\"ok\":true,\"message\":\"%s\",\"keys\":[\"%s\",\"%s\"],\"keys_retired\":%s,"
+                                "\"keys_gen\":%lu,\"reboot_pending\":%s,\"rebooting\":%s}\n",
+                                e, keys_node_fp(0), keys_node_fp(1), rj, (unsigned long)gen,
+                                ota_reboot_reasons() ? "true" : "false", ota_rebooting() ? "true" : "false");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, j, (ssize_t)(n < sizeof(j) ? n : sizeof(j) - 1));
+}
+
 /* In the worker, with the update lock held: the payload, then the reply. */
 static esp_err_t release_body(httpd_req_t *req, rjob_t *j)
 {
+    if (j->m.kind == REL_KEYS)
+        return keys_body(req, &j->m);
     const uint8_t *hdr = j->hdr;
     const rel_manifest_t m = j->m;
     bool config = m.kind == REL_CONFIG, zones = hosted_kind(m.kind);
@@ -576,7 +680,7 @@ static const char *reset_name(esp_reset_reason_t r)
     }
 }
 
-/* /status without its zones: about 5 KB with every string at its longest, under 7 KB with
+/* /status without its zones: about 5.5 KB with every string at its longest, under 8 KB with
  * each of them escaped at its longest (jsonw.h: the errors' quotes and backslashes); and a
  * secondary zone's entry without its name, with every number at its longest (111 bytes),
  * which also holds a forward zone's (41 bytes without its name). */
@@ -611,6 +715,17 @@ static esp_err_t status_get(httpd_req_t *req)
     json_esc(e_src, sizeof(e_src), board_source());
     json_esc(e_err, sizeof(e_err), board_error());
     json_esc(e_fb, sizeof(e_fb), board_fallback_name());
+    /* Where the keys came from (keys_node.h); the generation of the keys partition's slot in
+     * use, null if they aren't from it. */
+    char kgen[12] = "null", e_kerr[2 * 256 + 1];
+    uint32_t gen;
+    if (keys_node_gen(&gen))
+        snprintf(kgen, sizeof(kgen), "%lu", (unsigned long)gen);
+    /* The retired release key a KEYS release kept (stored releases only), null if none. */
+    char kret[24] = "null";
+    if (keys_node_fp(2)[0])
+        snprintf(kret, sizeof(kret), "\"%s\"", keys_node_fp(2));
+    json_esc(e_kerr, sizeof(e_kerr), keys_node_error());
 
     /* Sized for what this node reports: everything but the zones fits in STATUS_FIXED (with
      * every string at its longest), then each secondary and hosted zone at its longest. A
@@ -631,15 +746,18 @@ static esp_err_t status_get(httpd_req_t *req)
         "\"slot\":\"%s\",\"ota_state\":\"%s\",\"uptime_s\":%lld,\"ip\":\"" IPSTR "\","
         "\"node_id\":\"" MACSTR "\",\"board\":\"%s\",\"image\":\"%s\",\"board_source\":\"%s\","
         "\"board_error\":\"%s\",\"fallback_board\":\"%s\",\"keys\":[\"%s\",\"%s\"],"
-        "\"seq\":{\"firmware\":%llu,\"config\":%llu,\"zones\":%llu,\"blocklist\":%llu,\"overrides\":%llu,\"control\":%llu},"
+        "\"keys_retired\":%s,\"keys_source\":\"%s\",\"keys_gen\":%s,\"keys_error\":\"%s\","
+        "\"seq\":{\"firmware\":%llu,\"config\":%llu,\"zones\":%llu,\"blocklist\":%llu,\"overrides\":%llu,\"control\":%llu,"
+        "\"keys\":%llu},"
         "\"degraded\":%s,\"heap_free\":%u,\"psram_free\":%u,"
         "\"queries\":{\"total\":%lu,\"udp\":%lu,\"tcp\":%lu,\"auth\":%lu,\"forwarded\":%lu,\"cache_hits\":%lu,"
         "\"nxdomain\":%lu,\"servfail\":%lu,\"refused\":%lu,\"notifies\":%lu,\"dropped\":%lu},",
         e_proj, e_ver, sha, e_built, e_idf, run->label, state_name(st),
         esp_timer_get_time() / 1000000, IP2STR((esp_ip4_addr_t *)&ip), MAC2STR(s_trust.node_id), e_board,
-        e_image, e_src, e_err, e_fb, s_key_fp[0], s_key_fp[1], (unsigned long long)seq_get(REL_FIRMWARE),
+        e_image, e_src, e_err, e_fb, keys_node_fp(0), keys_node_fp(1), kret, keys_node_source(), kgen, e_kerr,
+        (unsigned long long)seq_get(REL_FIRMWARE),
         (unsigned long long)seq_get(REL_CONFIG), (unsigned long long)seq_get(REL_ZONES), (unsigned long long)seq_get(REL_BLOCKLIST), (unsigned long long)seq_get(REL_OVERRIDES),
-        (unsigned long long)seq_get(REL_CONTROL), (h.reasons & HR_DEGRADED_MASK) ? "true" : "false",
+        (unsigned long long)seq_get(REL_CONTROL), (unsigned long long)last_seq(REL_KEYS), (h.reasons & HR_DEGRADED_MASK) ? "true" : "false",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         (unsigned long)s.queries, (unsigned long)s.udp, (unsigned long)s.tcp, (unsigned long)s.auth,
         (unsigned long)s.forwarded, (unsigned long)s.cache_hits, (unsigned long)s.nxdomain,
@@ -896,7 +1014,7 @@ static void worker_task(void *arg)
 
 static bool worker_take(void) { return !__atomic_exchange_n(&s_worker, true, __ATOMIC_ACQ_REL); }
 
-static const hg_locks_t s_locks = { .take = busy_take, .give = busy_give, .seq = seq_get, .worker = worker_take };
+static const hg_locks_t s_locks = { .take = busy_take, .give = busy_give, .seq = last_seq, .worker = worker_take };
 
 /* A release whose header verified: the update lock, then the worker (hg_gate). Takes j. */
 static esp_err_t worker_start(httpd_req_t *req, hg_conn_t *c, const hroute_t *rt, rjob_t *j)
@@ -992,8 +1110,8 @@ static void route(httpd_handle_t srv, const char *uri, httpd_method_t method, co
 void ota_start(void)
 {
     trust_init();
-    ESP_LOGI(TAG, "node " MACSTR " image %s, release key %s, recovery key %s", MAC2STR(s_trust.node_id),
-             s_trust.board, s_key_fp[0], s_key_fp[1]);
+    ESP_LOGI(TAG, "node " MACSTR " image %s, release key %s, recovery key %s (%s)", MAC2STR(s_trust.node_id),
+             s_trust.board, keys_node_fp(0), keys_node_fp(1), keys_node_source());
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_open_sockets = 3;
     cfg.stack_size = 8192;
@@ -1037,6 +1155,19 @@ static bool any_zone_loaded(void)
 
 static void confirm_task(void *arg)
 {
+    /* A firmware that trusts no keys (setup mode) could never take another release, its own
+     * fix included: it goes back to the one before, which did, at once. The test build
+     * (DNS2_TEST_NO_KEYS) stays in setup mode for NO_KEYS_HOLD_S first, for its /status,
+     * /health and refusals to be seen, then goes back the same way. */
+    const rel_trust_t *t = ota_trust();
+    if (keys_node_setup() || !t->keys[0] || !t->keys[1]) {
+#ifdef DNS2_TEST_NO_KEYS
+        ESP_LOGW(TAG, "test build without keys: setup mode for %d s, then rolling back", NO_KEYS_HOLD_S);
+        vTaskDelay(pdMS_TO_TICKS(NO_KEYS_HOLD_S * 1000));
+#endif
+        ESP_LOGE(TAG, "trial boot has no usable keys (%s: %s): rolling back", keys_node_source(), keys_node_error());
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+    }
     /* Zones are part of the check only if the node had some on its SD card at boot (they are
      * loaded before this task starts). A node with none yet, such as one the primary doesn't
      * allow transfers to, must still be able to take an update. */

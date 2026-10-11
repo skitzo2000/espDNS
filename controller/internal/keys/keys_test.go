@@ -139,9 +139,14 @@ func TestTrust(t *testing.T) {
 		{"a node trusts it", k, nil, recPub, []NodeKeys{trusting, elsewhere}, true, "", []string{"a"}},
 		{"a node trusts it, not the pub file's", k, otherPub, recPub, []NodeKeys{trusting}, true, "", []string{"a"}},
 		{"nothing trusts it", k, otherPub, recPub, []NodeKeys{elsewhere, down}, false, "no node in settings.json trusts it", nil},
-		{"no nodes, no pub", k, nil, recPub, nil, false, "no node in settings.json was asked", nil},
+		// Bootstrap: no node listed, a new fleet's first key is taken (not the recovery key).
+		{"no nodes, no pub: a new fleet", k, nil, recPub, nil, true, "", nil},
+		{"no listed node, only mDNS hosts with other keys: a new fleet", k, nil, recPub, []NodeKeys{{Addr: "m", Keys: []string{fp(other), fp(rec)}}}, true, "", nil},
+		{"no listed node, but another pub file: not a bootstrap", k, otherPub, recPub, nil, false, "no node in settings.json was asked", nil},
+		{"a new fleet, but the recovery key", rec, nil, recPub, nil, false, "recovery key", nil},
 		{"only an mDNS host trusts it", k, otherPub, recPub, []NodeKeys{mdnsOnly, elsewhere}, false, "no node in settings.json trusts it", nil},
-		{"the recovery key, an mDNS host vouching", rec, nil, nil, []NodeKeys{mdnsRec}, false, "no node in settings.json was asked", nil},
+		{"the recovery key, an mDNS host vouching", rec, nil, recPub, []NodeKeys{mdnsRec}, false, "recovery key", nil},
+		{"a listed node not read: no bootstrap", k, otherPub, recPub, []NodeKeys{down}, false, "no node in settings.json trusts it", nil},
 		{"the recovery key, by a node's slot 1", rec, nil, nil, []NodeKeys{trusting}, false, "recovery key", nil},
 		{"the recovery key, by an mDNS host's slot 1", rec, nil, nil, []NodeKeys{{Addr: "m", Keys: []string{fp(other), fp(rec)}}}, false, "recovery key", nil},
 		{"the recovery key, by its pub file", rec, recPub, recPub, nil, false, "recovery key", nil},
@@ -155,6 +160,12 @@ func TestTrust(t *testing.T) {
 		if strings.Join(r.Trusting, ",") != strings.Join(c.trusted, ",") {
 			t.Errorf("%s: trusting %v", c.name, r.Trusting)
 		}
+	}
+	if r, err := Trust(k, "", nil, recPub, nil); err != nil || !r.Bootstrap || !strings.Contains(strings.Join(r.Lines(), "\n"), "new fleet") {
+		t.Errorf("bootstrap: %v %+v %v", err, r, r.Lines())
+	}
+	if r, _ := Trust(k, "release.pub", pub, recPub, nil); r.Bootstrap {
+		t.Error("the firmware's key taken as a bootstrap")
 	}
 	r, _ := Trust(k, "release.pub", pub, nil, []NodeKeys{trusting, elsewhere, down, mdnsOnly})
 	text := strings.Join(r.Lines(), "\n")

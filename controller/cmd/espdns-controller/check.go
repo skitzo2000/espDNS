@@ -87,6 +87,10 @@ func (k checker) run(ctx context.Context, run *jobs.Run) (any, error) {
 			return res, ctx.Err()
 		default:
 		}
+		if s.IsOutOfService(n.Addr) {
+			run.Logf("%s: skipped: out of service", n.Addr)
+			continue
+		}
 		r := k.node(ctx, c, n)
 		if n.Status != nil {
 			for _, z := range n.Status.Zones {

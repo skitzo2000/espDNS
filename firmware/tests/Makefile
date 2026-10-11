@@ -1,7 +1,7 @@
 CFLAGS = -std=gnu17 -g -O1 -Wall -Wextra -Wno-unused-parameter -I../main \
          -fsanitize=address,undefined -fno-omit-frame-pointer
-SRCS   = test_core.c ../main/dns_wire.c ../main/zone.c ../main/answer.c ../main/cache.c ../main/flight.c ../main/fwdq.c ../main/upq.c ../main/forward.c \
-         ../main/release.c ../main/blocklist.c ../main/block.c ../main/board_def.c ../main/health.c ../main/cfg.c ../main/hzone.c ../main/reboot.c ../main/svc.c ../main/memplan.c ../main/sup.c ../main/cpuplan.c \
+SRCS   = test_core.c ../main/dns_wire.c ../main/zone.c ../main/answer.c ../main/cache.c ../main/flight.c ../main/fwdq.c ../main/upq.c ../main/load.c ../main/forward.c \
+         ../main/release.c ../main/keys.c ../main/blocklist.c ../main/block.c ../main/board_def.c ../main/health.c ../main/cfg.c ../main/hzone.c ../main/reboot.c ../main/svc.c ../main/memplan.c ../main/sup.c ../main/cpuplan.c \
          ../main/qlog.c ../main/stats.c ../main/metrics.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 CFLAGS += -I$(IDF_PATH)/components/json/cJSON
 # The firmware defaults as a deployment's transitional image has them: an address built in
@@ -35,17 +35,20 @@ TLS_FLAGS = -std=gnu17 -O2 -I$(MBEDTLS)/include -I. -DMBEDTLS_CONFIG_FILE='"mbed
 # (the image's /usr/bin/python3 does not), else python3
 PYTHON ?= $(or $(firstword $(wildcard $(if $(IDF_PYTHON_ENV_PATH),$(IDF_PYTHON_ENV_PATH)/bin/python) $(if $(IDF_TOOLS_PATH),$(IDF_TOOLS_PATH)/python_env/*/bin/python))),python3)
 
-test: test_core test_defaults test_observe test_http test_zones
+test: test_core test_defaults test_observe test_http test_zones test_w5500
 	./test_core
 	./test_defaults
 	./test_observe
 	./test_http
 	./test_zones
+	./test_w5500
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_ota_push.py
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_containers.py
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_version.py
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_keyspart.py
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_keys_release.py
 
-test_core: $(SRCS) $(TLS_OBJS) release_vectors.h blocklist_vectors.h memplan_vectors.json place_vectors.json cpu_vectors.json cfg_reboot_vectors.json \
+test_core: $(SRCS) $(TLS_OBJS) release_vectors.h blocklist_vectors.h memplan_vectors.json place_vectors.json cpu_vectors.json cfg_reboot_vectors.json keys_vectors.json \
            ../site-defaults.h.example config_example.json
 	$(CC) $(CFLAGS) $(TLS_FLAGS:-O2=) -o $@ $(SRCS) $(TLS_OBJS) -lpthread
 
@@ -58,6 +61,10 @@ test_observe: $(OBS_SRCS) $(TLS_OBJS)
 test_http: $(HTTP_SRCS) ../main/httpguard.h ../main/jsonw.h
 	$(CC) $(CFLAGS) -o $@ $(HTTP_SRCS) -lpthread
 
+# The W5500 driver's buffer arithmetic and RX frame walk (components/w5500/w5500_ring.h)
+test_w5500: test_w5500.c ../components/w5500/w5500_ring.h
+	$(CC) $(CFLAGS) -I../components/w5500 -o $@ test_w5500.c
+
 # The heap the zone code holds, counted (test_zones.c)
 ZONES_WRAP = -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
 test_zones: $(ZONES_SRCS) ../main/zone.h ../main/axfr.h ../main/answer.h
@@ -68,7 +75,7 @@ tls/%.o: $(MBEDTLS)/library/%.c mbedtls_host_config.h
 	$(CC) $(TLS_FLAGS) -c -o $@ $<
 
 clean:
-	rm -rf test_core test_defaults test_observe test_http test_zones bench_blocklist tls
+	rm -rf test_core test_defaults test_observe test_http test_zones test_w5500 bench_blocklist tls
 
 # Lookup speed on a real list: make bench FILE=list.bin QUERIES=q.txt (see bench_blocklist.c)
 bench_blocklist: bench_blocklist.c ../main/blocklist.c ../main/dns_wire.c

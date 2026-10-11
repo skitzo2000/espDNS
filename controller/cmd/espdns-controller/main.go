@@ -9,7 +9,8 @@
 //	fleet.lock               the fleet lock (internal/fleetlock): one fleet change at a time
 //	log/actions.jsonl        the action log (internal/actionlog): every fleet change
 //	log/jobs/<id>.json       each job's record and progress (internal/jobs)
-//	firmware/images/<image>/ chip images from `make export-images` in firmware/
+//	firmware/images/<image>/ chip images: imported releases (espdns release import, fetch; Get firmware), each with
+//	                         its provenance/ (internal/dist), or your own export (make export-images in firmware/)
 //	firmware/builds/<board>/ the production boards' builds, from make fleet-firmware (the rolling push)
 //	lists/                   blocklist and overrides files (the rolling push; the Blocking page compiles them)
 //	blocking/lists.json      the list definitions (internal/blocking): what each list is compiled from
@@ -17,7 +18,6 @@
 //	zones/<zone>.zone        hosted zones (internal/zonefiles): the zone editor's and the rolling push's
 //	boards/                  your own board definitions (the shipped catalog is -catalog)
 //	keys/release.pem         the release signing key, mode 0600 (internal/keys; espdns key import)
-//	keys/primary.token       the zone primary's API token, mode 0600 (internal/keys; espdns primary import)
 //	configs/<name>.json      node configs (internal/configs): the editor's and the CLI's config rollouts
 //	changes/                 the pending changes (internal/changes): edits waiting for one apply
 //	auth.json                the login: the user and an argon2id hash, mode 0600 (espdns passwd)
@@ -31,22 +31,25 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/changes"
+	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/observe"
-	"github.com/skitzo2000/espdns/controller/internal/primary"
+	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 	"github.com/skitzo2000/espdns/controller/internal/version"
 )
@@ -81,7 +84,10 @@ func main() {
 	browse := flag.Bool("browse-mdns", true, "browse mDNS for nodes besides settings.json's (false: only those are polled; the browser tests, which must reach no node)")
 	mdns := flag.Duration("check-mdns", 3*time.Second, "how long a check job browses mDNS for nodes besides the settings' (0: don't)")
 	health := flag.Bool("healthcheck", false, "only check that the controller on -listen answers (exit 0) or not (exit 1): the container's health check")
+	projectPub := flag.String("project-pub", dist.ProjectPub, "the project's release public key (keys/project.pub): releases signed with it, or with your release key, are imported")
+	releaseURL := flag.String("release-url", dist.DefaultForge, "the repository Get firmware fetches releases from when settings.json has no \"release_url\"")
 	flag.Parse()
+	rolling.ProjectPub = *projectPub
 	if *health {
 		if err := healthcheck(*listen, 5*time.Second); err != nil {
 			log.Printf("healthcheck: %v", err)
@@ -105,6 +111,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	reg := nodes.New(st.Nodes)
+	reg.SetOutOfService(st.OutOfService)
+	relist := func() {
+		if s, err := settings.Load(settings.Path(*dataDir)); err == nil {
+			reg.SetListed(s.Nodes)
+			reg.SetOutOfService(s.OutOfService)
+		}
+	}
 	// The dashboard and the query log (internal/observe): after each poll of /status, each
 	// node that answered has its /metrics and new query log entries read, in memory only. A
 	// poll that comes while the last read still runs is skipped.
@@ -127,9 +140,7 @@ func main() {
 				return
 			case <-time.After(10 * time.Second):
 			}
-			if s, err := settings.Load(settings.Path(*dataDir)); err == nil {
-				reg.SetListed(s.Nodes)
-			}
+			relist()
 		}
 	}()
 
@@ -172,33 +183,33 @@ func main() {
 	push := pushKind{actions: act, catalog: *catalog, secret: newSecret(), nodes: reg.List, used: &usedRuns{},
 		job: func(id string) (jobs.Job, bool) { return runner.Get(id) }}
 	kinds["rollout"] = push.kind
-	// Adoption and the zone primary's lists (adopt.go): the token is a file, as the key
-	// (keys/primary.token).
-	tokSrc := keys.TokenSource(keys.DataTokenSource{DataDir: *dataDir})
-	switch zp := st.ZonePrimary(); {
-	case zp.IsZero():
-		log.Printf(`zone primary: none in settings.json ("primary"): manual, adoption names the changes to make on it by hand`)
-	case !primaryHasAPI(zp.Kind):
-		log.Printf("zone primary: %s: adoption names the changes to make on it by hand", zp.Kind)
-	default:
-		if _, err := tokSrc.Token(); err != nil {
-			log.Printf("zone primary %s: token: %v: adoption names the changes to make there by hand", zp, err)
-		}
-	}
-	adopt := adoptKind{actions: act, catalog: *catalog, secret: newSecret(), nodes: reg.List, used: &usedRuns{}, token: tokSrc,
+	// Adoption (adopt.go).
+	adopt := adoptKind{actions: act, catalog: *catalog, secret: newSecret(), nodes: reg.List, used: &usedRuns{},
 		job: func(id string) (jobs.Job, bool) { return runner.Get(id) }}
 	kinds["adopt"] = adopt.kind
-	kinds["primary"] = adopt.primaryKind
 	kinds["settings-add"] = adopt.settingsAdd
 	// The pending changes and the apply (changes.go, apply.go): every change sent as one
 	// rolling change.
 	pending := changes.New(*dataDir)
-	kinds["apply"] = applyKind{actions: act, catalog: *catalog, store: pending}.kind
+	ak := applyKind{actions: act, catalog: *catalog, store: pending}
+	kinds["apply"] = ak.kind
+	// The scheduled blocklist refresh (refresh.go): a downloaded list that changed, sent as
+	// an apply of it alone.
+	kinds["refresh"] = refreshKind{apply: ak}.kind
+	// A node taken out of service, returned to it, or removed from the group (service.go).
+	for name, k := range (serviceKind{apply: ak, relist: relist, jobs: func() []jobs.Job { return runner.List() }}).kinds() {
+		kinds[name] = k
+	}
+	// Get firmware (firmware.go): a published release fetched, checked and imported.
+	kinds["fetch-release"] = fetchKind{dataDir: *dataDir, forge: *releaseURL}.kind
+	log.Printf("project key: %s", projectPubThere(*projectPub))
 	runner = jobs.New(*dataDir, kinds)
 	jobsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(jobsDone) }()
+	refresh := newRefresher(*dataDir, pending, runner)
+	go refresh.Run(ctx, refreshFirst+time.Duration(rand.Int64N(int64(refreshFirst))), refreshTick)
 
-	srv := &server{dataDir: *dataDir, nodes: reg.List, runner: runner, auth: login, key: keySrc, catalog: *catalog, push: push, adopt: adopt, observe: obs, changes: pending, listed: reg.SetListed, lookup: reg.Lookup,
+	srv := &server{dataDir: *dataDir, releaseURL: *releaseURL, nodes: reg.List, runner: runner, auth: login, key: keySrc, catalog: *catalog, push: push, adopt: adopt, observe: obs, changes: pending, listed: func([]string) { relist() }, lookup: reg.Lookup, refresh: refresh,
 		builder: newBuilder(*catalog, filepath.Join(*dataDir, "boards"), filepath.Join(*dataDir, "firmware", "images"))}
 	h, _ := srv.handler()
 
@@ -217,23 +228,26 @@ func main() {
 	}
 }
 
-// primaryHasAPI: a kind of zone primary driven over an API (with a token), not by hand.
-func primaryHasAPI(kind string) bool {
-	d, _ := primary.Lookup(kind)
-	return d.API
-}
-
-// loadSettings reads settings.json at startup. A zone primary at a plain http address
-// doesn't stop the controller: it starts with that primary paused (never reached, the
-// token never sent to it), says so once here, and the address is fixed from the GUI.
+// loadSettings reads settings.json at startup, and clears what an older controller left
+// for a zone primary's API: a "primary" with an API's fields ("kind", "url",
+// "cert_sha256") loads, and is said once to be no longer used; a token file
+// (keys/primary.token) is deleted, saying to revoke the token on the primary. The
+// controller no longer talks to a primary's API, so it keeps no token.
 func loadSettings(dataDir string, logf func(format string, args ...any)) (settings.Settings, error) {
+	removed, rerr := keys.RemoveOldTokens(dataDir)
+	for _, rel := range removed {
+		logf("removed %s, the unused zone primary API token: revoke that token on your zone primary", rel)
+	}
+	if rerr != nil {
+		logf("warning: the unused zone primary API token: %v: delete it by hand, and revoke it on your zone primary", rerr)
+	}
 	st, err := settings.Load(settings.Path(dataDir))
 	if err != nil {
 		return st, err
 	}
-	if zp := st.ZonePrimary(); zp.PlainHTTP() {
-		logf("warning: zone primary %s: %v: its calls (zone lists, adoption's step 4) are paused until then, the token never sent to it",
-			zp.URL, primary.ErrPlainHTTP)
+	if old := st.ZonePrimary().Ignored(); len(old) > 0 {
+		logf(`settings.json: "primary" fields %s are no longer used and are ignored: the nodes copy zones by zone transfer, `+
+			`and your primary allows them once (Zones, Zone primary)`, strings.Join(old, ", "))
 	}
 	return st, nil
 }

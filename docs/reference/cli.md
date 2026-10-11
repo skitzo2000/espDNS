@@ -1,10 +1,10 @@
 # espdns CLI
 
-`espdns` is the command-line side of the controller. It finds nodes, adopts them, compiles
-blocklists, checks node configs and zones, and sends signed releases to nodes one at a time.
-It ships in the controller's image as `/espdns`.
+`espdns` is the controller's command line: it finds and adopts nodes, compiles blocklists,
+checks node configs and zones, and sends signed releases one node at a time. It ships in the
+controller's image as `/espdns`.
 
-Every flag below was taken from the command's own `-h` output. To see it yourself:
+Every flag below comes from the command's own `-h` output:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller <command> -h
@@ -20,26 +20,25 @@ Run every command from the repository's `controller/` directory, where `compose.
 docker compose run --rm --entrypoint /espdns espdns-controller <command> -data /data [flags]
 ```
 
-Things to know:
-
 - **Set up `.env` and the data directory first.** `docker compose run` reads the same
   `compose.yaml` as the controller, so it needs `ESPDNS_UID` and `ESPDNS_GID` in `.env` and
   an existing data directory (see [settings.md](settings.md#env-variables)).
-- **Always pass `-data /data`.** The flag's default is `data`, a path that doesn't exist in
-  the container. Overriding the entrypoint also drops the controller's own `-data /data`.
-- **Paths are inside the container.** Your data directory is at `/data`. The board catalog
-  is at `/catalog`. The firmware's public keys are at `/keys/release.pub` and
-  `/keys/recovery.pub`. The container's root filesystem is read-only, so write output files
-  under `/data`. To read other files from the host, mount them, for example
-  `-v "$PWD/lists:/in:ro"` after `run`.
-- **Use `-T` when you pipe into the command.** `-T` turns off the terminal, so standard input
-  comes from your pipe or file.
-- **The network is the host's.** `compose.yaml` uses host networking, so mDNS discovery and
-  the nodes on your LAN work from `docker compose run` too.
-- **One change at a time.** A command that changes nodes takes the fleet lock in the data
-  directory and fails at once if the controller or another `espdns` holds it. It writes its
-  start and result to the action log. A `-dry-run` takes no lock and is not logged.
-  Ctrl-C stops a change at once; a second Ctrl-C quits.
+- **Always pass `-data /data`.** The default, `data`, doesn't exist in the container, and
+  overriding the entrypoint drops the controller's own `-data /data`.
+- **Paths are inside the container.** Data directory: `/data`. Board catalog: `/catalog`.
+  The project's release public key: `/keys/project.pub` (it checks the project's releases;
+  no node trusts it). Your own public keys aren't in the image: mount them
+  (`-v "$HOME/espdns-keys:/mykeys:ro"`). The root filesystem is read-only, so write output
+  under `/data`. Mount any other host files you need, for example `-v "$PWD/lists:/in:ro"`
+  after `run`.
+- **Use `-T` when you pipe in.** It turns off the terminal so standard input comes from your
+  pipe or file.
+- **The network is the host's.** `compose.yaml` uses host networking, so mDNS and the nodes
+  on your LAN work from `docker compose run` too.
+- **One change at a time.** A command that changes nodes takes the fleet lock and fails at
+  once if the controller or another `espdns` holds it. It logs its start and result to the
+  action log. A `-dry-run` takes no lock and isn't logged. Ctrl-C stops a change at once; a
+  second Ctrl-C quits.
 
 ### Secrets
 
@@ -71,15 +70,11 @@ Secrets never go in a command-line argument.
     flush -data /data -host 192.0.2.53
   ```
 
-The `-key` default, `../firmware/secrets/release.pem`, does not exist in the image, so give
-the key one of the three ways above. The CLI does not pick up the imported key by itself.
+The `-key` default, `../firmware/secrets/release.pem`, doesn't exist in the image, and the
+CLI won't pick up the imported key by itself: use one of the three ways above.
 
-With `-recovery` (sign with the offline recovery key, key slot 1), the environment variable is
-not read: use `-key -`.
-
-**The zone primary's API token** (`adopt` with an API-driven primary): `-primary-token-file`,
-else `$ESPDNS_PRIMARY_TOKEN`, else the variable `-primary-token-env` names, else
-`<data>/keys/primary.token` (stored by [`primary import`](#primary)).
+With `-recovery` (sign with the offline recovery key, key slot 1) the environment variable
+isn't read: use `-key -`.
 
 **The login password and backup passphrase** are asked on the terminal, or read from the first
 line of standard input when there is no terminal.
@@ -103,13 +98,14 @@ line of standard input when there is no terminal.
 | [`revert`](#pause-identify-flush-revert) | Go back to the older blocklist, overrides or zones a node keeps. | yes |
 | [`metrics`](#metrics) | Read a node's `/metrics`. | no |
 | [`querylog`](#querylog) | Read a node's query log. | no |
-| [`key`](#key) | Import or check the controller's release key. | no |
-| [`primary`](#primary) | Import or check the zone primary's API token; show, pin or unpin its certificate. | no |
+| [`key`](#key) | Make, import or check the controller's release key. | no |
+| [`key rotate`](#key-rotate) | Rotate the nodes' keys: prepare, sign offline, push. | push: yes |
 | [`passwd`](#passwd) | Set the dashboard login. | no |
 | [`backup`](#backup) | Write an encrypted backup of the data directory. | no |
 | [`restore`](#restore) | Restore a backup into a data directory. | no |
 | [`recover`](#recover) | Rebuild `settings.json` from the nodes, without a backup. | no |
 | [`pin`](#pin) | Bind a node's ID to its address for signing. | no |
+| [`node`](#node) | Take a node out of service, return it, or remove it from the group. | in: yes |
 | [`release`](#release) | Build, sign, verify or import a release's files. | no |
 | [`version`](#version) | Print this build's version. | no |
 
@@ -189,9 +185,9 @@ One of `-host` or `-all` is required. Also takes the [fleet flags](#fleet-flags)
 
 ## adopt
 
-Gives a node that isn't adopted yet its node config and address, and pins its ID to that
-address. The node is found at the address it has now. A new address is kept only once the
-node answers there.
+Gives an unadopted node its node config and address, and pins its ID to that address. The
+node is found at its current address; a new address is kept only once the node answers
+there.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller \
@@ -212,19 +208,19 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 | `-add-to-settings` | | Once adopted, add the node's address to `settings.json`. |
 | `-wait` | `2m0s` | How long to wait for the node on its new address. |
 | `-catalog` | `/catalog` | The board catalog, for the memory plan of a node on older firmware. |
-| `-primary-kind` | settings `primary`, else `manual` | `manual` or `technitium`. |
-| `-primary-url` | settings `primary` `url` | The zone primary's API address (`technitium`). The node is allowed to transfer its secondary zones there. |
-| `-primary-token-file` | see [Secrets](#secrets) | A file holding the zone primary's API token. |
-| `-primary-token-env` | | The name of an environment variable holding the token. |
-| `-primary-done` | | The zone primary isn't changed from here (manual, or no API or token), and the changes adopt names were already made by hand. |
+
+Nothing changes on the zone primary. For a config with secondary zones, when the node's
+address is in none of the networks `settings.json`'s `primary` `allows`, adopt says once
+what to set up there ("Your zone primary must allow zone transfers from 192.0.2.53: allow
+its network (e.g. 192.0.2.0/24) there once.") and goes on.
 
 Also takes the [fleet flags](#fleet-flags) and the [DNS check flags](#dns-check-flags).
 
 ## rollout
 
-Changes nodes one at a time: the canary first, then each node in turn. Each node is checked
-and watched for `-soak` before the next starts. A change that needs a reboot reboots one node
-at a time, only while another node or DNS peer answers.
+Changes nodes one at a time, canary first. Each node is checked and watched for `-soak`
+before the next starts. A change that needs a reboot reboots one node at a time, and only
+while another node or DNS peer answers.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller \
@@ -268,7 +264,7 @@ Also takes the [fleet flags](#fleet-flags) and the [DNS check flags](#dns-check-
 
 ## blocklist
 
-Compiles lists into a blocklist or overrides file. It sends nothing.
+Compiles lists into a blocklist or overrides file. Sends nothing.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller \
@@ -295,7 +291,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 
 ## push
 
-Sends a blocklist or overrides file to one node. To change several nodes safely, use
+Sends a blocklist or overrides file to one node. For several nodes, use
 [`rollout`](#rollout).
 
 ```sh
@@ -338,7 +334,7 @@ Also takes the [single-node flags](#single-node-flags). `-host` is required unle
 ## zones
 
 Checks hosted zones (RFC 1035 master files, one per zone), or sends them to one node. A push
-replaces every hosted zone the node had. The node applies it live.
+replaces every hosted zone the node had, live.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller zones -data /data -check -zone /data/zones/home.arpa.zone
@@ -357,7 +353,7 @@ Also takes the [single-node flags](#single-node-flags). `-host` is required to p
 
 ## pause, identify, flush, revert
 
-Control commands. Each applies live. None survives a reboot, except `revert`, which holds
+Control commands, all applied live. None survives a reboot except `revert`, which holds
 until a newer release arrives.
 
 ```sh
@@ -392,8 +388,8 @@ docker compose run --rm --entrypoint /espdns espdns-controller metrics -host 192
 
 ## querylog
 
-Reads a node's query log: what it holds, then, with `-follow`, what comes. The node answers
-only clients on private addresses. See [node-endpoints.md](node-endpoints.md#querylog).
+Reads a node's query log: what it holds, then, with `-follow`, new queries as they come.
+The node answers only clients on private addresses. See [node-endpoints.md](node-endpoints.md#querylog).
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller querylog -host 192.0.2.53 -follow
@@ -413,65 +409,83 @@ The controller's release key, `<data>/keys/release.pem` (mode `0600`). The dashb
 node actions and pushes with it.
 
 ```sh
-docker compose run --rm -T --entrypoint /espdns espdns-controller \
-  key import -data /data -key - -pub /keys/release.pub -recovery-pub /keys/recovery.pub < release.pem
-docker compose run --rm --entrypoint /espdns espdns-controller \
-  key status -data /data -pub /keys/release.pub -recovery-pub /keys/recovery.pub
+docker compose run --rm --entrypoint /espdns espdns-controller key generate -data /data
+docker compose run --rm -T -v "$HOME/espdns-keys:/mykeys:ro" --entrypoint /espdns espdns-controller \
+  key import -data /data -key - -pub /mykeys/release.pub -recovery-pub /mykeys/recovery.pub < release.pem
+docker compose run --rm -v "$HOME/espdns-keys:/mykeys:ro" --entrypoint /espdns espdns-controller \
+  key status -data /data -pub /mykeys/release.pub -recovery-pub /mykeys/recovery.pub
 ```
 
-`key import` reads the key (PEM, or base64 of it) and writes it only if the fleet trusts it:
-it is the firmware's built-in release key (`-pub`), or a node in `settings.json` lists it as
-its release key. The recovery key is always refused. `key status` says whether the key is
-there and usable, and who trusts it. Neither changes a node.
+- `key generate` makes a new release key for a new fleet. It never overwrites a key, and
+  never runs while `settings.json` lists a node (that node trusts another key: import that
+  one). The first run's Make your keys does the same in the browser.
+- `key import` reads the key (PEM, or base64 of it) and writes it only if the fleet trusts
+  it: it matches `-pub`, or a node in `settings.json` lists it as its release key. With no
+  node listed and no `-pub`, any key but the recovery key is taken (a new fleet's first). The
+  recovery key is always refused.
+- `key status` says whether the key is there and usable, and who trusts it.
+
+None of them changes a node.
 
 | Flag | Default | Commands | Meaning |
 |------|---------|----------|---------|
-| `-data` | `data` | both | The data directory. |
+| `-data` | `data` | all | The data directory. |
 | `-key` | `-` | import | `-` reads the key from standard input; or a PEM file. |
-| `-pub` | | both | The release public key the firmware is built with. A key that matches it is trusted. |
-| `-recovery-pub` | | both (required for import) | The recovery public key. That key is never imported. |
+| `-pub` | | import, status | A release public key file (raw, 65 bytes). A key that matches it is trusted. |
+| `-recovery-pub` | `keys/recovery.pub` in `-data`, if there | import, status | The recovery public key. That key is never imported. Import needs one once a node is listed. |
 | `-replace` | | import | Replace a different key imported before. |
-| `-settings` | `settings.json` in `-data` | both | The settings file whose nodes are asked which keys they trust. |
-| `-mdns` | `0` | both | Browse mDNS this long for more nodes. A node found only over mDNS is reported but never vouches for a key. |
+| `-settings` | `settings.json` in `-data` | all | The settings file whose nodes are asked which keys they trust. |
+| `-mdns` | `0` | import, status | Browse mDNS this long for more nodes. A node found only over mDNS is reported but never vouches for a key. |
 
-## primary
+## key rotate
 
-The zone primary's API token, `<data>/keys/primary.token` (mode `0600`). Needed only for an
-API-driven primary (`technitium`). See [settings.md](settings.md#primary).
+New keys for every node in `settings.json`: a KEYS release each, prepared by the
+controller, signed offline with the recovery key the nodes trust, and pushed one node at a
+time ([operations.md, Rotating keys](../operations.md#rotating-keys)).
 
 ```sh
-docker compose run --rm -T --entrypoint /espdns espdns-controller primary import -data /data < primary-token.txt
-docker compose run --rm --entrypoint /espdns espdns-controller primary status -data /data
-docker compose run --rm --entrypoint /espdns espdns-controller primary cert -data /data
-docker compose run --rm --entrypoint /espdns espdns-controller primary pin -data /data -sha256 <fingerprint>
-docker compose run --rm --entrypoint /espdns espdns-controller primary unpin -data /data
+docker compose run --rm --entrypoint /espdns espdns-controller key rotate prepare -data /data -new-release generate
+docker run --rm -i --network none --user "$(id -u):$(id -g)" -v "$PWD/data/keys/rotation/<id>:/rotation" \
+  --entrypoint /espdns espdns-controller key rotate sign -dir /rotation -key - < recovery.pem
+docker compose run --rm --entrypoint /espdns espdns-controller key rotate push -data /data -dir <id>
+docker compose run --rm --entrypoint /espdns espdns-controller key rotate discard -data /data -dir <id>
 ```
 
-- `primary import` reads the token from standard input. The same token again changes
-  nothing; a different one needs `-replace`.
-- `primary status` says which zone primary `settings.json` names, whether it is paused
-  because its address is plain `http://`, and whether the token is there and usable. It
-  never prints the token and does not call the primary.
-- `primary cert` shows the certificate the primary presents now: its SHA-256 fingerprint,
-  subject, issuer, names and dates, and whether it is pinned or trusted by the system's
-  roots. It only makes a TLS handshake: no token is sent.
-- `primary pin -sha256` pins a self-signed certificate. Check the fingerprint on the
-  primary itself first. It pins only if the primary still presents that certificate.
-- `primary unpin` removes the pin. Then only a certificate the system's roots trust is
-  accepted.
+- `prepare` reads every listed node (pinned, answering, on firmware that takes KEYS
+  releases) and writes `keys/rotation/<id>/`: per node, the unsigned release as
+  `firmware/tools/release.py keys-prepare` writes it (`manifest.bin`, `payload.bin`,
+  `keys.json`), and `plan.json`. A new release key goes into `keys/release.next.pem`. One
+  rotation at a time.
+- `sign` needs no network and no data directory. It reads the recovery private key (PKCS#8
+  or SEC1 PEM, or a line of base64 of either), checks it's the key every node in the plan
+  trusts, and writes each node's `release.bin`.
+- `push` takes the fleet lock. Per node: its KEYS release, then its stored config, hosted
+  zones, overrides and blocklist signed again with the new release key, then its health. It
+  stops at the first failure and picks up from there when run again. Once every listed node
+  has the new keys, it swaps `release.next.pem` into `release.pem` (the old one kept as
+  `release.prev.pem`) and writes `recovery.pub`.
+- `discard` removes a rotation no node has taken.
 
-| Flag | Commands | Meaning |
-|------|----------|---------|
-| `-data` | all | The data directory. |
-| `-replace` | import | Replace a different token imported before. |
-| `-sha256` | pin | The fingerprint `primary cert` showed, once checked on the primary. |
+| Flag | Default | Commands | Meaning |
+|------|---------|----------|---------|
+| `-data` | `data` | prepare, push, discard | The data directory. |
+| `-settings` | `settings.json` in `-data` | prepare, push | The settings file whose nodes are rotated. |
+| `-new-release` | | prepare | `generate`, or a private key file (PEM or base64 of one). None: the release key stays. |
+| `-new-recovery` | | prepare | The new recovery public key (raw 65 bytes, or PEM). None: the recovery key stays. |
+| `-recovery-pub` | `keys/recovery.pub` in `-data` | prepare | The recovery public key the nodes trust now. |
+| `-compromised` | | prepare | The nodes keep no retired key. Needs `-new-release`. |
+| `-timeout` | `30s` | prepare | How long to wait for the nodes' `/status`. |
+| `-dir` | | sign, push, discard | The rotation: its directory, or (push, discard) its ID. |
+| `-key` | `-` | sign | The recovery private key: `-` reads standard input; or a file. |
+| `-healthy` | `2m0s` | push | How long each node has to be in service again after its keys changed. |
+| `-node` | | push | Push only this node (its address; repeat for more). The others wait for a later push; the keys are swapped by the push that does the last. |
 
 ## passwd
 
-Sets the dashboard's one login: a user name and a password (at least 12 characters). It is
-stored as an argon2id hash in `<data>/auth.json`. Every existing session ends.
+Sets the dashboard's one login: a user name and a password (at least 12 characters), stored
+as an argon2id hash in `<data>/auth.json`. Every existing session ends.
 
-On a terminal, it asks for the name (Enter keeps the one shown) and the password twice:
+On a terminal it asks for the name (Enter keeps the one shown) and the password twice:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
@@ -489,15 +503,14 @@ printf '%s\n' "$ESPDNS_PASSWORD" | docker compose run --rm -T --entrypoint /espd
 | `-user` | asked on a terminal; else the one set before, else `admin` | The user name. |
 | `-wait` | `4m0s` | No terminal: how long standard input may stay silent before the first line. `0`: no limit. |
 
-You can also set the first password in the browser, from the controller's own machine, while
-none is set.
+While no password is set, you can also set the first one in the browser on the controller's
+own machine.
 
 ## backup
 
-Writes the data directory to one encrypted file ([age](https://age-encryption.org) format).
-It waits for the fleet lock, so nothing changes while it writes.
-
-Write it to the host through standard output, with the passphrase on standard input:
+Writes the data directory to one encrypted file ([age](https://age-encryption.org) format),
+under the fleet lock so nothing changes while it writes. To write it to the host, use
+standard output, with the passphrase on standard input:
 
 ```sh
 printf '%s\n' "$ESPDNS_BACKUP_PASSPHRASE" | docker compose run --rm -T --entrypoint /espdns espdns-controller \
@@ -514,12 +527,13 @@ printf '%s\n' "$ESPDNS_BACKUP_PASSPHRASE" | docker compose run --rm -T --entrypo
 
 Without `-recipient`, it asks for a passphrase (at least 12 characters) on the terminal, or
 reads the first line of standard input. Keep the passphrase apart from the backup: the backup
-holds the release key and the Wi-Fi passwords.
+holds the release key and the Wi-Fi passwords. A zone primary API token an older controller
+left in `keys/` is never backed up.
 
 ## restore
 
-Restores a backup into a data directory. Stop the controller first
-(`docker compose down`). Everything is checked before anything is put in place.
+Restores a backup into a data directory. Stop the controller first (`docker compose down`).
+Everything is checked before anything is put in place.
 
 ```sh
 docker compose run --rm -v "$PWD/espdns-backup.age:/backup.age:ro" --entrypoint /espdns espdns-controller \
@@ -535,15 +549,16 @@ docker compose run --rm -v "$PWD/espdns-backup.age:/backup.age:ro" --entrypoint 
 | `-force` | | Restore into a data directory that isn't empty, moving what is there aside first. |
 
 The passphrase is asked on the terminal, else read from the first line of standard input.
-With `-in -`, it must come from the terminal.
+With `-in -`, it must come from the terminal. A zone primary API token an older backup
+carries (`keys/primary.token`) is checked with the rest but not restored, and the restore
+says so: revoke that token on your primary.
 
 ## recover
 
-Rebuilds what it can of a data directory from the nodes, when you have no backup. Import the
-release key first ([`key import`](#key)). It only reads the nodes. It writes `settings.json`
-if there is none (the nodes in service that trust the key), pins each listed node to its
-address, saves each node's `/status` under `recovered/<time>/`, and says per node what can't
-come back.
+Rebuilds what it can of a data directory from the nodes, when you have no backup. Import
+the release key first ([`key import`](#key)). It only reads the nodes. It writes `settings.json` if there is none (the nodes in service that trust the
+key), pins each listed node to its address, saves each node's `/status` under
+`recovered/<time>/`, and says per node what can't come back.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller recover -data /data -dry-run
@@ -560,8 +575,8 @@ docker compose run --rm --entrypoint /espdns espdns-controller recover -data /da
 ## pin
 
 Releases are signed only for the node ID pinned to an address, never for the ID a node
-reports. Adoption pins a node, and `recover` pins the nodes it lists. Use `pin` for the rest:
-a node adopted before pins existed, or a replacement board at an adopted node's address.
+reports. Adoption and `recover` pin nodes; use `pin` for the rest: a node adopted before pins
+existed, or a replacement board at an adopted node's address.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data
@@ -574,34 +589,73 @@ docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data -
 | `-host` | The node's address. Without it: list the pinned nodes and their sequence numbers. |
 | `-node` | The node's ID (its chip MAC). The node must answer at `-host` with this ID. |
 
+## node
+
+The node page's service buttons, from the command line
+([operations.md](../operations.md#taking-a-node-out-of-service)). Each takes the fleet lock
+and goes in the action log.
+
+```sh
+docker compose run --rm --entrypoint /espdns espdns-controller node out -node 192.0.2.54 -data /data
+docker compose run --rm --entrypoint /espdns espdns-controller node in -node 192.0.2.54 -data /data -key /data/keys/release.pem
+docker compose run --rm --entrypoint /espdns espdns-controller node remove -node 192.0.2.54 -data /data
+```
+
+- `out` adds the node to `out_of_service` in `settings.json`. Nothing is sent to it from then
+  on, and it isn't counted for the last-healthy-node rule. Works while it's offline. Refused
+  while a key rotation under way includes it.
+- `in` needs the node to answer and trust the release key. It sends it, alone, what it
+  missed (its config, the hosted zones, the overrides, its blocklist, newer firmware), every
+  rollout a dry run first, then takes it off `out_of_service`. Anything short of that leaves
+  it out.
+- `remove` takes it out of `nodes` (and `out_of_service`, and `canary`). Its config file is
+  kept; the node isn't touched. Refused while a key rotation includes it, or a pending
+  firmware update names it.
+
+| Flag | Meaning |
+|------|---------|
+| `-data` | The data directory. |
+| `-node` | The node's address, as `settings.json` lists it. |
+| `-key` | `in` only: the release key ([Secrets](#secrets)). |
+| `-catalog` | `in` only: the board catalog (default `/catalog`). |
+
 ## release
 
 A release's files. See [releasing.md](../releasing.md) for the whole process.
 
 | Command | What it does |
 |---------|--------------|
-| `release build` | Makes a release's files from the exported chip images and the board catalog, with `SHA256SUMS`. Uses no key. |
-| `release sign` | Signs `SHA256SUMS` with the release key, read from standard input. Only the key that matches `-pub` is taken. |
+| `release build` | Makes a release's files from the exported chip images, with `SHA256SUMS`: each chip image's tarball, and the files given with `-include`. Every image must be key-neutral, and every catalog board's chip image must be there. No factory images. Uses no key. |
+| `release sign` | Signs `SHA256SUMS` with a release key, read from standard input. Only the key that matches `-pub` is taken. |
 | `release verify` | Checks the signature with `-pub`, and every file against `SHA256SUMS`. |
-| `release import` | Verifies, then puts the release's chip images in `<data>/firmware/images`, where the dashboard finds them. |
+| `release import` | Takes a release signed by the project's key (`-pub`) or by the controller's own release key, and refuses any other; checks every file, then puts the release's chip images in `<data>/firmware/images`, each with its provenance, where the dashboard finds them. It says who signed it. |
+| `release fetch` | Downloads a published release's chip images, `SHA256SUMS` and its signature (GitHub, or a mirror), checks them with the project's key alone, and imports them as `release import` does. The dashboard's Get firmware runs the same. |
 
 ```sh
-docker compose run --rm -v "$PWD/../espdns-0.0.1:/release:ro" --entrypoint /espdns espdns-controller \
-  release verify -dir /release -pub /keys/release.pub
-docker compose run --rm -v "$PWD/../espdns-0.0.1:/release:ro" --entrypoint /espdns espdns-controller \
-  release import -dir /release -pub /keys/release.pub -data /data
+docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
+  release verify -dir /release -pub /keys/project.pub
+docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
+  release import -dir /release -data /data
+docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -version v0.0.2
 ```
+
+Before every firmware update from an imported chip image, the controller checks its
+provenance again (the signature, `SHA256SUMS`, the tarball, and that the app it sends is the
+one in it), and only then signs the update with your release key. A chip image with no
+provenance (your own export, or `firmware/builds/`) is your own build, sent as is.
 
 | Flag | Commands | Meaning |
 |------|----------|---------|
 | `-version` | build (required) | The version released. Every chip image must be it. |
 | `-images` | build (required) | The exported chip images, `<dir>/<image>/image.json`. |
-| `-catalog` | build (required) | The board catalog (`/catalog` in the image). A factory image is made for each board. |
+| `-catalog` | build (required) | The board catalog (`/catalog` in the image). Every board's chip image must be in `-images`. |
 | `-out` | build (required) | Where the release's files go. Must be missing or empty. |
 | `-include` | build | Another file the release carries and `SHA256SUMS` lists. Repeat. |
 | `-dir` | sign, verify, import (required) | The release's files, with `SHA256SUMS`. |
-| `-pub` | sign, verify, import (required) | The release public key the firmware is built with (`/keys/release.pub` in the image). |
-| `-data` | import (required) | The data directory. |
+| `-pub` | sign, verify (required); import, fetch | The public key of the key that signs the release, raw (65 bytes). For import and fetch: the project's, default `/keys/project.pub`; the controller's own release key is taken too by import, never by fetch. |
+| `-data` | import, fetch (required) | The data directory. |
+| `-version` | fetch | The release, `v0.0.2`. Default: the newest published. |
+| `-url` | fetch | The repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
 
 ## version
 

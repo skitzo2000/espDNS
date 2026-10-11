@@ -78,7 +78,7 @@ func (c changesServer) list(w http.ResponseWriter, r *http.Request) {
 	}
 	var listed []string
 	if s, err := settings.Load(settings.Path(c.dataDir)); err == nil {
-		listed = s.Nodes
+		listed = s.InService() // an apply changes none out of service
 	}
 	out := []changeView{}
 	restarts := []string{}
@@ -115,7 +115,7 @@ func (c changesServer) effect(ch changes.Change, cs []changes.Change, listed []s
 	case changes.Firmware:
 		return prefix + "Restarts " + strings.Join(ch.Nodes, ", ") + ", one at a time: the others keep answering", ch.Nodes
 	case changes.Zone:
-		return prefix + "Hosted zones: sent to every node, live (no restart)", nil
+		return prefix + "Hosted zones: sent to every node in service, live (no restart)", nil
 	case changes.Source, changes.Lists:
 		return prefix + "Blocking: compiled again, then sent to the nodes, live (no restart)", nil
 	case changes.Config:
@@ -281,6 +281,10 @@ func (c changesServer) add(w http.ResponseWriter, r *http.Request) {
 				httpErr(w, http.StatusBadRequest, fmt.Errorf("%s is not in settings.json: an update goes only to the nodes listed there", n))
 				return
 			}
+			if s.IsOutOfService(n) {
+				httpErr(w, http.StatusBadRequest, fmt.Errorf("%s is out of service: returning it to service updates its firmware", n))
+				return
+			}
 		}
 	case b.Kind.File() && !b.Delete:
 		if b.Text == nil {
@@ -409,12 +413,23 @@ func (c changesServer) log(r *http.Request, action string, ch changes.Change, wh
 }
 
 // firmwareThere refuses a firmware ("builds/<board>" or "images/<image>") that isn't in
-// the data directory, read and checked as a rollout reads it.
+// the data directory, read and checked as a rollout reads it: an imported release's chip
+// image whose provenance doesn't check too (the apply checks it again before each push).
 func firmwareThere(dataDir, catalog, src string) error {
 	_, spec, err := rolling.FirmwareSource(dataDir, catalog, src)
 	if err != nil {
 		return err
 	}
-	_, err = rolling.LoadFirmware([]string{spec}, "", func(string, ...any) {})
-	return err
+	fws, err := rolling.LoadFirmware([]string{spec}, "", dataDir, func(string, ...any) {})
+	if err != nil {
+		return err
+	}
+	for _, f := range fws {
+		if f.Check != nil {
+			if err := f.Check(f.App); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

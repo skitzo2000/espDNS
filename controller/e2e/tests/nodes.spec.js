@@ -51,16 +51,40 @@ async function fake(page) {
     dhcp(node(DNS3, "aa:bb:cc:00:00:03", "dns3", "ws-s3-eth", { state: "degraded", answering: true, reasons: ["zone refresh failing"] }, { qps: 0, mac: MAC3 })),
   ]));
   const found = { host: FOUND, id: "aa:bb:cc:00:00:37", hostname: "espdns-000037.local", source: "mdns", online: true, read: true,
-    board: "xiao-s3-sense", version: "0.0.4", net: "wifi", mac: MACFOUND, adopted: false, listed: false, configs: true, config: "dns4.json", next: "adopt" };
+    board: "xiao-s3-sense", version: "0.0.4", net: "wifi", mac: MACFOUND, adopted: false, listed: false, configs: true, config: "dns4.json", next: "adopt",
+    address: `${FOUND}/24`, gateway: "198.51.100.1" }; // the static address it runs on (its /status config)
   await page.route(/\/api\/nodes\/found$/, r => json(r, { nodes: [found] }));
   await page.route(/\/api\/nodes\/lookup$/, r => {
     const b = r.request().postDataJSON();
     state.posts.push(["lookup", b]);
-    if (b.address === TYPED) return json(r, { address: TYPED, found: true, node: { ...found, host: TYPED, id: "aa:bb:cc:00:00:77", source: "lookup", net: "ethernet", mac: MACTYPED, board: "ws-s3-eth" } });
+    if (b.address === TYPED) return json(r, { address: TYPED, found: true, node: { ...found, host: TYPED, address: `${TYPED}/24`, gateway: "192.0.2.1", id: "aa:bb:cc:00:00:77", source: "lookup", net: "ethernet", mac: MACTYPED, board: "ws-s3-eth" } });
     return json(r, { address: b.address, found: false, answered: false, error: `${b.address}: no answer` });
   });
-  await page.route(/\/api\/adopt$/, r => json(r, { nodes: [], configs: [{ name: "dns4.json", config_name: "dns4", address: "198.51.100.40/24", gateway: "198.51.100.1" }],
+  await page.route(/\/api\/adopt$/, r => json(r, { nodes: [], configs: [{ name: "dns4.json", config_name: "dns4", address: "198.51.100.40/24", gateway: "198.51.100.1" },
+    { name: "dns2.json", config_name: "dns2" }],
     primary: {}, key: true, no_dhcp: [], dry_run_valid_s: 900 }));
+  // The config files (GET, POST and delete /api/configs/<name>): state.files by name, each
+  // its JSON and hash; what is saved or deleted is in state.posts.
+  state.files = { "dns4.json": { data: { name: "dns4", network: { address: "198.51.100.40/24", gateway: "198.51.100.1" } }, hash: "h1" } };
+  await page.route(/\/api\/configs\/[^/]+(\/delete)?$/, r => {
+    const parts = new URL(r.request().url()).pathname.split("/");
+    const del = parts.at(-1) === "delete", name = decodeURIComponent(del ? parts.at(-2) : parts.at(-1));
+    const f = state.files[name];
+    if (r.request().method() === "GET") {
+      return f ? json(r, { name, text: `${JSON.stringify(f.data, null, 2)}\n`, hash: f.hash }) : json(r, { error: `no config ${name}` }, 404);
+    }
+    const b = r.request().postDataJSON();
+    state.posts.push([del ? "delete" : "config", name, b]);
+    if ((f ? f.hash : "") !== b.hash) return json(r, { error: `${name} changed meanwhile` }, 409);
+    if (del) { delete state.files[name]; return json(r, { name, deleted: true }); }
+    const hash = `h${Object.keys(state.files).length + state.posts.length}`;
+    state.files[name] = { data: JSON.parse(b.text), hash };
+    return json(r, { name, text: b.text, hash });
+  });
+  await page.route(/\/api\/adopt\/preview$/, r => {
+    state.posts.push(["preview", r.request().postDataJSON()]);
+    return json(r, { refusal: "a test: no adoption here" });
+  });
   await page.route(/\/api\/updates$/, r => json(r, { scheme: "semver", builds: [], available: [DNS2], nodes: [
     { host: DNS2, listed: true, online: true, runs: { version: "0.0.1", build: "a1" }, newest: { version: "0.0.4", build: "b4", source: "builds/p4-ip101" }, state: "available", why: "" },
     { host: DNS3, listed: true, online: true, runs: { version: "0.0.4", build: "b4" }, newest: { version: "0.0.4", build: "b4", source: "builds/ws-s3-eth" }, state: "current", why: "" },
@@ -71,6 +95,7 @@ async function fake(page) {
     blocked_qps: series([0.01, 0, 0.01, 0.01, 0.02, 0.01, 0, 0.01, 0.01, 0.01]) } }));
   await page.route(/\/api\/changes$/, r => json(r, { changes: state.changes, restarts: [], apply: null }));
   await page.route(/\/api\/jobs$/, r => {
+    if (r.request().method() !== "POST") return r.fallback(); // a GET: the controller's own
     const b = r.request().postDataJSON();
     state.posts.push(["job", b]);
     return json(r, { id: "j1", kind: b.kind, who: "admin", state: "running", created: new Date().toISOString() }, 201);
@@ -112,7 +137,7 @@ test("Nodes: the list renders from the controller's nodes", async ({ page }) => 
   await expect(found).toHaveClass(/\br-new\b/);
   await expect(found).toContainText("New device found");
   await expect(found.locator(".ipc:not(.mac) .ip")).toHaveText(FOUND);
-  await expect(dns2.locator(".name")).toHaveAttribute("href", `nodes.html#${encodeURIComponent("aa:bb:cc:00:00:02")}`);
+  await expect(dns2.locator(".name")).toHaveAttribute("href", `node.html#${encodeURIComponent("aa:bb:cc:00:00:02")}`);
 
   await expect(page.locator("#facts")).toContainText("2 of 2 nodes answering");
   await expect(page.locator("#update")).toContainText("Firmware 0.0.4 for dns2");
@@ -138,12 +163,15 @@ test("+ Add node: the found nodes, then an address looked up", async ({ page }) 
   await box.fill(NOBODY);
   await box.press("Enter");
   await expect(list).toContainText("No espDNS node answers there");
-  // A node at this one: chosen, with its name and address to give it.
+  // A node at this one: chosen, with its name to give it and the address it runs on.
   await box.fill(TYPED);
   await box.press("Enter");
   await expect(list.locator("#nnname")).toHaveValue("dns4.json");
   await expect(list.locator("#nnname option:checked")).toHaveText("dns4"); // the config's name, not its file
-  await expect(list.locator("#nnip")).toHaveValue("198.51.100.40/24");
+  // dns2's config is dns2's: offered, not to be picked.
+  await expect(list.locator('#nnname option[value="dns2.json"]')).toHaveText("dns2 (in use)");
+  await expect(list.locator('#nnname option[value="dns2.json"]')).toHaveAttribute("disabled", "");
+  await expect(list.locator("#nnip")).toHaveValue(`${TYPED}/24`);
   await expect(list).toContainText(`Found at ${TYPED} over Wired`);
   await expect(list.getByRole("button", { name: "Add node" })).toBeEnabled();
   expect(state.posts.filter(p => p[0] === "lookup").map(p => p[1].address)).toEqual(expect.arrayContaining([NOBODY, TYPED]));
@@ -161,6 +189,253 @@ test("+ Add node: the found nodes, then an address looked up", async ({ page }) 
   await expect(page.getByRole("button", { name: "+ Add node" })).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
+});
+
+// The address box starts as the address the node runs on; choosing a name never changes it
+// (not to the config's address either). What it holds, with its gateway, is saved to the
+// config file first (against the version read), then sent to the adoption.
+test("+ Add node: the address box is the node's, whatever name is chosen, and is what is saved and sent", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  const name = list.locator("#nnname"), ip = list.locator("#nnip"), gw = list.locator("#nngw");
+  await expect(name).toHaveValue("dns4.json");
+  await expect(list.locator("#nnhow-fixed")).toBeChecked(); // it runs a fixed address
+  await expect(ip).toHaveValue(`${FOUND}/24`);
+  await expect(gw).toHaveValue("198.51.100.1");
+  await name.selectOption("");
+  await expect(ip).toHaveValue(`${FOUND}/24`);
+  await name.selectOption("dns4.json");
+  await expect(ip).toHaveValue(`${FOUND}/24`); // not the config's 198.51.100.40/24
+  const previews = () => state.posts.filter(p => p[0] === "preview").map(p => p[1]);
+  const saves = () => state.posts.filter(p => p[0] === "config");
+  await list.getByRole("button", { name: "Add node" }).click();
+  await expect(list).toContainText("a test: no adoption here");
+  expect(saves().map(p => [p[1], p[2].hash, JSON.parse(p[2].text)])).toEqual(
+    [["dns4.json", "h1", { name: "dns4", network: { address: `${FOUND}/24`, gateway: "198.51.100.1" } }]]);
+  expect(previews()).toEqual([{ node: FOUND, node_id: "aa:bb:cc:00:00:37", config: "dns4.json", address: `${FOUND}/24`,
+    gateway: "198.51.100.1", static: true }]);
+
+  // One typed is saved (against the version the first save made) and sent as typed.
+  const saved = state.files["dns4.json"].hash;
+  await list.getByRole("button", { name: "Back" }).click();
+  await list.getByRole("button", { name: "Add" }).click();
+  await expect(gw).toHaveValue("198.51.100.1");
+  await ip.fill("198.51.100.41/24");
+  await list.getByRole("button", { name: "Add node" }).click();
+  await expect.poll(() => previews().length).toBe(2);
+  expect(previews()[1].address).toBe("198.51.100.41/24");
+  expect(JSON.parse(saves()[1][2].text).network.address).toBe("198.51.100.41/24");
+  expect(saves()[1][2].hash).toBe(saved);
+});
+
+// A new name: its config written first, with its network, then the adoption sent with it and
+// the node's fixed address, which choosing the name leaves alone.
+test("+ Add node: a new name, with the node's fixed address", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  const ip = list.locator("#nnip"), go = list.getByRole("button", { name: "Add node" }), nn = list.locator("#nnnew");
+  await list.locator("#nnname").selectOption("+new");
+  await expect(nn).toBeVisible();
+  await expect(list.locator("#nndel")).toHaveCount(0);
+  await expect(ip).toHaveValue(`${FOUND}/24`);
+  await expect(go).toBeDisabled(); // no name yet
+  await nn.fill("Not A Name");
+  await expect(go).toBeDisabled();
+  await nn.fill("dns5");
+  await expect(go).toBeEnabled();
+  await ip.fill("dhcp");
+  await expect(go).toBeDisabled(); // the fixed choice needs a fixed address
+  await ip.fill(`${FOUND}/24`);
+  await go.click();
+  await expect(list).toContainText("a test: no adoption here");
+  expect(state.posts.filter(p => p[0] === "config").map(p => [p[1], p[2].hash, JSON.parse(p[2].text)])).toEqual(
+    [["dns5.json", "", { name: "dns5", network: { address: `${FOUND}/24`, gateway: "198.51.100.1" } }]]);
+  expect(state.posts.filter(p => p[0] === "preview").map(p => p[1])).toEqual(
+    [{ node: FOUND, node_id: "aa:bb:cc:00:00:37", config: "dns5.json", address: `${FOUND}/24`, gateway: "198.51.100.1", static: true }]);
+});
+
+// + Add node all the way: the new name's config starts with the zones to copy from the zone
+// primary; the node's address is in none of the networks the primary allows, so that is
+// said once, plainly, and the node is added all the same: nothing to confirm by hand.
+test("+ Add node: the zone primary's zones, and what to allow there", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  const state = await fake(page);
+  const ADVICE = `Your zone primary must allow zone transfers from ${FOUND}: allow its network (e.g. 198.51.100.0/24) there once.`;
+  await page.route(/\/api\/adopt$/, r => r.fulfill({ contentType: "application/json", body: JSON.stringify({ nodes: [], configs: [],
+    primary: { set: true, address: "192.0.2.254", allows: ["192.0.2.0/24"], zones: ["home.example"], uncovered: [] }, key: true, no_dhcp: [], dry_run_valid_s: 900 }) }));
+  await page.route(/\/api\/adopt\/preview$/, r => {
+    state.posts.push(["preview", r.request().postDataJSON()]);
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ address: `${FOUND}/24`, gateway: "198.51.100.1", how: "kept",
+      check: { ok: true }, primary: "192.0.2.254", zones: ["home.example"], advice: ADVICE }) });
+  });
+  let n = 0;
+  await page.route(/\/api\/jobs$/, r => {
+    if (r.request().method() !== "POST") return r.fallback();
+    state.posts.push(["job", r.request().postDataJSON()]);
+    n++;
+    return r.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: `a${n}`, kind: "adopt", who: "admin", state: "running" }) });
+  });
+  await page.route(/\/api\/jobs\/a\d\/events/, r => {
+    const id = r.request().url().match(/jobs\/(a\d)\//)[1];
+    const progress = { dry_run: id === "a1", steps: [{ n: 4, title: "The zone primary", state: "done" }], primary: { primary: "192.0.2.254", zones: ["home.example"], advice: ADVICE },
+      hints: [ADVICE], outcome: id === "a1" ? "dry run passed" : "adopted" };
+    const end = { id, kind: "adopt", who: "admin", state: "done", progress };
+    return r.fulfill({ status: 200, contentType: "text/event-stream", body: `id: 1\nevent: end\ndata: ${JSON.stringify(end)}\n\n` });
+  });
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  await list.locator("#nnname").selectOption("+new");
+  await list.locator("#nnnew").fill("dns5");
+  await list.locator("#nnip").fill(`${FOUND}/24`);
+  await list.getByRole("button", { name: "Add node" }).click();
+  await expect(page.locator("#toast")).toContainText(`dns5 is added. ${ADVICE}`);
+  expect(state.posts.filter(p => p[0] === "config").map(p => JSON.parse(p[2].text))).toEqual(
+    [{ name: "dns5", network: { address: `${FOUND}/24`, gateway: "198.51.100.1" }, secondary: { primary: "192.0.2.254", zones: ["home.example"] } }]);
+  const jobs = state.posts.filter(p => p[0] === "job").map(p => p[1].params);
+  expect(jobs).toHaveLength(2);
+  expect(jobs[1]).toMatchObject({ after: "a1", add_to_settings: true });
+  expect(jobs[1].primary_done).toBeUndefined();
+  await expect(page.getByText("I made these changes")).toHaveCount(0);
+  expect(await violations()).toEqual([]);
+});
+
+// The case + Add node couldn't handle: a Wi-Fi node on DHCP on another subnet, given a
+// config made for another subnet (its static address and gateway are 192.0.2.x).
+async function farNode(page, state, noDHCP = []) {
+  state.files["dns4.json"] = { data: { name: "dns4", network: { address: "192.0.2.253/23", gateway: "192.0.2.1" } }, hash: "h1" };
+  await page.route(/\/api\/nodes\/found$/, r => r.fulfill({ contentType: "application/json", body: JSON.stringify({ nodes: [{
+    host: FOUND, id: "aa:bb:cc:00:00:37", source: "mdns", online: true, read: true, board: "xiao-s3-sense", version: "0.0.4", net: "wifi",
+    mac: MACFOUND, adopted: false, listed: false, configs: true, config: "dns4.json", next: "adopt", address: "dhcp", from: "config" }] }) }));
+  await page.route(/\/api\/adopt$/, r => r.fulfill({ contentType: "application/json", body: JSON.stringify({ nodes: [],
+    configs: [{ name: "dns4.json", config_name: "dns4", address: "192.0.2.253/23", gateway: "192.0.2.1" }],
+    primary: {}, key: true, no_dhcp: noDHCP, dry_run_valid_s: 900 }) }));
+}
+
+// A node on DHCP: DHCP, reserved in the router, is chosen; the config is saved on DHCP (no
+// gateway, not its static address) and the adoption is sent dhcp, reserved.
+test("+ Add node: a node on DHCP stays on DHCP, reserved in the router", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await farNode(page, state);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  const go = list.getByRole("button", { name: "Add node" });
+  await expect(list.locator("#nnname")).toHaveValue("dns4.json");
+  await expect(list.locator("#nnhow-dhcp")).toBeChecked();
+  await expect(list.locator("#nnip")).toBeHidden();
+  await expect(list).toContainText(`Reserve ${FOUND} for its MAC (copy it above) in your router first`);
+  await expect(list).toContainText(MACFOUND);
+  await expect(go).toBeEnabled();
+  await go.click();
+  await expect(list).toContainText("a test: no adoption here");
+  expect(state.posts.filter(p => p[0] === "config").map(p => [p[1], p[2].hash, JSON.parse(p[2].text)])).toEqual(
+    [["dns4.json", "h1", { name: "dns4", network: { address: "dhcp" } }]]);
+  expect(state.posts.filter(p => p[0] === "preview").map(p => p[1])).toEqual(
+    [{ node: FOUND, node_id: "aa:bb:cc:00:00:37", config: "dns4.json", address: "dhcp", reserved: true, static: true }]);
+});
+
+// A fixed address on the node's own subnet, with a config made for another: the Gateway box
+// shows the config's gateway, marked, and Add node waits until the address and gateway go
+// together; then both are saved to the config and sent.
+test("+ Add node: a fixed address, and the config's gateway from another subnet put right", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await farNode(page, state);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  const ip = list.locator("#nnip"), gw = list.locator("#nngw"), go = list.getByRole("button", { name: "Add node" });
+  const hint = list.locator("#nnip-hint"), gwHint = list.locator("#nngw-hint");
+  await expect(list.locator("#nnhow-dhcp")).toBeChecked();
+  await list.locator("#nnhow-fixed").check();
+  await expect(ip).toBeVisible();
+  await expect(ip).toHaveValue("");
+  await expect(gw).toHaveValue("192.0.2.1"); // the config's
+  await expect(go).toBeDisabled();
+  for (const bad of ["dhcp", FOUND, `${FOUND}/0`, `${FOUND}/33`, "198.51.100.256/24"]) {
+    await ip.fill(bad);
+    await expect(go).toBeDisabled();
+    await expect(hint).toHaveClass(/\bbad\b/);
+  }
+  await ip.fill(`${FOUND}/24`);
+  await expect(hint).not.toHaveClass(/\bbad\b/);
+  await expect(go).toBeDisabled();
+  await expect(gwHint).toHaveClass(/\bbad\b/);
+  await expect(gwHint).toHaveText("192.0.2.1 isn't in the node's own network, 198.51.100.0/24. The gateway is its next hop: an address in its own network, whatever routes lie beyond it.");
+  await gw.fill("");
+  await expect(go).toBeDisabled();
+  await gw.fill("198.51.100.1");
+  await expect(gwHint).not.toHaveClass(/\bbad\b/);
+  await expect(go).toBeEnabled();
+  // Re-checked as the address changes.
+  await ip.fill("198.51.101.20/24");
+  await expect(gwHint).toHaveClass(/\bbad\b/);
+  await expect(go).toBeDisabled();
+  await ip.fill(`${FOUND}/23`);
+  await expect(go).toBeEnabled();
+  await go.click();
+  await expect(list).toContainText("a test: no adoption here");
+  expect(state.posts.filter(p => p[0] === "config").map(p => [p[1], p[2].hash, JSON.parse(p[2].text)])).toEqual(
+    [["dns4.json", "h1", { name: "dns4", network: { address: `${FOUND}/23`, gateway: "198.51.100.1" } }]]);
+  expect(state.posts.filter(p => p[0] === "preview").map(p => p[1])).toEqual(
+    [{ node: FOUND, node_id: "aa:bb:cc:00:00:37", config: "dns4.json", address: `${FOUND}/23`, gateway: "198.51.100.1", static: true }]);
+});
+
+// No DHCP server on the node's network (settings.json no_dhcp): DHCP isn't offered, and it
+// gets a fixed address.
+test("+ Add node: no DHCP choice on a no_dhcp network", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await farNode(page, state, ["198.51.100.0/24"]);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  await expect(list.locator("#nnname")).toHaveValue("dns4.json");
+  await expect(list.locator("#nnhow-dhcp")).toHaveCount(0);
+  await expect(list.locator("#nnnodhcp")).toHaveText("198.51.100.0/24 has no DHCP server (settings): it gets a fixed address.");
+  await expect(list.locator("#nnhow-fixed")).toBeChecked();
+  await expect(list.locator("#nnip")).toBeVisible();
+  await expect(list.getByRole("button", { name: "Add node" })).toBeDisabled();
+});
+
+// A name no node uses can be deleted from the panel, once confirmed; it is then gone from
+// the names. One in use has no Delete.
+test("+ Add node: Delete this name, for a config no node uses", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await list.getByRole("button", { name: "Add" }).click();
+  const name = list.locator("#nnname");
+  await expect(name).toHaveValue("dns4.json");
+  await list.locator("#nndel").click();
+  await expect(list.locator("#nndelask")).toContainText("Delete dns4.json? No node runs it. It is kept in its history.");
+  await list.locator("#nndelask").getByRole("button", { name: "Cancel" }).click();
+  await expect(list.locator("#nndelask")).toHaveCount(0);
+  expect(state.posts.filter(p => p[0] === "delete")).toEqual([]);
+  await list.locator("#nndel").click();
+  await list.locator("#nndelask").getByRole("button", { name: "Delete dns4.json" }).click();
+  await expect(list.locator('#nnname option[value="dns4.json"]')).toHaveCount(0);
+  await expect(name).toHaveValue("+new"); // dns2's is in use: a new name is what is left
+  await expect(list.locator("#nndel")).toHaveCount(0);
+  expect(state.posts.filter(p => p[0] === "delete")).toEqual([["delete", "dns4.json", { hash: "h1" }]]);
+  expect(state.files["dns4.json"]).toBeUndefined();
 });
 
 test("+ Add node: a lookup answered after the address was typed over is dropped", async ({ page }) => {
@@ -286,6 +561,180 @@ test("the MAC to copy: found nodes, nodes on DHCP, and + Add node", async ({ pag
   await expect(list.locator(".macl .mac .ip")).toHaveText(MACTYPED);
   await list.getByRole("button", { name: `Copy MAC ${MACTYPED}` }).click();
   expect(await clip()).toBe(MACTYPED);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// A node found with firmware from before 0.0.1 (/status version "1": it takes no node
+// configs). Nothing adds it over the network: it is updated over USB first.
+const OLD = "198.51.100.38", MACOLD = "aa:bb:cc:00:00:38";
+const oldNode = { host: OLD, id: "aa:bb:cc:00:00:38", hostname: "espdns-000038.local", source: "mdns", online: true, read: true,
+  board: "xiao-s3-sense", image: "esp32s3-octal", version: "1", net: "wifi", mac: MACOLD, adopted: false, listed: false, configs: false,
+  refusals: ["its firmware takes no node configs: update it first"], next: "", install: "usb" };
+
+// fakeOld adds the old node to the found ones, and the chip image a USB install gives.
+async function fakeOld(page) {
+  const json = (route, body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route(/\/api\/nodes\/found$/, async r => {
+    return json(r, { nodes: [{ host: FOUND, id: "aa:bb:cc:00:00:37", hostname: "espdns-000037.local", source: "mdns", online: true, read: true,
+      board: "xiao-s3-sense", image: "esp32s3-octal", version: "0.0.4", net: "wifi", mac: MACFOUND, adopted: false, listed: false, configs: true,
+      config: "dns4.json", next: "adopt" }, oldNode] });
+  });
+  await page.route(/\/api\/updates$/, r => json(r, { scheme: "version", available: [],
+    builds: [{ source: "images/esp32s3-octal", image: "esp32s3-octal", version: "0.0.1", build: "c1" }], nodes: [] }));
+}
+
+// usbPanel is Install over USB opened for the old node: its board chosen, its address filled in.
+async function usbPanel(page) {
+  const u = page.getByRole("dialog", { name: "Update Seeed XIAO ESP32S3 Sense over USB" });
+  await expect(u).toBeVisible();
+  await expect(u.locator("#usb-board")).toHaveValue("xiao-s3-sense");
+  await expect(u.locator("#usb-facts")).toContainText("esp32s3-octal");
+  await expect(u.locator("#usb-addr")).toHaveValue(`${OLD}/24`);
+  return u;
+}
+
+test("a found node on old firmware: its row opens its setup, Update over USB opens Install over USB on its board", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await fakeOld(page);
+  await page.goto("./");
+  const rows = page.locator("#nodes .r:not(.headr)");
+  await expect(rows).toHaveCount(4);
+  const old = rows.nth(3);
+  await expect(old).toContainText("Firmware older than 0.0.1: update it over USB first");
+  await expect(old).not.toContainText("Can't be added yet");
+  await expect(old.getByRole("button", { name: "Update over USB" })).toBeVisible();
+
+  // A click anywhere on the row (its state, not a button) opens its setup panel.
+  await old.locator(".stw").click();
+  const d = page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" });
+  await expect(d).toBeVisible();
+  await expect(d).toContainText(OLD);
+  await expect(d).toContainText(MACOLD);
+  await expect(d).toContainText("Its firmware is older than 0.0.1; installing 0.0.1 over USB erases it.");
+  await expect(d).toContainText("Once it runs 0.0.1 or later, it shows here again, ready to add.");
+  await expect(d.getByRole("button", { name: "Add node" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$|index\.html$/);
+
+  // Update over USB: Install over USB, its board chosen, on this page.
+  await d.getByRole("button", { name: "Update over USB" }).click();
+  await usbPanel(page);
+  await expect(page).toHaveURL(/\/$|index\.html$/);
+  // ... and from the row's own button.
+  await page.keyboard.press("Escape");
+  await old.getByRole("button", { name: "Update over USB" }).click();
+  await usbPanel(page);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+test("a found node ready to add: its row opens its setup, and Add node there opens the Add flow with it", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await page.goto("./");
+  const found = page.locator("#nodes .r.r-new").first();
+  await found.locator(".sub").first().click();
+  const d = page.getByRole("dialog");
+  await expect(d).toContainText("Add it to your nodes");
+  await d.getByRole("button", { name: "Add node" }).click();
+  await expect(d).toHaveCount(0);
+  await expect(page.locator("#nqres #nnname")).toHaveValue("dns4.json");
+  await expect(page.locator("#nqres")).toContainText(`Found at ${FOUND}`);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// Every item in + Add node's list acts on a real mouse click on it (not only its button), and
+// on Enter: nothing in the list is dead.
+test("+ Add node: every item acts on a click and on Enter", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await fakeOld(page);
+  await page.goto("./");
+  const add = page.getByRole("button", { name: "+ Add node" });
+  const list = page.locator("#nqres");
+  const items = list.locator(".opt.pick");
+  const clickAt = async loc => { const b = await loc.boundingBox(); await page.mouse.click(b.x + 12, b.y + b.height / 2); };
+
+  // The node ready to add: its setup panel, then the Add flow with it.
+  await add.click();
+  await expect(items).toHaveCount(3);
+  await clickAt(items.nth(0));
+  let d = page.getByRole("dialog");
+  await expect(d).toContainText("Add it to your nodes");
+  await d.getByRole("button", { name: "Add node" }).click();
+  await expect(list.locator("#nnname")).toHaveValue("dns4.json");
+  await page.locator("#nq").press("Escape");
+
+  // The one on old firmware: its setup panel, Update over USB.
+  await add.click();
+  await expect(items.nth(1)).toContainText("Firmware older than 0.0.1: update it over USB first");
+  await clickAt(items.nth(1));
+  d = page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" });
+  await expect(d.getByRole("button", { name: "Update over USB" })).toBeVisible();
+  await d.getByRole("button", { name: "Close" }).first().click();
+  await expect(d).toHaveCount(0);
+  // Its own button: Install over USB at once.
+  await add.click();
+  await items.nth(1).getByRole("button", { name: "Update over USB" }).click();
+  await usbPanel(page);
+  await page.keyboard.press("Escape");
+
+  // Enter on an item does the same.
+  await add.click();
+  await items.nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // A typed address is looked up.
+  await add.click();
+  await page.locator("#nq").fill(TYPED);
+  await page.locator("#nq").press("Enter");
+  await expect(list.locator("#nnname")).toHaveValue("dns4.json");
+  await page.locator("#nq").fill("");
+  await page.locator("#nq").press("Escape");
+
+  // A new board over USB: a click on the item, not its button, opens Install over USB.
+  await add.click();
+  await clickAt(items.nth(2));
+  let u = page.getByRole("dialog", { name: "Install a board over USB" });
+  await expect(u).toBeVisible();
+  await expect(u.locator("#usb-board option").nth(1)).toBeAttached();
+  await page.keyboard.press("Escape");
+  // ... and its Start button too.
+  await add.click();
+  await list.getByRole("button", { name: "Start" }).click();
+  u = page.getByRole("dialog", { name: "Install a board over USB" });
+  await expect(u).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// A later build of the version a node runs: said as that in its row, never "0.0.1 → 0.0.1",
+// and no banner; its row's Update opens the panel with it chosen.
+test("a newer build of the version a node runs: no banner, said in its row", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await page.route(/\/api\/updates$/, r => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ scheme: "version", builds: [], available: [], nodes: [
+    { host: DNS2, listed: true, online: true, runs: { version: "0.0.1", build: "a1" }, newest: { version: "0.0.1", build: "c1", source: "builds/p4-ip101" },
+      state: "available", rebuild: true, why: "A newer build of 0.0.1 (built Oct 7 2026 09:30)" },
+  ] }) }));
+  await page.goto("./");
+  const dns2 = page.locator("#nodes .r:not(.headr)").nth(0);
+  await expect(dns2).toContainText("A newer build of 0.0.1 (built Oct 7 2026 09:30)");
+  await expect(page.locator("body")).not.toContainText("0.0.1 → 0.0.1");
+  await expect(page.locator("#update")).toBeHidden();
+  await dns2.getByRole("button", { name: "Update" }).click();
+  const d = page.getByRole("dialog", { name: "Update firmware" });
+  await expect(d.getByRole("checkbox", { name: "Update dns2" })).toBeChecked();
+  await expect(d).toContainText("A newer build of 0.0.1 (built Oct 7 2026 09:30)");
+  await expect(d).not.toContainText("0.0.1 → 0.0.1");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

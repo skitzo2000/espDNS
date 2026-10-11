@@ -116,6 +116,13 @@ type Memory struct {
 	FwdPending *int `json:"fwd_pending,omitempty"`
 }
 
+// MayRunOnWiFi is whether the node may come up on Wi-Fi: it has no Ethernet, or Ethernet
+// that may not be fitted (the firmware falls back to Wi-Fi without it, net_start). Check
+// refuses either on a chip with no Wi-Fi.
+func (b Board) MayRunOnWiFi() bool {
+	return b.Ethernet == nil || b.Ethernet.Kind == "none" || b.Ethernet.Optional
+}
+
 // MemoryKeys are the board's settings for the memory plan.
 func (b Board) MemoryKeys() memplan.Keys {
 	k := memplan.Keys{}

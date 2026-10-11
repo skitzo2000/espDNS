@@ -1,0 +1,56 @@
+/* The Query log page (querylog.html, querylog.js), on shell.css: the filter row, the rows
+   (time, device, site, type, answer, took), the chips, and the last hour's charts. */
+.qlsec { gap: 10px }
+.qlbar { gap: 10px 12px }
+.qlbar input.t { max-width: 340px; flex: 1 1 220px }
+.qlbar select.qlnode { width: auto; padding-block: 5px; font-size: 13.5px }
+.qlbar .live { margin-left: auto; display: inline-flex; gap: 8px; align-items: baseline }
+.qlbar .live .hint.bad { color: var(--warn) }
+.chips { display: inline-flex; gap: 6px; flex-wrap: wrap }
+.chips:empty { display: none }
+.chip { border: 1px solid var(--line-strong); background: var(--surface); color: var(--fg); border-radius: 999px; padding: 3px 10px 3px 11px; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px }
+.chip:hover { background: var(--hover) }
+.chip .cx { color: var(--muted); font-size: 15px; line-height: 1 }
+.qlkeep:empty, .qlwarn:empty { display: none }
+.qlkeep a, .qlwarn a { color: var(--fg) }
+.qlwarn { display: grid; gap: 4px }
+
+.ql .r { grid-template-columns: 78px minmax(110px, .9fr) minmax(200px, 2fr) 54px minmax(130px, 1fr) 64px; padding-block: 10px }
+.ql .r .took { text-align: right }
+.ql .r .site { word-break: break-all }
+.ql .r .tm { font-size: 13.5px }
+.ql .btn.link.dev { text-decoration: none; text-align: left; white-space: normal; word-break: break-all }
+.ql .btn.link.dev:hover { text-decoration: underline }
+.ql .ans .sub .btn.link { font-size: 13px }
+/* Blocked: a solid mark; a failure: red words with a ring (red is only for what's wrong). */
+.ql .state.bad { color: #ffffff; background: var(--bad-solid); padding: 1px 9px 1px 7px; border-radius: 999px; font-weight: 600; font-size: 13.5px }
+.ql .state.bad .dot { background: #ffffff }
+.ql .state.warn { color: var(--warn); font-weight: 600 }
+.ql .state.warn .dot { background: transparent; border: 2px solid var(--warn-line) }
+
+/* The two panels are as tall as the taller: their lines stay at the top, not spread out. */
+#most .stack { align-content: start }
+.topr { flex-wrap: nowrap }
+.topr .btn.link { text-decoration: none; text-align: left; white-space: normal; word-break: break-all; min-width: 0 }
+.topr .btn.link:hover { text-decoration: underline }
+
+.mini .readout { min-height: 1.5em }
+.mini .chartnone { padding-top: 8px }
+.spark { touch-action: pan-y }
+.spark .guide { stroke: var(--muted); stroke-width: 1 }
+
+@media (max-width: 760px) {
+  .qlbar input.t { max-width: none; flex-basis: 100% }
+  .qlbar .live { margin-left: 0; width: 100% }
+  .ql .r .tm { font-size: 13px }
+}
+/* A query row opens its panel. */
+.ql .r[data-q] { cursor: pointer }
+.ql .r[data-q]:hover { background: var(--hover) }
+.ql-kv { grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 14px; margin: 0 }
+.ql-kv dt { color: var(--muted) }
+.ql-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+@media (max-width: 520px) { .ql-kv { grid-template-columns: 1fr; gap: 2px } .ql-kv dd { margin-bottom: 6px } }
+/* A query's panel: its answer's dot in the answer's colour, as in the list. */
+.ql-kv .state.bad .dot { background: var(--bad-solid) }
+.ql-kv .state.warn .dot { background: transparent; border: 2px solid var(--warn-line) }

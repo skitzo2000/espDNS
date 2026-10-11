@@ -9,7 +9,7 @@
 //	espdns discover                                (mDNS and data/settings.json's nodes)
 //	espdns status -all                             (-host a,b for some; -json)
 //	espdns adopt -host 192.0.2.52 -config configs/node2.json \
-//	    [-address 192.0.2.60/24] [-primary-kind technitium -primary-url https://192.0.2.254:53443] [-primary-done] \
+//	    [-address 192.0.2.60/24] \
 //	    [-add-to-settings] [-dry-run]
 //	espdns rollout -kind firmware -all -image data/firmware/images/esp32p4-rev1 -image ... [-dry-run]
 //	espdns rollout -kind blocklist -all -file list.bin -check-blocked doubleclick.net -must-resolve must.txt
@@ -32,20 +32,25 @@
 //	espdns querylog -host 192.0.2.53 [-follow] (its query log: what it holds, then what comes)
 //	espdns config -host 192.0.2.53 -file node.json   (-check: only check the file)
 //	espdns zones -host 192.0.2.53 -zone home.example.zone   (-check: only check them)
+//	espdns key generate -data /data   (a new fleet's release key, made in the data directory)
 //	espdns key import -data /data -key - -pub release.pub   (the controller's release key, from standard input)
 //	espdns key status -data /data
-//	espdns primary import -data /data              (the controller's zone primary API token, from standard input)
-//	espdns primary cert -data /data                (the certificate the zone primary presents; pin -sha256 <it>, unpin)
+//	espdns key rotate prepare -data /data -new-release generate   (KEYS releases for every node, unsigned)
+//	espdns key rotate sign -dir <rotation> -key - < recovery.pem   (offline: docker run --network none)
+//	espdns key rotate push -data /data -dir <rotation>              (one node at a time; then the keys swapped)
 //	espdns passwd -data /data                      (the controller's login)
 //	espdns backup -data /data -out backup.age      (the data directory, encrypted; the passphrase asked)
 //	espdns restore -data /new -in backup.age [-dry-run]   (into an empty data directory)
 //	espdns recover -data /data [-host a,b]         (without a backup: settings.json from the nodes)
 //	espdns pin -data /data -host 192.0.2.53 -node 30:ed:a0:00:00:01   (sign for that node there; no -host: list)
+//	espdns node out -node 192.0.2.53 -data /data   (out of service: sent nothing, not counted; in: back, brought
+//	                                               up to date first; remove: out of settings.json)
 //	espdns version                                 (this build's version, the repository's VERSION)
 //	espdns release build -version 0.0.1 -images dir -catalog /catalog -out dist   (a release's files, unsigned)
-//	espdns release sign -dir dist -pub /keys/release.pub < release.pem            (signs its SHA256SUMS)
-//	espdns release verify -dir dist -pub /keys/release.pub
-//	espdns release import -dir dist -pub /keys/release.pub -data /data            (its chip images, once verified)
+//	espdns release sign -dir dist -pub release.pub < release.pem                  (signs its SHA256SUMS)
+//	espdns release verify -dir dist -pub /keys/project.pub
+//	espdns release import -dir dist -data /data            (its chip images: signed by the project's key or yours)
+//	espdns release fetch -data /data [-version v0.0.3]     (a published release, checked with the project's key)
 package main
 
 import (
@@ -59,6 +64,7 @@ import (
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
+	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/version"
@@ -70,7 +76,7 @@ func (l *listFlag) String() string     { return strings.Join(*l, ",") }
 func (l *listFlag) Set(s string) error { *l = append(*l, s); return nil }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: espdns discover|status|adopt|rollout|reboot|blocklist|push|config|zones|pause|identify|flush|revert|metrics|querylog|key|primary|passwd|backup|restore|recover|pin|release|version [flags]; "+
+	fmt.Fprintf(os.Stderr, "usage: espdns discover|status|adopt|rollout|reboot|blocklist|push|config|zones|pause|identify|flush|revert|metrics|querylog|key|passwd|backup|restore|recover|pin|node|release|version [flags]; "+
 		"espdns <command> -h for its flags\n")
 	os.Exit(2)
 }
@@ -103,8 +109,6 @@ func main() {
 		err = cmdZones(args)
 	case "key":
 		err = cmdKey(args)
-	case "primary":
-		err = cmdPrimary(cmd, args)
 	case "passwd":
 		err = cmdPasswd(args)
 	case "backup":
@@ -115,6 +119,8 @@ func main() {
 		err = cmdRecover(args)
 	case "pin":
 		err = cmdPin(args)
+	case "node":
+		err = cmdNode(args)
 	case "pause", "identify", "flush", "revert":
 		err = cmdControl(cmd, args)
 	case "metrics":
@@ -178,6 +184,10 @@ func pusher(key string, recovery bool, dataDir string) (*release.Pusher, error) 
 	p := &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(dataDir)}
 	if recovery {
 		p.KeyID = release.KeyRecovery
+	} else {
+		// During a key rotation, a node that has its new keys is signed for with the new
+		// release key (release.Pusher.Alt).
+		p.Alt = keys.Alternates(keys.FileSource{Path: keys.Path(dataDir)}, log.Printf)
 	}
 	return p, nil
 }

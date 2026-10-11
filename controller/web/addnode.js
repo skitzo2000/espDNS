@@ -1,16 +1,67 @@
 // + Add node: the button becomes an address box with what it
 // finds right under it. Empty, it lists the nodes found on the network and not added yet
-// (/api/nodes/found) and a new board over USB (the Builder page, until Add node installs
-// one itself); an address typed is looked up there (POST /api/nodes/lookup: that address
+// (/api/nodes/found) and a new board over USB (the Install over USB panel, usb.js); an
+// address typed is looked up there (POST /api/nodes/lookup: that address
 // only, nothing resolved). A node chosen gets a name (a node config from <data>/configs, which
-// carries the name) and an address, and is added by the adoption (adopt.go): its preview,
-// the dry run, the zone primary's lists changed by hand if they must be, then the adoption,
-// which adds it to settings.json. One adopted already is added by the settings-add job.
+// carries the name) and how it gets its address: DHCP, reserved for it in your router (not
+// on a network in settings.json's no_dhcp), or a fixed address with its gateway, checked
+// together. An existing config is read (GET /api/configs/<name>) and its network saved back
+// to it first (POST, against its hash) when it says another, so the file says what the node
+// runs; one no node uses can be deleted there (POST /api/configs/<name>/delete). The node
+// is then added by the adoption (adopt.go): its preview,
+// the dry run, then the adoption, which adds it to settings.json. Nothing is changed on the
+// zone primary: when the node's address is in none of the networks it allows zone
+// transfers from, that is said once. A new name's config starts with the zones to copy
+// from the zone primary (settings.json's "primary"). One adopted already is added by the settings-add job.
 // Esc, or a click outside with nothing typed or chosen, closes it.
-import { h, arr, obj, str, hostOnly, toast, getJSON, post, session, events, nodeText, mac, MACHINT } from "./shell.js";
+//
+// A found node's setup panel (setup): what it is, and the steps it needs, in order, the next
+// one a click away: firmware from before node configs (before 0.0.1) is updated over USB
+// first (the Install over USB panel, its board and chip image chosen: a USB install erases
+// the board), then
+// the node is added (the flow above, with it chosen). No found node is a dead end.
+import { h, arr, obj, str, hostOnly, toast, getJSON, post, session, events, nodeText, mac, addr, panel, MACHINT } from "./shell.js";
+import { openUSB, usbFor } from "./usb.js";
 
+const NEW = "+new"; // the name select's "A new name…"
+const NAME = /^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$/;
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+// STATIC is the address a node added here gets: IPv4 with its prefix length (1-32), never dhcp.
+const STATIC = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\/([1-9]|[12]\d|3[0-2])$/;
+const STATICHINT = "A fixed address, with its prefix length, like 192.0.2.10/24.";
 const linkWord = k => (k === "ethernet" ? "Wired" : k === "wifi" ? "Wi-Fi" : "");
+
+// IPv4 as a number, and a.b.c.d/nn as {addr, bits, net, last}: for the address and gateway
+// checks, the node's own (nodecfg, Network.Check).
+const ip4 = s => (IPV4.test(str(s)) ? s.split(".").reduce((n, o) => n * 256 + Number(o), 0) : null);
+const dotted = n => [24, 16, 8, 0].map(s => Math.floor(n / 2 ** s) % 256).join(".");
+function prefix(s) {
+  const m = /^([^/]+)\/(\d+)$/.exec(str(s));
+  const a = m && ip4(m[1]), bits = m ? Number(m[2]) : -1;
+  if (a === null || !m || bits < 0 || bits > 32) return null;
+  const size = 2 ** (32 - bits), net = a - (a % size);
+  return { addr: a, bits, net, last: net + size - 1 };
+}
+const inNet = (a, p) => a >= p.net && a <= p.last;
+const netText = p => `${dotted(p.net)}/${p.bits}`;
+
+// netCheck is what is wrong with a fixed address and its gateway together, in words, as
+// the node checks them; "" when they go together. Field: "address" or "gateway".
+export function netCheck(address, gateway) {
+  const p = STATIC.test(str(address)) ? prefix(address) : null;
+  if (!p) return { field: "address", why: STATICHINT };
+  if (p.bits < 8 || p.bits > 30) return { field: "address", why: "Its prefix length is between 8 and 30, like /24." };
+  if (p.addr === p.net || p.addr === p.last) return { field: "address", why: `${dotted(p.addr)} is the network's own or broadcast address: choose another.` };
+  const own = `the node's own network, ${netText(p)}`;
+  if (!str(gateway)) return { field: "gateway", why: `Give its gateway: an address in ${own}.` };
+  const g = ip4(gateway);
+  if (g === null) return { field: "gateway", why: "Its gateway is an IPv4 address, like 192.0.2.1." };
+  if (!inNet(g, p)) {
+    return { field: "gateway", why: `${gateway} isn't in ${own}. The gateway is its next hop: an address in its own network, whatever routes lie beyond it.` };
+  }
+  if (g === p.addr) return { field: "gateway", why: "The gateway is another address than the node's own." };
+  return null;
+}
 
 // follow resolves with a job once it ends, calling onProgress with its progress meanwhile;
 // a job the controller no longer has (it restarted) ends it as failed.
@@ -24,8 +75,21 @@ function follow(job, onProgress) {
   });
 }
 
+// viaUSB: a found node moved on only over USB: firmware from before node configs ("usb"),
+// or a node with no keys (setup mode, "keys": Write keys only, which keeps its settings).
+const viaUSB = f => f.install === "usb" || f.install === "keys";
+
+// usbButton is "Update over USB" for a found node (or "Write keys over USB" for one with no
+// keys): the Install over USB panel with its board, chip image and address filled in.
+// before, if given, runs first (the address box closes: the panel is the next step).
+export function usbButton(f, cls, name, before) {
+  return h("button", { class: cls, type: "button", onclick: () => { if (before) before(); openUSB(usbFor(f, name)); } },
+    f.install === "keys" ? "Write keys over USB" : "Update over USB");
+}
+
 // addNode draws + Add node into box. opts: found() the nodes found, nodes() the listed
-// ones, boardName(b), nodeKey(n), done() after a node is added. It returns {open(found)}.
+// ones, boardName(b), nodeKey(n), imageVersion(image) the version a USB install of that chip
+// image gives ("" unknown), done() after a node is added. It returns {open(found), setup(found)}.
 export function addNode(box, opts) {
   const st = { open: false, sel: null, q: "", look: null, src: null, form: null, flow: null, sess: {} };
   session.then(s => { st.sess = s; });
@@ -123,17 +187,59 @@ export function addNode(box, opts) {
       st.src = src;
       const cs = arr(st.src.configs);
       const c = cs.find(x => x.name === f.config && !x.error) || null;
-      st.form = { config: c ? c.name : "", address: "", edited: false };
-      st.form.address = defaultAddress();
+      // How it gets its address starts as it runs now: DHCP (reserved in your router) for
+      // a node on DHCP, unless its network has none (settings.json no_dhcp); its fixed
+      // address for one on a static address; else fixed, from the config if it says.
+      const noDHCP = noDHCPAt(f.host);
+      const says = runsOn(f) ? "fixed" : str(f.address) === "dhcp" ? "dhcp" : "";
+      st.form = { config: c ? c.name : "", address: runsOn(f), gateway: runsOn(f) ? str(f.gateway) : "", noDHCP, says,
+        how: says === "dhcp" && !noDHCP ? "dhcp" : "fixed", file: null };
       render();
+      if (st.form.config) readConfig(f, st.form.config);
     }
   }
 
   function config() { return arr(obj(st.src).configs).find(c => c.name === (st.form && st.form.config)); }
-  // The address it gets unless another is typed: its config's, else the one it runs on.
-  function defaultAddress() {
-    const c = config();
-    return (c && c.address) || str(st.sel && st.sel.address);
+  // The address box's start: the static address the node runs on, with its prefix length;
+  // empty for one on dhcp (or none). Choosing a name never changes the box.
+  function runsOn(f) {
+    const a = str(f.address);
+    return STATIC.test(a) ? a : "";
+  }
+  // noDHCPAt is the network in settings.json's no_dhcp (GET /api/adopt) that host is on, if any.
+  function noDHCPAt(host) {
+    const a = ip4(hostOnly(host));
+    if (a === null) return "";
+    return arr(obj(st.src).no_dhcp).find(n => { const p = prefix(n); return p && inNet(a, p); }) || "";
+  }
+
+  // readConfig reads the config file chosen (GET /api/configs/<name>: its text, the Wi-Fi
+  // password hidden, and its hash), for its network to start the form from and to be saved
+  // back to it. Its gateway fills the Gateway box, checked against the address like one typed.
+  async function readConfig(f, name) {
+    const form = st.form;
+    form.file = { name, busy: true };
+    render();
+    let file;
+    try {
+      const c = await getJSON(`api/configs/${encodeURIComponent(name)}`);
+      const data = JSON.parse(str(c.text));
+      file = { name, hash: str(c.hash), data: obj(data), net: obj(obj(data).network) };
+    } catch (e) { file = { name, error: e.message }; }
+    if (st.sel !== f || st.form !== form || form.config !== name) return; // another node or name chosen meanwhile
+    form.file = file;
+    const net = obj(file.net);
+    if (net.address === "dhcp") {
+      if (!form.says && !form.noDHCP) form.how = "dhcp";
+    } else if (net.gateway) {
+      // The config's gateway, unless it isn't in the address's network and the one the
+      // node runs with is: then that one (saved to the file). Else the config's is shown,
+      // marked, to be put right here.
+      const p = prefix(form.address), fits = g => !!p && ip4(g) !== null && inNet(ip4(g), p);
+      const ng = runsOn(f) ? str(f.gateway) : "";
+      form.gateway = !fits(net.gateway) && fits(ng) ? ng : str(net.gateway);
+    }
+    render();
   }
 
   // ---- what the panel shows ------------------------------------------------------------
@@ -152,7 +258,7 @@ export function addNode(box, opts) {
       const k = known(st.q);
       if (k) {
         return [h("div", { class: "found" }, h("b", {}, nodeText(k)), h("span", { class: "small" }, "Already one of your nodes, at ", h("span", { class: "mono" }, hostOnly(k.addr)), ".")),
-          h("div", { class: "actions" }, h("a", { class: "btn small", href: `nodes.html#${encodeURIComponent(opts.nodeKey(k))}` }, "Open it"))];
+          h("div", { class: "actions" }, h("a", { class: "btn small", href: `node.html#${encodeURIComponent(opts.nodeKey(k))}` }, "Open it"))];
       }
       const l = st.look;
       if (!l) return [h("p", { class: "hint" }, "Type the node's whole address, like 192.0.2.10; Enter looks it up.")];
@@ -166,20 +272,39 @@ export function addNode(box, opts) {
       return [h("div", { class: "found" }, h("b", { class: "mono" }, l.addr),
         h("span", { class: "small" }, r.answered ? "Something answers there, but it isn't an espDNS node."
           : "No espDNS node answers there. A board that has never run espDNS needs installing over USB first.")),
-      h("div", { class: "actions" }, h("a", { class: "btn primary", href: "builder.html" }, "Install a board over USB"))];
+      h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => { close(); openUSB(); } }, "Install a board over USB"))];
     }
     const found = arr(opts.found());
-    const rows = found.map(f => h("div", { class: "opt" },
+    // Every item acts on a click anywhere on it, or Enter: a found node opens its setup
+    // panel (what it needs next, a click away); its button does that step itself.
+    const rows = found.map(f => item(() => pick(f), `Set up ${opts.boardName(f.board) || str(f.hostname) || f.host}`,
       h("div", {}, h("b", {}, opts.boardName(f.board) || str(f.hostname) || f.host),
         h("div", { class: "tagline" }, h("span", { class: "mono" }, hostOnly(f.host)), [linkWord(f.net), f.version && `firmware ${f.version}`].filter(Boolean).map(x => ` · ${x}`).join("")),
-        f.next ? null : h("div", { class: "tagline" }, `Can't be added yet: ${arr(f.refusals).join("; ") || "it is one of your nodes already"}`)),
-      f.next ? h("button", { class: "btn small", type: "button", onclick: () => choose(f) }, "Add") : h("span", {})));
+        f.next ? null : h("div", { class: "tagline" }, blocker(f))),
+      f.next ? h("button", { class: "btn small", type: "button", onclick: () => choose(f) }, "Add")
+        : viaUSB(f) ? usbButton(f, "btn small", opts.boardName(f.board) || str(f.hostname), close)
+          : h("button", { class: "btn small", type: "button", onclick: () => pick(f) }, "Set up")));
     return [h("div", { class: "stack nogap" },
       h("span", { class: "small muted" }, "Found on your network"),
       rows.length ? rows : h("p", { class: "hint" }, "Nothing new right now."),
-      h("div", { class: "opt" }, h("div", {}, h("b", {}, "A new board over USB"), h("div", { class: "tagline" }, "Plug it into this computer and install espDNS")),
-        h("a", { class: "btn small", href: "builder.html" }, "Start"))),
+      item(() => { close(); openUSB(); }, "A new board over USB: start",
+        h("div", {}, h("b", {}, "A new board over USB"), h("div", { class: "tagline" }, "Plug it into this computer and install espDNS")),
+        h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB(); } }, "Start"))),
     h("span", { class: "hint" }, "Or type the address of a node that isn't listed.")];
+  }
+
+  // item is one choice in the list: a click anywhere on it (its own buttons and links do
+  // their own thing) or Enter on it does act.
+  function item(act, label, ...kids) {
+    return h("div", { class: "opt pick", tabindex: "0", title: label,
+      onclick: e => { if (!e.target.closest("button, a, input")) act(); },
+      onkeydown: e => { if (e.key === "Enter" && e.target === e.currentTarget) { e.preventDefault(); act(); } } }, ...kids);
+  }
+
+  // pick is a found node chosen from the list: its setup panel, as its row opens.
+  function pick(f) {
+    close();
+    setup(f);
   }
 
   const back = () => h("button", { class: "btn small link", type: "button", onclick: () => { st.sel = null; st.flow = null; st.q = ""; st.look = null; input.value = ""; render(); input.focus(); } }, "Back");
@@ -197,6 +322,10 @@ export function addNode(box, opts) {
   function chosen(f) {
     if (st.flow) return flowView(f);
     const refusals = arr(f.refusals);
+    if (viaUSB(f)) {
+      return [intro(f), h("p", { class: "small" }, usbWhy(f)),
+        h("div", { class: "actions" }, usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), close), back())];
+    }
     if (refusals.length || !f.next) {
       return [intro(f), h("p", { class: "small bad" }, `It can't be added yet: ${refusals.join("; ") || "it is one of your nodes already"}.`),
         h("div", { class: "actions" }, back())];
@@ -209,28 +338,99 @@ export function addNode(box, opts) {
     if (!st.form) return [intro(f), h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Reading the configs…")];
     if (st.src && st.src.error) return [intro(f), h("p", { class: "small bad" }, st.src.error), h("div", { class: "actions" }, back())];
     const cs = arr(st.src.configs);
+    // A name of its own: an existing node config (it carries the name), or a new one, written
+    // when it is added (POST /api/configs/<name>.json, the name alone: the rest are defaults,
+    // changed later on its node page). A config one of your nodes runs by its name is that
+    // node's: offered, but not to be picked.
+    const usedBy = c => { const m = arr(opts.nodes()).find(x => c.config_name && str(obj(obj(x.status).config).name) === str(c.config_name)); return m ? opts.nodeKey(m) : ""; };
+    const free = cs.filter(c => !c.error && !usedBy(c));
+    if (!free.length && !st.form.config) st.form.config = NEW;
     const sel = h("select", { class: "t", id: "nnname" },
-      h("option", { value: "" }, cs.length ? "Choose…" : "No node config yet"),
-      cs.map(c => h("option", { value: c.name, disabled: !!c.error, selected: c.name === st.form.config },
-        `${str(c.config_name) || c.name}${c.error ? ` (${c.error})` : ""}`)));
+      free.length ? h("option", { value: "" }, "Choose…") : null,
+      cs.map(c => {
+        const by = usedBy(c);
+        return h("option", { value: c.name, disabled: !!c.error || !!by, selected: c.name === st.form.config },
+          `${str(c.config_name) || c.name}${c.error ? ` (${c.error})` : by ? " (in use)" : ""}`);
+      }),
+      h("option", { value: NEW, selected: st.form.config === NEW }, "A new name…"));
+    const nn = h("input", { class: "t mono", id: "nnnew", type: "text", autocomplete: "off", spellcheck: "false", maxlength: "31", placeholder: "dns4",
+      value: st.form.newName || "", "aria-label": "The new node's name" });
+    const nnField = h("label", { class: "f", hidden: st.form.config !== NEW }, h("span", {}, "New name"), nn,
+      h("span", { class: "hint" }, "Lowercase letters, digits and dashes."));
+    // How it gets its address: DHCP, reserved for its MAC in your router (not offered on a
+    // network in settings.json's no_dhcp), or a fixed address on the node with its gateway.
+    const fm = st.form;
+    const radio = (v, label) => h("label", { class: "check" },
+      h("input", { type: "radio", name: "nnhow", id: `nnhow-${v}`, value: v, checked: fm.how === v,
+        onchange: () => { fm.how = v; fixed.hidden = v !== "fixed"; dhcpNote.hidden = v !== "dhcp"; ok(); } }), h("span", {}, label));
+    const dhcpNote = h("p", { class: "hint", hidden: fm.how !== "dhcp" },
+      `Reserve ${hostOnly(f.host)} for its MAC (copy it above) in your router first: it keeps that address.`);
     const ip = h("input", { class: "t mono", id: "nnip", type: "text", autocomplete: "off", spellcheck: "false", "aria-describedby": "nnip-hint" });
-    ip.value = st.form.address;
-    const hint = h("span", { class: "hint", id: "nnip-hint" }, st.form.config ? "A fixed address, with its prefix length." : "");
+    ip.value = fm.address;
+    const hint = h("span", { class: "hint", id: "nnip-hint" }, STATICHINT);
+    const gw = h("input", { class: "t mono", id: "nngw", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "192.0.2.1", "aria-describedby": "nngw-hint" });
+    gw.value = fm.gateway;
+    const gwHint = h("span", { class: "hint", id: "nngw-hint" });
+    const fixed = h("div", { class: "grid2", hidden: fm.how !== "fixed" },
+      h("label", { class: "f" }, h("span", {}, "Address"), ip, hint), h("label", { class: "f" }, h("span", {}, "Gateway"), gw, gwHint));
+    const how = h("div", { class: "stack nogap", role: "radiogroup", "aria-label": "How it gets its address" },
+      h("span", { class: "small muted" }, "Its address"),
+      fm.noDHCP ? h("p", { class: "hint", id: "nnnodhcp" }, `${fm.noDHCP} has no DHCP server (settings): it gets a fixed address.`)
+        : radio("dhcp", "DHCP, reserved for it in your router"),
+      fm.noDHCP ? null : dhcpNote,
+      radio("fixed", "A fixed address on the node"), fixed);
+    // The name chosen: what its file says (read, then saved back with the address chosen
+    // here), and, for one no node uses, a way to delete it.
+    const file = fm.file && fm.file.name === fm.config ? fm.file : null;
+    const fileLine = h("p", { class: "hint", id: "nnfile" });
+    if (file && file.busy) fileLine.textContent = `Reading ${file.name}…`;
+    else if (file && file.error) { fileLine.textContent = `Couldn't read ${file.name}: ${file.error}`; fileLine.classList.add("bad"); }
+    else if (fm.deleteError) { fileLine.textContent = `Not deleted: ${fm.deleteError}`; fileLine.classList.add("bad"); }
+    fileLine.hidden = !fileLine.textContent;
+    const del = file && file.hash && free.some(c => c.name === file.name)
+      ? h("button", { class: "btn small link", type: "button", id: "nndel", onclick: () => { fm.confirmDelete = true; fm.deleteError = ""; render(); } }, "Delete this name") : null;
     const go = h("button", { class: "btn primary", type: "button" }, "Add node");
-    const ok = () => { go.disabled = !st.form.config || !st.src.key; };
+    // Add node waits for a name (a new one valid; an existing one read), a release key and
+    // the address: DHCP chosen, or a fixed one and its gateway that go together. What
+    // doesn't is marked, and said.
+    const ok = () => {
+      const bad = fm.how === "fixed" ? netCheck(fm.address, fm.gateway) : null;
+      const read = fm.config === NEW || (file && file.hash);
+      go.disabled = !fm.config || !st.src.key || !read || !!bad || (fm.config === NEW && !NAME.test(fm.newName || ""));
+      const addrBad = bad && bad.field === "address";
+      hint.textContent = addrBad && fm.address ? bad.why : STATICHINT;
+      hint.classList.toggle("bad", !!addrBad && !!fm.address);
+      const p = prefix(fm.address);
+      const gwBad = bad && bad.field === "gateway" && (fm.gateway || !addrBad);
+      gwHint.textContent = gwBad ? bad.why : p && STATIC.test(fm.address)
+        ? `Its next hop: an address in ${netText(p)}, its own network.` : "Its next hop: an address in the node's own network.";
+      gwHint.classList.toggle("bad", !!gwBad && !!fm.gateway);
+    };
+    nn.addEventListener("input", () => { fm.newName = nn.value.trim(); ok(); });
     sel.addEventListener("change", () => {
-      st.form.config = sel.value;
-      if (!st.form.edited) { st.form.address = defaultAddress(); ip.value = st.form.address; }
-      hint.textContent = st.form.config ? "A fixed address, with its prefix length." : "";
-      ok();
+      fm.config = sel.value;
+      nnField.hidden = sel.value !== NEW;
+      fm.file = null;
+      fm.confirmDelete = false;
+      fm.deleteError = "";
+      if (sel.value && sel.value !== NEW) readConfig(f, sel.value); else render();
     });
-    ip.addEventListener("input", () => { st.form.address = ip.value.trim(); st.form.edited = true; });
+    ip.addEventListener("input", () => { fm.address = ip.value.trim(); ok(); });
+    gw.addEventListener("input", () => { fm.gateway = gw.value.trim(); ok(); });
     go.addEventListener("click", () => adopt(f));
     ok();
     const out = [intro(f),
-      h("div", { class: "grid2" }, h("label", { class: "f" }, h("span", {}, "Name"), sel), h("label", { class: "f" }, h("span", {}, "Address"), ip, hint)),
-      h("p", { class: "small" }, "espDNS gives it this name and address, lets it copy your zones, then it starts serving like the others.")];
-    if (!cs.length) out.push(h("p", { class: "hint" }, "A node's name comes with its node config: write one on the ", h("a", { href: "configs.html" }, "Configs"), " page first."));
+      h("div", { class: "grid2" }, h("label", { class: "f" }, h("span", {}, "Name"), sel), nnField),
+      del ? h("div", { class: "row" }, del) : null,
+      how, fileLine,
+      h("p", { class: "small" }, `espDNS saves this to ${fm.config === NEW ? `${fm.newName || "its"}.json` : fm.config || "its config"}, gives it this name and address, lets it copy your zones, then it starts serving like the others.`)].filter(Boolean);
+    if (fm.confirmDelete && file && file.hash) {
+      out.push(h("div", { class: "alert-box", id: "nndelask" },
+        h("p", { class: "small" }, `Delete ${file.name}? No node runs it. It is kept in its history.`),
+        h("div", { class: "actions" },
+          h("button", { class: "btn primary", type: "button", onclick: () => deleteConfig(f, file) }, `Delete ${file.name}`),
+          h("button", { class: "btn small link", type: "button", onclick: () => { fm.confirmDelete = false; render(); } }, "Cancel"))));
+    }
     if (f.net === "wifi") out.push(h("span", { class: "hint" }, "A Wi-Fi board: fine as an extra node; your wired nodes keep DNS steady."));
     if (!st.src.key) out.push(h("p", { class: "hint bad" }, `No release key to sign its config with${st.src.key_error ? `: ${st.src.key_error}` : ""}.`));
     out.push(h("div", { class: "actions" }, go, back()));
@@ -239,11 +439,65 @@ export function addNode(box, opts) {
 
   // ---- adding ---------------------------------------------------------------------------
 
+  // network is the config's network as chosen here: DHCP, or the fixed address and gateway.
+  function network() {
+    return st.form.how === "dhcp" ? { address: "dhcp" } : { address: st.form.address, gateway: st.form.gateway };
+  }
+
+  // The adoption is sent what the config file says by then: DHCP, reserved, or the fixed
+  // address with its gateway, always (never the gateway a config had for another network).
+  // "static" has the adoption refuse any other (dhcp unreserved, none: the config's).
   function params(f) {
-    const p = { node: f.host, node_id: f.id, config: st.form.config };
-    const a = st.form.address;
-    if (a && a !== defaultAddress()) p.address = a;
-    return p;
+    const config = st.form.config === NEW ? `${st.form.newName}.json` : st.form.config;
+    const n = network();
+    return { node: f.host, node_id: f.id, config, ...(n.address === "dhcp" ? { address: "dhcp", reserved: true } : n), static: true };
+  }
+
+  // newConfig writes the new name's node config, with its network, unless one by that name
+  // is there already (then its network is saved to it, as for one chosen).
+  async function newConfig() {
+    const file = `${st.form.newName}.json`;
+    if (arr(obj(st.src).configs).some(c => c.name === file)) {
+      const c = await getJSON(`api/configs/${encodeURIComponent(file)}`);
+      await saveNetwork({ name: file, hash: str(c.hash), data: obj(JSON.parse(str(c.text))) });
+      return;
+    }
+    const zp = obj(obj(st.src).primary);
+    const sec = str(zp.address) && arr(zp.zones).length ? { secondary: { primary: str(zp.address), zones: arr(zp.zones).map(str) } } : {};
+    await post(`api/configs/${encodeURIComponent(file)}`, { text: `${JSON.stringify({ name: st.form.newName, network: network(), ...sec }, null, 2)}\n`, hash: "" });
+    st.src.configs = [...arr(obj(st.src).configs), { name: file, config_name: st.form.newName }];
+  }
+
+  // saveNetwork saves the network chosen to the config file, when it says another: the rest
+  // of it as read (its Wi-Fi password hidden, which the save keeps), against the version read.
+  async function saveNetwork(file) {
+    const want = network(), had = obj(obj(file.data).network);
+    if (str(had.address) === want.address && str(had.gateway) === str(want.gateway)) return;
+    const r = await post(`api/configs/${encodeURIComponent(file.name)}`, { text: `${JSON.stringify({ ...file.data, network: want }, null, 2)}\n`, hash: file.hash });
+    file.hash = str(r.hash);
+    file.data = { ...file.data, network: want };
+    file.net = want;
+  }
+
+  // deleteConfig deletes a config no node uses (POST /api/configs/<name>/delete, against
+  // the version read): the name is then gone from the list.
+  async function deleteConfig(f, file) {
+    try {
+      await post(`api/configs/${encodeURIComponent(file.name)}/delete`, { hash: file.hash });
+    } catch (e) {
+      if (st.sel !== f) return;
+      st.form.confirmDelete = false;
+      st.form.deleteError = e.message;
+      render();
+      return;
+    }
+    toast(`${file.name} deleted`);
+    if (st.sel !== f) return;
+    st.src.configs = arr(obj(st.src).configs).filter(c => c.name !== file.name);
+    st.form.config = "";
+    st.form.file = null;
+    st.form.confirmDelete = false;
+    render();
   }
 
   async function adopt(f) {
@@ -252,6 +506,12 @@ export function addNode(box, opts) {
     const show = () => { if (st.flow === flow && st.sel === f) render(); };
     const fail = (msg, hints) => { flow.busy = false; flow.error = msg; flow.hints = arr(hints); show(); };
     show();
+    // The config file first: a new name's written, a chosen one's network saved to it when
+    // it says another; the adoption then carries what the file says.
+    try {
+      if (st.form.config === NEW) await newConfig();
+      else await saveNetwork(st.form.file);
+    } catch (e) { fail(`Couldn't save ${p.config}: ${e.message}`); return; }
     let pv;
     try { pv = await post("api/adopt/preview", p); } catch (e) { fail(e.message); return; }
     const ck = obj(pv.check);
@@ -264,31 +524,20 @@ export function addNode(box, opts) {
     dry = await follow(dry, pr => { flow.progress = pr; show(); });
     const dp = obj(flow.progress);
     if (dry.state !== "done") { fail(str(dp.outcome) || str(dry.error) || `The check ${dry.state}.`, dp.hints); return; }
-    const prim = obj(dp.primary);
-    let primaryDone = false;
-    if (arr(prim.manual).length && !prim.done) {
-      // The zone primary isn't changed from here: the changes are made by hand, then go on.
-      flow.busy = false;
-      flow.manual = { why: str(prim.why), items: arr(prim.manual) };
-      show();
-      const go = await new Promise(resolve => { flow.resume = resolve; });
-      if (!go) { st.flow = null; show(); render(); return; }
-      flow.busy = true;
-      flow.manual = null;
-      primaryDone = true;
-    }
+    // What to allow on the zone primary, once, if the node's network isn't one it allows.
+    flow.advice = str(obj(dp.primary).advice) || str(pv.advice);
     flow.what = `Adding it: ${pv.how === "new" ? "it moves to its new address with a restart" : "no restart"}.`;
     flow.progress = null;
     show();
     let job;
-    try { job = await post("api/jobs", { kind: "adopt", params: { ...p, after: dry.id, add_to_settings: true, ...(primaryDone ? { primary_done: true } : {}) } }); }
+    try { job = await post("api/jobs", { kind: "adopt", params: { ...p, after: dry.id, add_to_settings: true } }); }
     catch (e) { fail(e.message); return; }
     job = await follow(job, pr => { flow.progress = pr; show(); });
     const ap = obj(flow.progress);
     if (job.state !== "done") { fail(str(ap.outcome) || str(job.error) || `The adoption ${job.state}.`, ap.hints); return; }
     flow.busy = false;
-    const name = str(obj(config()).config_name) || hostOnly(f.host);
-    toast(`${name} is added: it serves like the others`);
+    const name = (st.form.config === NEW ? st.form.newName : str(obj(config()).config_name)) || hostOnly(f.host);
+    toast(flow.advice ? `${name} is added. ${flow.advice}` : `${name} is added: it serves like the others`);
     st.flow = null;
     close();
     opts.done();
@@ -323,17 +572,7 @@ export function addNode(box, opts) {
       out.push(h("ol", { class: "steps" }, steps.map(s => h("li", { class: s.state === "done" ? "done" : s.state === "running" ? "now" : s.state === "failed" ? "failed" : "" },
         h("span", { class: "m" }), h("div", {}, h("b", {}, str(s.title)), s.detail ? h("div", { class: "hint" }, str(s.detail)) : null)))));
     }
-    if (fl.manual) {
-      const cb = h("input", { type: "checkbox" });
-      const go = h("button", { class: "btn primary", type: "button", disabled: true, onclick: () => fl.resume(true) }, "Continue");
-      cb.addEventListener("change", () => { go.disabled = !cb.checked; });
-      out.push(h("div", { class: "alert-box" },
-        h("b", {}, "Make these changes at your zone primary first"),
-        fl.manual.why ? h("p", { class: "small" }, fl.manual.why) : null,
-        h("ul", { class: "small" }, fl.manual.items.map(x => h("li", {}, str(x)))),
-        h("label", { class: "check" }, cb, h("span", {}, "I made these changes"))),
-      h("div", { class: "actions" }, go, h("button", { class: "btn small link", type: "button", onclick: () => fl.resume(false) }, "Cancel")));
-    }
+    if (fl.advice) out.push(h("p", { class: "small", id: "primary-advice" }, fl.advice));
     if (fl.error) {
       out.push(h("p", { class: "small bad" }, fl.error));
       if (fl.hints.length) out.push(h("ul", { class: "hint" }, fl.hints.map(x => h("li", {}, str(x)))));
@@ -342,6 +581,50 @@ export function addNode(box, opts) {
     return out;
   }
 
-  return { open };
+  // usbWhy is why a node is updated over USB first, and what that does.
+  function usbWhy(f) {
+    if (f.install === "keys") return "It has no keys (setup mode), so it takes nothing over the network. Writing your keys to it over USB keeps its firmware and settings.";
+    const v = f.image ? str(opts.imageVersion(f.image)) : "";
+    return `Its firmware is older than 0.0.1; installing ${v || "the current firmware"} over USB erases it.`;
+  }
+
+  // ---- a found node's setup panel ------------------------------------------------------
+
+  function setup(f) {
+    const p = panel(opts.boardName(f.board) || str(f.hostname) || "New device found");
+    const link = linkWord(f.net);
+    const fact = (k, ...v) => h("div", { class: "kv" }, h("span", { class: "muted small" }, k), h("div", {}, ...v));
+    const m = mac(f.mac);
+    const facts = h("div", { class: "stack" },
+      fact("Address", addr(hostOnly(f.host)), link ? h("span", { class: "hint" }, ` over ${link}`) : null),
+      m ? h("div", { class: "kv" }, m, h("div", { class: "hint" }, MACHINT)) : null,
+      fact("Firmware", f.version ? str(f.version) : "unknown"),
+      f.board || f.image ? fact("Board", [opts.boardName(f.board), f.image && `chip image ${f.image}`].filter(Boolean).join(" · ")) : null);
+    const usb = viaUSB(f), keys = f.install === "keys";
+    const addNow = !!f.next;
+    const other = !usb && !addNow ? (arr(f.refusals).join("; ") || "it is one of your nodes already") : "";
+    const step = (cls, title, detail, action) => h("li", { class: cls }, h("span", { class: "m" }),
+      h("div", {}, h("b", {}, title), detail ? h("div", { class: "hint" }, detail) : null, action ? h("div", { class: "actions" }, action) : null));
+    const steps = h("ol", { class: "steps" },
+      usb ? step("next", keys ? "Write its keys over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer; its board is chosen for you.`,
+        usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname)))
+        : step("done", "Firmware takes node configs", f.version ? `It runs ${f.version}.` : ""),
+      step(addNow ? "next" : "", "Add it to your nodes",
+        addNow ? "Give it a name and an address; it copies your zones, then serves like the others."
+          : usb ? (keys ? "Once it has its keys, it shows here again, ready to add." : "Once it runs 0.0.1 or later, it shows here again, ready to add.") : `Not yet: ${other}.`,
+        addNow ? h("button", { class: "btn primary", type: "button", onclick: () => { p.close(); open(f); } }, "Add node") : null));
+    p.body.append(facts, steps);
+    p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Close"));
+    return p;
+  }
+
+  return { open, setup };
+}
+
+// blocker is why a found node isn't added yet, as its row and item say it.
+export function blocker(f) {
+  if (f.install === "keys") return "No keys (setup mode): write them over USB first";
+  if (f.install === "usb") return "Firmware older than 0.0.1: update it over USB first";
+  return `Can't be added yet: ${arr(f.refusals).join("; ") || "it is one of your nodes already"}`;
 }
 

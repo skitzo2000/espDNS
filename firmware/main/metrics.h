@@ -64,3 +64,9 @@ void mx_upstreams(mx_t *w, const st_t *st);
  * forward zone i (its group FLIGHT_GROUP_ZONE(i)) into name, false past the last: each one's
  * slots held, as espdns_fwd_zone_inflight{zone}. */
 void mx_forward(mx_t *w, const upq_stats_t *s, bool (*zone)(void *ctx, int i, char *name, size_t cap), void *ctx);
+
+/* The UDP receive queue under load (load.h): espdns_udp_queue_full_seconds_total, the time it
+ * was full (from a query it had no place for until it drained to LOAD_LOW_WATER; what came
+ * meanwhile was dropped), and espdns_udp_queue_expired_total, the queries shed unanswered for
+ * waiting in it past its deadline (LOAD_DEADLINE_MS); from load_totals. */
+void mx_load(mx_t *w, uint64_t full_ms, uint32_t expired);

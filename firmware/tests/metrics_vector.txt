@@ -102,3 +102,9 @@ espdns_fwd_tcp_retries_total 6
 # HELP espdns_fwd_select_errors_total Times the forward loop's select() failed (it waits, longer each time in a row).
 # TYPE espdns_fwd_select_errors_total counter
 espdns_fwd_select_errors_total 1
+# HELP espdns_udp_queue_full_seconds_total Time the queue for the UDP workers was full, from a query it had no place for until it drained to half: what came meanwhile was dropped.
+# TYPE espdns_udp_queue_full_seconds_total counter
+espdns_udp_queue_full_seconds_total 12.345000
+# HELP espdns_udp_queue_expired_total Queries shed unanswered: they waited in the queue past its deadline (1 s).
+# TYPE espdns_udp_queue_expired_total counter
+espdns_udp_queue_expired_total 7

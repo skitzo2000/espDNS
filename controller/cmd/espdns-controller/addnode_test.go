@@ -136,6 +136,36 @@ func TestAddNodeFound(t *testing.T) {
 	if got[1].Next != "" || len(got[1].Refusals) == 0 || !strings.Contains(got[1].Refusals[0], "same ID") {
 		t.Fatalf("found %+v", got[1])
 	}
+	if got[1].Install != "" || got[0].Install != "" {
+		t.Errorf("install: %+v", got)
+	}
+	// Firmware from before node configs: nothing adds it, and a USB install moves it on.
+	old := fakenode.New("old", [6]byte{2, 0, 0, 0, 0, 0x56}, "esp32s3-octal", "xiao-s3-sense", release.PublicRaw(e.key))
+	old.Addr, old.NoConfigs = "203.0.113.56", true
+	e.lan.Add(old)
+	e.seen = append(e.seen, "203.0.113.56")
+	got = e.foundList()
+	if o := got[2]; o.Host != "203.0.113.56" || o.Next != "" || o.Install != installUSB || o.Board != "xiao-s3-sense" || o.Image != "esp32s3-octal" ||
+		len(o.Refusals) != 1 || !strings.Contains(o.Refusals[0], "takes no node configs") {
+		t.Fatalf("old firmware %+v", o)
+	}
+	// A node with no keys (setup mode) or corrupt ones: nothing adds it; its keys are written
+	// over USB.
+	for i, src := range []string{"none", "corrupt"} {
+		nk := fakenode.New("nokeys", [6]byte{2, 0, 0, 0, 0, byte(0x57 + i)}, "esp32s3-octal", "xiao-s3-sense", release.PublicRaw(e.key))
+		nk.Addr, nk.KeysSource = []string{"203.0.113.57", "203.0.113.58"}[i], src
+		e.lan.Add(nk)
+		e.seen = append(e.seen, nk.Addr)
+	}
+	got = e.foundList()
+	for _, o := range got[3:] {
+		if o.Next != "" || o.Install != installKeys || o.KeysSource == "" || len(o.Refusals) != 1 || !strings.Contains(o.Refusals[0], "no keys") {
+			t.Fatalf("no keys %+v", o)
+		}
+	}
+	if len(got) != 5 {
+		t.Fatalf("found %v", hosts(got))
+	}
 	if reqs := e.rec.take(); len(reqs) != 0 {
 		t.Errorf("the list sent %v", reqs)
 	}

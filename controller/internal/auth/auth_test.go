@@ -365,7 +365,7 @@ func TestGuard(t *testing.T) {
 	if w := do(h, req{method: "POST", path: "/api/jobs", body: "{}"}); w.Code != http.StatusUnauthorized {
 		t.Errorf("POST logged out: %d", w.Code)
 	}
-	for _, p := range []string{"/login.html", "/style.css", "/nodes.js", "/api/session"} {
+	for _, p := range []string{"/login.html", "/shell.css", "/home.js", "/api/session"} {
 		if w := do(h, req{method: "GET", path: p}); w.Code != http.StatusOK {
 			t.Errorf("public %s: %d", p, w.Code)
 		}
@@ -551,9 +551,11 @@ func TestLoginEndsOldSession(t *testing.T) {
 // Public is only for clean paths: one with dot segments or double slashes is not public
 // (the mux redirects it to the clean path, which is checked again).
 func TestPublicClean(t *testing.T) {
-	for p, want := range map[string]bool{"/common.js": true, "/login.html": true, "/x/style.css": true,
+	for p, want := range map[string]bool{"/common.js": true, "/login.html": true, "/x/shell.css": true,
 		"/./api/nodes.js": false, "//api/key.js": false, "/a/../api/key.js": false, "/api/key.js": false,
-		"/build/x.js": false, "/index.html": false, "/api/session": true, "/api/session/": false} {
+		"/build/x.js": false, "/index.html": false, "/api/session": true, "/api/session/": false,
+		"/img/favicon.ico": true, "/img/icon-192.png": true, "/img/artie.webp": true, "/img/../api/x.png": false,
+		"/img/x.json": false, "/api/img/x.png": false, "/build/img/x.png": false} {
 		if Public(p) != want {
 			t.Errorf("Public(%q) = %v", p, !want)
 		}
@@ -811,4 +813,58 @@ func TestReauthHTTP(t *testing.T) {
 	if w := do(h, req{method: "GET", path: "/api/nodes", cookies: ck, token: l.Token}); w.Code != http.StatusUnauthorized {
 		t.Fatalf("the session after: %d", w.Code)
 	}
+}
+
+// POST /api/password: a session, a good new password, then the password given again (a
+// grant, taken only once the new one is good); then every session ends, the old password
+// no longer logs in, the new one does.
+func TestChangePasswordHTTP(t *testing.T) {
+	a, _, path := newAuth(t)
+	h := guarded(a)
+	l := httpLogin(t, h, req{})
+	other := httpLogin(t, h, req{})
+	ck := []string{l.cookie.Value}
+	const newPW = "a new password here"
+	grant := func() string {
+		w := do(h, req{method: "POST", path: "/api/reauth", body: `{"password":"` + pw + `"}`, cookies: ck, token: l.Token})
+		var g struct{ Reauth string }
+		json.Unmarshal(w.Body.Bytes(), &g)
+		if g.Reauth == "" {
+			t.Fatalf("reauth: %d %s", w.Code, w.Body)
+		}
+		return g.Reauth
+	}
+	if w := do(h, req{method: "POST", path: "/api/password", body: `{"password":"` + newPW + `"}`, cookies: ck}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("the cookie alone: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, req{method: "POST", path: "/api/password", body: `{"password":"` + newPW + `"}`, cookies: ck, token: l.Token}); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), `"reauth":true`) {
+		t.Fatalf("without a grant: %d %s", w.Code, w.Body)
+	}
+	g := grant()
+	w := do(h, req{method: "POST", path: "/api/password", body: `{"password":"short"}`, cookies: ck, token: l.Token, reauth: g})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"field":"password"`) {
+		t.Fatalf("a short password: %d %s", w.Code, w.Body)
+	}
+	before, _ := os.ReadFile(path)
+	// The grant wasn't used by the refused one.
+	w = do(h, req{method: "POST", path: "/api/password", body: `{"password":"` + newPW + `"}`, cookies: ck, token: l.Token, reauth: g})
+	if w.Code != http.StatusOK || len(w.Result().Cookies()) != 1 || w.Result().Cookies()[0].MaxAge >= 0 {
+		t.Fatalf("change: %d %s %v", w.Code, w.Body, w.Result().Cookies())
+	}
+	if after, _ := os.ReadFile(path); string(after) == string(before) {
+		t.Fatal("auth.json unchanged")
+	}
+	if c, err := Load(path); err != nil || c.User != "admin" {
+		t.Fatal(c, err)
+	}
+	for _, s := range []loginReply{l, other} {
+		if w := do(h, req{method: "GET", path: "/api/nodes", cookies: []string{s.cookie.Value}, token: s.Token}); w.Code != http.StatusUnauthorized {
+			t.Fatalf("a session after the change: %d", w.Code)
+		}
+	}
+	if w := do(h, req{method: "POST", path: "/api/login", body: `{"user":"admin","password":"` + pw + `"}`}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("the old password: %d", w.Code)
+	}
+	httpLogin(t, h, req{body: `{"user":"admin","password":"` + newPW + `"}`})
 }

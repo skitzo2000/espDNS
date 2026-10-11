@@ -2,7 +2,7 @@
 // (docs/architecture.md, Addresses and adoption), from one request: the espdns CLI's adopt
 // flags (make fleet-adopt) and the controller's Adopt page (Web) both make a Request and
 // build it here, so for the same intent they adopt the node the same way: the same
-// address, the same config with the same checks, the same zone primary edits, the same rule
+// address, the same config with the same checks, the same word on the zone primary, the same rule
 // for a node already in service. After the node is confirmed, Run records the config it
 // runs (internal/configs, Pushed) and, when asked, adds it to settings.json.
 package adoption
@@ -15,14 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
-	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -41,9 +39,6 @@ type Request struct {
 	Name          string        // -name
 	Reserved      bool          // -reserved
 	Identify      time.Duration // -identify
-	PrimaryKind   string        // -primary-kind ("": settings.json's "primary")
-	PrimaryURL    string        // -primary-url ("": settings.json's)
-	PrimaryDone   bool          // -primary-done: the allow lists were changed by hand
 	AddToSettings bool          // -add-to-settings
 	Wait          time.Duration // -wait
 	Catalog       string        // -catalog: the board catalog, for the config's memory plan
@@ -64,9 +59,6 @@ type Request struct {
 	// ConfigText, if set, is the config's bytes, read once by the caller (the controller,
 	// whose dry run fingerprints them); nil: read from Config.
 	ConfigText []byte `json:"-"`
-	// Report, if set, hears what step 4 changes on the zone primary, or would in a dry run
-	// (the controller's progress).
-	Report func(primary.Edit) `json:"-"`
 }
 
 // SettingsPath is the settings file the request reads.
@@ -85,82 +77,11 @@ func (r Request) ConfigPath() string {
 	return configs.Resolve(r.DataDir, r.Config)
 }
 
-// Token gives the zone primary's API token: "" (and no error) when there is none, so the
-// changes are named to make by hand.
-type Token func() (string, error)
-
-// ZonePrimary is the zone primary the request uses (internal/primary), with its kind and
-// address: -primary-kind and -primary-url (the old -technitium is both), else settings.json's
-// "primary" (or its old "technitium"), else none set up, treated as manual. There is no
-// other default: a primary is never reached unless this deployment names it. The token is
-// read only for a kind with an API, or when none is set up: a token with no primary to use
-// it on, for a config with zones, is a setup left half done and refused, rather than the
-// changes quietly left to be made by hand.
-func (r Request) ZonePrimary(s settings.Settings, token Token, zones bool, o primary.Options) (primary.Primary, primary.Config, error) {
-	set := s.ZonePrimary()
-	kind, url := r.PrimaryKind, r.PrimaryURL
-	switch {
-	case kind == "" && url == "":
-		kind, url = set.Kind, set.URL
-	case kind == "":
-		if d, _ := primary.Lookup(set.Kind); !d.API {
-			return nil, primary.Config{}, errors.New("-primary-url: give -primary-kind too " +
-				`(settings.json names no zone primary with an API: "primary": {"kind": ...})`)
-		}
-		kind = set.Kind
-	case url == "" && kind == set.Kind:
-		url = set.URL
-	}
-	unset := kind == ""
-	if unset {
-		kind = primary.KindManual
-	}
-	d, ok := primary.Lookup(kind)
-	switch {
-	case !ok:
-		return nil, primary.Config{}, fmt.Errorf("-primary-kind: %q is not one of %s", kind, strings.Join(primary.Kinds(), ", "))
-	case !d.API && url != "":
-		return nil, primary.Config{}, fmt.Errorf("-primary-url: the %s kind has no API", kind)
-	case url != "":
-		// A plain http address from settings.json pauses the primary (Open); one given
-		// now (-primary-url) is refused.
-		if err := d.CheckAPI(url); err != nil && (r.PrimaryURL != "" || !errors.Is(err, primary.ErrPlainHTTP)) {
-			return nil, primary.Config{}, fmt.Errorf("-primary-url: %w", err)
-		}
-	}
-	tok := ""
-	if token != nil && (d.API || unset) {
-		var err error
-		if tok, err = token(); err != nil {
-			return nil, primary.Config{}, fmt.Errorf("the zone primary API token: %w", err)
-		}
-	}
-	pc := primary.Config{Kind: kind, URL: url}
-	if pc.SameTarget(set) {
-		pc.CertSHA256 = set.CertSHA256 // the certificate pinned for this primary; none for another address
-	}
-	if unset {
-		if tok != "" && zones {
-			return nil, pc, fmt.Errorf(`a zone primary API token but no zone primary: add "primary": {"kind": <%s>, `+
-				`"url": <its API>} to settings.json (or -primary-kind and -primary-url, the Makefile's `+
-				`PRIMARY_KIND= and PRIMARY_URL=), or {"kind": "manual"} to change its lists by hand`, strings.Join(primary.APIKinds(), " or "))
-		}
-		return primary.ByHand(d, `no zone primary in settings.json ("primary"): any primary, its lists changed by hand`), pc, nil
-	}
-	p, err := primary.Open(pc, tok, o)
-	return p, pc, err
-}
-
 // Built is a request made into what fleet.AdoptNode takes, and what Run does after.
 type Built struct {
 	Adopt fleet.Adopt
 	// ConfigName is the config's file name, as the record of the config pushed has it.
 	ConfigName string
-	// PrimaryKind is the zone primary's kind (internal/primary); PrimaryAPI the API used
-	// for step 4, "" when the changes are made by hand (PrimaryWhy says why).
-	PrimaryKind string
-	PrimaryAPI  string
-	PrimaryWhy  string
 	// Primary and Zones are the config's secondary zones and their primary.
 	Primary string
 	Zones   []string
@@ -179,10 +100,10 @@ func HostOnly(a string) string {
 }
 
 // Build checks the request and makes the adoption: the config (with its network set from
-// the address when it runs), the address, the zone primary's edits or the changes to make
-// by hand, the peers and DNS peers for the rule, the checks. Nothing is changed here; the
+// the address when it runs), the address, the zone primary as settings.json names it (step
+// 4 says when the node's network isn't one it allows), the peers and DNS peers for the rule, the checks. Nothing is changed here; the
 // node is only found (mDNS, with -node and no -host) and the other nodes read.
-func Build(ctx context.Context, c *fleet.Client, r Request, token Token, logf func(string, ...any)) (Built, error) {
+func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ...any)) (Built, error) {
 	var b Built
 	cfg := &nodecfg.Config{}
 	if r.Config != "" {
@@ -266,19 +187,9 @@ func Build(ctx context.Context, c *fleet.Client, r Request, token Token, logf fu
 
 	a := fleet.Adopt{Host: host, ID: r.Node, Address: pfx, Gateway: gwAddr, DHCP: dhcp, Config: cfg, Reserved: r.Reserved,
 		Identify: r.Identify, DryRun: r.DryRun, ConfirmWait: r.Wait, AllowSingle: r.AllowSingle, Force: r.Force,
-		ManualDone: r.PrimaryDone}
+		Primary: s.ZonePrimary()}
 	if sec := cfg.Secondary; sec != nil && sec.Zones != nil {
 		b.Primary, b.Zones = sec.Primary, slices.Clone(*sec.Zones)
-	}
-
-	// The zone primary: reached over its API, else the changes by hand.
-	zp, pc, err := r.ZonePrimary(s, token, len(b.Zones) > 0, primary.Options{DryRun: r.DryRun, Logf: logf, Report: r.Report})
-	if err != nil {
-		return b, err
-	}
-	a.Primary, b.PrimaryKind, b.PrimaryAPI, b.PrimaryWhy = zp, pc.Kind, zp.API(), primary.Why(zp)
-	if len(b.Zones) > 0 && b.PrimaryWhy != "" {
-		logf("zone primary (%s): %s: the allow lists are to be changed by hand", pc.Kind, b.PrimaryWhy)
 	}
 
 	if a.Checks, err = r.Checks.Make(); err != nil {
@@ -392,20 +303,11 @@ func Run(ctx context.Context, c *fleet.Client, b Built, by string, logf func(str
 		res.AddedToSettings, res.InSettings = added, true
 		logf("added %s to settings.json: it counts as a peer in rollouts, and the controller's actions take it", ar.Addr)
 	default:
-		logf("%s is not in settings.json: add it there (-add-to-settings, or the controller's Adopt page) so rollouts "+
+		logf("%s is not in settings.json: add it there (-add-to-settings, or + Add node on the controller's Nodes page) so rollouts "+
 			"count it and change it", ar.Addr)
 	}
 	if moved && !b.addToSettings {
 		logf("settings.json still lists %s, the address it moved from: change it to %s", b.Adopt.Host, ar.Addr)
 	}
 	return res, nil
-}
-
-// ManualSteps are the changes to make by hand on the zone primary for addr, one per zone.
-func (b Built) ManualSteps(addr string) []string {
-	var out []string
-	for _, z := range b.Zones {
-		out = append(out, fleet.ManualSteps(b.Adopt.Primary, b.Primary, z, addr))
-	}
-	return out
 }

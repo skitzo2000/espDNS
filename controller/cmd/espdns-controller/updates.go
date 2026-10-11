@@ -67,6 +67,7 @@ func (u updatesServer) report() (updates.Report, error) {
 				break
 			}
 		}
+		un.OutOfService = s.IsOutOfService(h)
 		ns = append(ns, un)
 	}
 	return updates.For(ns, updates.Builds(u.dataDir, u.catalog), pending), nil

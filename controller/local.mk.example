@@ -21,14 +21,11 @@ CONFIGS            ?= 192.0.2.53=node1.json
 
 # ---- Secrets ----
 # Secrets are never written here: each comes from an environment variable (export it, or let
-# SECRET_RUN put it there) or a file. The zone primary's API token (a primary of a kind with
-# an API, e.g. technitium): the environment variable that holds it. None: adoption uses the
-# token make primary-import put in the data directory, if any.
-#PRIMARY_TOKEN_ENV    ?= ESPDNS_PRIMARY_TOKEN
+# SECRET_RUN put it there) or a file.
 # The release signing key: $ESPDNS_RELEASE_KEY (the PEM, or base64 of it), or a file
 #RELEASE_KEY_FILE     ?= ../firmware/secrets/release.pem
 # A password manager's command that runs a command with the named variables set to their
-# secrets: $(1) is the list of variable names (ESPDNS_RELEASE_KEY, PRIMARY_TOKEN_ENV's,
+# secrets: $(1) is the list of variable names (ESPDNS_RELEASE_KEY,
 # ESPDNS_ADMIN_PASSWORD, ESPDNS_BACKUP_PASSPHRASE). Use = (not :=), so $(1) is filled in.
 #SECRET_RUN            = /path/to/secrets-tool exec $(1) --
 

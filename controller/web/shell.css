@@ -3,7 +3,7 @@
    orange stripe, white working surfaces, light blue for healthy marks and charts, orange for
    the one primary action, the pending-changes chip and switches that are on, red only for
    what's wrong), the node's RGB LED as a plain dot, the rows, the slide-out panels, the
-   hide-and-expand rows and the copyable address. The older pages keep style.css. */
+   hide-and-expand rows and the copyable address. */
 :root {
   --navy: #0d2b4e; --navy-2: #163d68; --sky: #9fc7e7; --sky-soft: #e4f0f9; --orange: #f68b2c; --orange-deep: #d96f12;
   --bg: #f3f8fc; --surface: #ffffff; --fg: #0d2b4e; --muted: #4c6580; --faint: #7d93aa;
@@ -63,6 +63,8 @@ nav.main a { text-decoration: none; color: var(--topbar-muted); padding: 17px 10
 nav.main a:hover { color: var(--topbar-fg) }
 nav.main a[aria-current="page"] { color: var(--topbar-fg); border-bottom-color: var(--orange); font-weight: 500 }
 .changes { display: flex; align-items: center; gap: 8px; margin-left: auto }
+.top-artie { display: block; height: 30px; width: auto; flex: none; margin-left: auto }
+.changes ~ .top-artie, .who ~ .top-artie { margin-left: 0 }
 .chip-btn { border: 1px solid var(--topbar-muted); background: transparent; color: var(--topbar-fg); border-radius: 999px; padding: 5px 12px; cursor: pointer; white-space: nowrap; font-size: 13.5px }
 .chip-btn.pending { background: var(--orange); color: #0d2b4e; border-color: var(--orange); font-weight: 600 }
 .spin { display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -1px; margin-right: 6px }
@@ -72,6 +74,7 @@ nav.main a[aria-current="page"] { color: var(--topbar-fg); border-bottom-color: 
   .top-in { gap: 8px; padding-block: 8px }
   nav.main { order: 3; width: 100%; margin: 0 -6px }
   nav.main a { padding: 8px 8px 7px }
+  .top-artie { display: none } /* no room beside the chips on a phone */
 }
 
 /* The band under the bar: what's wrong across the fleet. */
@@ -131,10 +134,18 @@ section { display: grid; gap: 12px; min-width: 0 }
 .r > * { min-width: 0 }
 .r[data-href] { cursor: pointer }
 .r[data-href]:hover { background: var(--hover) }
+.r[data-found] { cursor: pointer }
+.r[data-found] .actions { margin-top: 6px }
 .nodes .r { grid-template-columns: minmax(150px, 1.2fr) minmax(170px, 1.5fr) minmax(190px, 1.1fr) 80px 18px }
 .chev { color: var(--faint) }
 .empty { padding: 26px 18px; display: grid; gap: 10px; justify-items: start }
 .empty p { color: var(--muted) }
+/* Artie A. Record, the mascot: small, only on the login page, the first run's welcome and
+   Nodes with no node yet. */
+.mascot { display: block; width: auto; height: 96px; flex: none }
+.mascot[hidden] { display: none }
+.hello { display: flex; gap: 16px; align-items: center; min-width: 0 }
+.empty.with-mascot { grid-template-columns: auto 1fr; align-items: center; gap: 10px 18px }
 @media (max-width: 760px) {
   .r { grid-template-columns: 1fr auto !important }
   .r.headr { display: none }
@@ -154,6 +165,7 @@ section { display: grid; gap: 12px; min-width: 0 }
 .led.fault { background: var(--led-red) }
 .led.identify { background: #ffffff; animation: blink .08s steps(1) infinite }
 .led.unknown { background: transparent; box-shadow: inset 0 0 0 2px var(--faint) }
+.led.out { background: var(--faint) }
 @keyframes blink { 50% { opacity: .2 } }
 @keyframes duo { 0% { opacity: 1 } 10% { opacity: .2 } 20% { opacity: 1 } 30%, 100% { opacity: .2 } }
 @keyframes tri { 0% { opacity: 1 } 10% { opacity: .2 } 20% { opacity: 1 } 30% { opacity: .2 } 40% { opacity: 1 } 50%, 100% { opacity: .2 } }
@@ -165,8 +177,12 @@ section { display: grid; gap: 12px; min-width: 0 }
 .r.r-new { background: color-mix(in srgb, var(--sky) 28%, var(--surface)); box-shadow: inset 6px 0 0 var(--sky) }
 .r.r-warn .stw, .r.r-bad .stw, .r.r-new .stw { font-weight: 600; color: var(--fg) }
 .r.r-warn .sub, .r.r-bad .sub, .r.r-new .sub { color: var(--fg); opacity: .85 }
+.r.r-new[data-found]:hover { background: color-mix(in srgb, var(--sky) 40%, var(--surface)) }
 .r.r-warn[data-href]:hover { background: color-mix(in srgb, var(--led-amber) 22%, var(--surface)) }
 .r.r-bad[data-href]:hover { background: color-mix(in srgb, var(--led-red) 24%, var(--surface)) }
+/* A node out of service: muted, not an alert; its badge says so. */
+.r.r-out > :not(.chev) { opacity: .62 }
+.out-badge { font-size: 12px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; color: var(--muted); white-space: nowrap; font-weight: 500 }
 
 /* A copyable address */
 .ipc { display: inline-flex; align-items: center; gap: 6px }
@@ -182,7 +198,13 @@ section { display: grid; gap: 12px; min-width: 0 }
 label.f { display: grid; gap: 5px }
 label.f > span { font-size: 13.5px; font-weight: 500 }
 .hint { font-size: 13px; color: var(--muted) }
-.hint.bad, p.bad, span.bad { color: var(--warn) }
+/* An error or a refusal said in a form or a panel: the theme's warning colour, bold, with a
+   ✕ before it, in both themes (never grey like a hint). An empty one (a status slot not yet
+   used) shows nothing. Not the query log's state chips (.state) or a band (.band.bad). */
+.hint.bad, p.bad, span.bad:not(.state), div.bad:not(.band), .small.bad, .bad-text { color: var(--warn); font-weight: 600 }
+.hint.bad:not(:empty)::before, p.bad:not(:empty)::before, span.bad:not(.state):not(:empty)::before,
+div.bad:not(.band):not(:empty)::before, .small.bad:not(:empty)::before, .bad-text:not(:empty)::before {
+  content: "✕"; content: "✕" / ""; display: inline-block; margin-right: 6px; font-weight: 700 }
 .nogap { gap: 0 }
 input.t, select.t, textarea.t { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface) }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px }
@@ -223,6 +245,13 @@ label.check input { margin-top: 4px; accent-color: var(--orange) }
 .steps .now .m { border-color: var(--orange); border-right-color: transparent; animation: s .8s linear infinite }
 .steps .failed .m { background: var(--bad-solid); border-color: var(--bad-solid) }
 .steps .failed .hint { color: var(--warn) }
+.steps .next .m { border-color: var(--orange); border-width: 3px }
+.steps .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px }
+.kv { display: grid; gap: 2px }
+/* A list to add to and remove from (primary.js): the zone primary's networks and zones. */
+.plist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px }
+.plist li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0 }
+.plist li .mono { overflow-wrap: anywhere }
 @media (prefers-reduced-motion: reduce) { .steps .now .m { animation: none } }
 .alert-box { border: 2px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 8px }
 .alert-box ul { margin: 0; padding-left: 18px }
@@ -249,6 +278,8 @@ details.ex > .exb { padding: 16px 18px; display: grid; gap: 14px; box-shadow: in
 .combo-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: 0 12px 32px rgba(6,20,38,.25); max-height: 70vh; overflow: auto; z-index: 20 }
 .opt { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line) }
 .opt:first-of-type { border-top: none }
+.opt.pick { cursor: pointer }
+.opt.pick:hover { background: var(--hover) }
 .opt .tagline { font-size: 12.5px; color: var(--muted) }
 .zcombo { width: min(440px, 100%) }
 #add-node { display: contents }
@@ -257,3 +288,38 @@ details.ex > .exb { padding: 16px 18px; display: grid; gap: 14px; box-shadow: in
 .zpanel .found b { font-size: 15px }
 .zpanel .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
 @media (max-width: 760px) { .combo { width: 100% } .head > .row { width: 100% } }
+
+/* The search in the top bar (shell.js, searchBox): the box, its results by type under it,
+   and on a phone an icon that opens it on its own row. */
+.search { flex: 1; min-width: 180px; max-width: 340px; margin-left: auto; position: relative }
+.search + .changes { margin-left: 0 }
+.search-box { position: relative }
+.search-box svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--topbar-muted); pointer-events: none }
+.search input { width: 100%; padding: 7px 10px 7px 32px; border: 1px solid rgba(159,199,231,.45); border-radius: var(--r); background: rgba(255,255,255,.08); color: var(--topbar-fg) }
+.search input::placeholder { color: var(--topbar-muted); opacity: 1 }
+.search input:focus-visible, .search-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px }
+.search-btn { display: none; width: 34px; height: 34px; place-items: center; border: none; border-radius: 4px; background: transparent; color: var(--topbar-fg); cursor: pointer; padding: 0 }
+.search-btn:hover { background: rgba(255,255,255,.1) }
+.search-res { position: absolute; right: 0; top: calc(100% + 6px); width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 540px); overflow: auto; overscroll-behavior: contain;
+  background: var(--surface); color: var(--fg); border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: 0 12px 32px rgba(6,20,38,.28); z-index: 20 }
+.search-grp + .search-grp { border-top: 1px solid var(--line) }
+.search-gh { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px 4px; font-size: 12.5px; font-weight: 600; color: var(--muted) }
+.search-gh span + span { font-weight: 400 }
+.search-opt { display: grid; gap: 1px; padding: 7px 14px; text-decoration: none; color: var(--fg); cursor: pointer; min-width: 0 }
+.search-opt.on { background: var(--hover); box-shadow: inset 3px 0 0 var(--sky) }
+.search-opt .t { display: flex; gap: 8px; align-items: baseline; font-weight: 500; overflow-wrap: anywhere; min-width: 0 }
+.search-opt .d { font-size: 13px; color: var(--muted); overflow-wrap: anywhere }
+.search-opt .tag { flex: none; font-size: 11.5px; font-weight: 500; padding: 0 7px; border: 1px solid var(--orange); border-radius: 999px }
+.search-note { padding: 14px; color: var(--muted); overflow-wrap: anywhere }
+.search-note.bad { color: var(--warn) }
+.search-foot { display: grid; gap: 2px; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--bg); font-size: 12.5px; color: var(--muted) }
+@media (max-width: 720px) {
+  nav.main:has(+ .search) { width: auto; flex: 1 1 calc(100% - 48px); min-width: 0 }
+  .search { order: 3; flex: none; min-width: 0; max-width: none; margin-left: 0 }
+  .search-btn { display: grid }
+  .search:not(.open) .search-box { display: none }
+  .search.open { order: 4; flex: 1 1 100%; width: 100% }
+  .search.open .search-btn { display: none }
+  .search.open + .changes { margin-left: auto }
+  .search-res { left: 0; right: 0; width: auto }
+}

@@ -4,11 +4,15 @@
 #   - the controller's image, pushed to the GitHub container registry as
 #     ghcr.io/<owner>/espdns-controller:<version>, its digest in
 #     espdns-<version>-controller-image.txt;
-#   - every chip image (firmware/images/*), generic: no board, address or site defaults built
-#     in, as the controller's builder imports them (espdns-<version>-image-<image>.tar.gz);
-#   - each catalog board's factory image (boards/*.json), one bin written at offset 0, with
-#     its ESP Web Tools manifest, the address "dhcp" in its board partition;
+#   - every chip image (firmware/images/*), generic and key-neutral: no board, address, keys
+#     or site defaults built in, as the controller imports them
+#     (espdns-<version>-image-<image>.tar.gz);
+#   - compose.yaml: controller/compose.user.yaml with that image by digest, what a user
+#     downloads (releases/latest/download/compose.yaml) and runs with docker compose up -d;
 #   - SHA256SUMS over all of them.
+#
+# No factory images: a new node is installed from the controller (Install over USB), which
+# writes its keys and address with the chip image.
 #
 # Nothing here signs anything, and the release key is never here: a person signs
 # SHA256SUMS afterwards with one docker command, the key on standard input, adds
@@ -87,6 +91,7 @@ jobs:
           - image: esp32c6
           - image: esp32p4
           - image: esp32p4-rev1
+          - image: esp32s3-eth
           - image: esp32s3-octal
           - image: esp32s3-quad
     steps:
@@ -143,7 +148,7 @@ jobs:
           printf '%s' "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
           trap 'docker logout "$registry" >/dev/null' EXIT
           docker build --pull \
-            --build-context boards=boards --build-context version=. --build-context keys=firmware/keys \
+            --build-context boards=boards --build-context version=. --build-context keys=keys \
             --label org.opencontainers.image.version="$VERSION" \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
@@ -176,8 +181,9 @@ jobs:
         with:
           path: build/release/artifacts
 
-      # espdns release build: the chip images' tarballs, the factory images and manifests, the
-      # controller image's reference, SHA256SUMS; unsigned
+      # espdns release build: the chip images' tarballs (every catalog board's among them), the
+      # controller image's reference, compose.yaml (controller/compose.user.yaml with that
+      # image, by digest: what a user downloads and runs), SHA256SUMS; unsigned
       - name: Release files
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -187,10 +193,12 @@ jobs:
           want=$(find firmware/images -mindepth 1 -maxdepth 1 -printf "%f\n" | sort | xargs)
           have=$(find build/release/images -mindepth 1 -maxdepth 1 -printf "%f\n" | sort | xargs)
           [ "$want" = "$have" ] || { echo "::error::chip images $have, want $want"; exit 1; }
+          ref=build/release/artifacts/controller-image/espdns-$VERSION-controller-image.txt
+          sh scripts/release/user-compose.sh controller/compose.user.yaml "$(cat "$ref")" > build/release/compose.yaml
           cd controller
           CGO_ENABLED=0 go run ./cmd/espdns release build -version "$VERSION" -images ../build/release/images \
             -catalog ../boards -out ../build/release/dist \
-            -include "../build/release/artifacts/controller-image/espdns-$VERSION-controller-image.txt"
+            -include "../$ref" -include ../build/release/compose.yaml
           cd ../build/release/dist && sha256sum -c SHA256SUMS
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2 (v4)
@@ -215,8 +223,8 @@ jobs:
           name: release-${{ needs.version.outputs.version }}
           path: build/release/dist
 
-      # Its notes the version's changelog (scripts/release/notes.sh); a 0.x version is a
-      # pre-release. A release already there for the tag, draft or not, is refused, not
+      # Its notes the version's changelog (scripts/release/notes.sh). A full release, 0.x
+      # too, so releases/latest/download/compose.yaml finds it. A release already there for the tag, draft or not, is refused, not
       # changed: delete it first.
       - name: Draft release
         env:
@@ -230,7 +238,6 @@ jobs:
             echo "::error::$GH_REPO already has a release for $tag: delete it first (a release is never changed in place)"; exit 1
           fi
           sh scripts/release/notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
-          pre=(); case $VERSION in 0.*) pre=(--prerelease) ;; esac
-          gh release create "$tag" --draft --verify-tag "${pre[@]}" --title "espDNS $VERSION" \
+          gh release create "$tag" --draft --verify-tag --title "espDNS $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md" build/release/dist/*
           echo "draft release for $tag with $(find build/release/dist -type f | wc -l) files: sign its SHA256SUMS, add SHA256SUMS.sig, publish it (docs/releasing.md)"

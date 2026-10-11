@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "load.h"
 #include "svc.h"
 
 typedef enum {
@@ -54,12 +55,19 @@ enum {
     HR_FWD_SLOW = 1u << 19,   /* degraded: the default forwarders are too slow for the queries
                                * the node is asked (health_fwd_slow): queries to them are shed
                                * (SERVFAIL at once), or wait long, or most go unanswered */
-    HR_NBITS = 20
+    HR_OVERLOADED = 1u << 20, /* degraded: more UDP queries come than the workers can answer
+                               * (load.h, load_overloaded): a steady share of them was dropped
+                               * over the last LOAD_WINDOW_MS; cached and local answers go on at
+                               * the rate the node can answer */
+    HR_NO_KEYS = 1u << 21,    /* degraded: setup mode, the node has no keys (keys_node.h): it
+                               * answers on its board defaults and refuses every release */
+    HR_NBITS = 22
 };
 /* The reasons that make an answering node degraded. */
 #define HR_DEGRADED_MASK \
     (HR_SD | HR_BLOCKING | HR_ZONE_EXPIRED | HR_ZONE_REFRESH | HR_UPSTREAM | HR_LOW_MEMORY | HR_BOARD | HR_CONFIG | \
-     HR_HOSTED | HR_SVC_FAILED | HR_OLDER_COPY | HR_FWD_STALLED | HR_FWD_SLOW)
+     HR_HOSTED | HR_SVC_FAILED | HR_OLDER_COPY | HR_FWD_STALLED | HR_FWD_SLOW | HR_OVERLOADED | \
+     HR_NO_KEYS)
 
 /* Thresholds. */
 #define HEALTH_ZONE_FAILS        3       /* SOA checks or transfers failed in a row */
@@ -104,6 +112,7 @@ typedef struct {
     bool link, address;
     bool updating;      /* a release is being received */
     bool board_missing; /* no usable board definition */
+    bool no_keys;       /* setup mode: no keys (keys_node_setup) */
     bool sd_slot;       /* the board has an SD slot */
     bool sd_mounted;
     bool sd_pending;    /* still mounting, within its boot timeout */
@@ -111,6 +120,7 @@ typedef struct {
     int zones_expired, zones_failing;
     health_fwd_t fwd;   /* the default forwarders (health_upstream_get, flight_counts) */
     bool fwd_stalled;   /* the forward loop missed its watchdog (supervisor_fwd_stalled) */
+    load_window_t load; /* UDP queries received and dropped in the last LOAD_WINDOW_MS (load_get) */
     uint32_t heap_free; /* internal RAM, bytes */
     bool config_error;  /* settings_error() */
     bool config_trial;  /* settings_on_trial() */

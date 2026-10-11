@@ -78,7 +78,8 @@ static void node(mx_t *w)
         uint8_t kind;
         const char *name;
     } K[] = { { REL_FIRMWARE, "firmware" }, { REL_CONFIG, "config" },       { REL_ZONES, "zones" },
-              { REL_BLOCKLIST, "blocklist" }, { REL_OVERRIDES, "overrides" }, { REL_CONTROL, "control" } };
+              { REL_BLOCKLIST, "blocklist" }, { REL_OVERRIDES, "overrides" }, { REL_CONTROL, "control" },
+              { REL_KEYS, "keys" } };
     for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++)
         one(w, "espdns_release_seq", "kind", K[i].name, ota_seq(K[i].kind));
 
@@ -141,6 +142,10 @@ static void queries(mx_t *w)
     upq_stats_t us;
     if (server_forward_stats(&us))
         mx_forward(w, &us, fzone_name, NULL);
+    uint64_t full_ms;
+    uint32_t expired;
+    if (server_load_totals(&full_ms, &expired))
+        mx_load(w, full_ms, expired);
 }
 
 static void cache(mx_t *w)

@@ -28,6 +28,8 @@ import (
 //	POST /api/reauth    {"password"} (JSON): the password again, for what needs it (a
 //	                    backup, a config's Wi-Fi password shown): {"reauth", "expires"},
 //	                    a grant sent once in X-Reauth
+//	POST /api/password  {"password"} (JSON): a new password for the logged-in user, behind
+//	                    the password asked again (X-Reauth); every session ends, this one too
 //	POST /api/setup/password
 //	                    {"user", "password"} (JSON; "user" "": admin): the first run's
 //	                    password, set from the browser only while none is set and only by a
@@ -137,16 +139,23 @@ func safe(method string) bool { return method == http.MethodGet || method == htt
 
 // Public paths need no session: the login page and what it loads, and the login API.
 var publicPaths = map[string]bool{
-	"/login.html": true, "/style.css": true, "/common.js": true,
+	"/login.html": true, "/shell.css": true, "/common.js": true,
 	"/api/session": true, "/api/login": true, "/api/setup/password": true,
 }
 
 // Public says whether path is open without a session: the login page and its assets, the
-// login API (the first run's password too: it refuses once one is set), and the static
-// scripts and styles (code from the repo, no data).
+// login API (the first run's password too: it refuses once one is set), the static
+// scripts and styles (code from the repo, no data), and the pages' icons and pictures
+// (web/img/: the favicon, the login page's mascot).
 func Public(p string) bool {
 	if path.Clean(p) != p { // "/./api/x.js": the mux sends it to the clean path, checked again
 		return false
+	}
+	if strings.HasPrefix(p, "/img/") {
+		switch path.Ext(p) {
+		case ".ico", ".png", ".webp":
+			return true
+		}
 	}
 	return publicPaths[p] || !strings.HasPrefix(p, "/api/") && !strings.HasPrefix(p, "/build/") &&
 		(strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".css"))
@@ -224,6 +233,7 @@ func (a *Auth) Routes(mux interface {
 	mux.HandleFunc("POST /api/login", a.handleLogin)
 	mux.HandleFunc("POST /api/logout", a.handleLogout)
 	mux.HandleFunc("POST /api/reauth", a.handleReauth)
+	mux.HandleFunc("POST /api/password", a.handlePassword)
 	mux.HandleFunc("POST /api/setup/password", a.handleFirstPassword)
 }
 
@@ -432,4 +442,42 @@ func (a *Auth) handleReauth(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("reauth: %s from %s", c.s.User, r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]any{"reauth": g, "expires": until})
+}
+
+// handlePassword changes the password from the browser (the account panel): the session's
+// user keeps their name, the new password is checked as espdns passwd checks it, and the
+// old one must have been given again just before (a grant from /api/reauth in X-Reauth,
+// taken only once the new password is good). Every session ends, this one too (the hash
+// changed: liveLocked), and its cookie is cleared; the page goes to the login.
+func (a *Auth) handlePassword(w http.ResponseWriter, r *http.Request) {
+	c, _ := r.Context().Value(ctxKey{}).(ctxSession)
+	if c.cookie == "" {
+		httpError(w, http.StatusUnauthorized, "log in first")
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := CheckPassword(body.Password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password: " + err.Error(), "field": "password"})
+		return
+	}
+	if !a.TakeReauth(w, r) {
+		return
+	}
+	a.verify.Lock() // one password hash at a time, as the logins
+	err := SetPassword(a.path, c.s.User, body.Password)
+	a.verify.Unlock()
+	if err != nil {
+		log.Printf("password: not changed for %s: %v", c.s.User, err)
+		httpError(w, http.StatusInternalServerError, "the password could not be saved: "+err.Error())
+		return
+	}
+	a.Logout(c.cookie)
+	log.Printf("password: changed by %s from %s; every session ended", c.s.User, r.RemoteAddr)
+	http.SetCookie(w, a.cookie(r, "", -1))
+	writeJSON(w, http.StatusOK, map[string]any{"logged_in": false})
 }

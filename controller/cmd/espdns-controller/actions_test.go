@@ -355,6 +355,30 @@ func TestRebootPending(t *testing.T) {
 	}
 }
 
+// Restart (the node page's): a coordinated reboot whether or not a release waits for one,
+// never of the last healthy node.
+func TestReboot(t *testing.T) {
+	k := newTestKey(t)
+	n, peer := newCtlNode(t, k, false), newCtlNode(t, k, false)
+	j, err := runAction(t, k, settings.Settings{Nodes: []string{n.addr, peer.addr}}, "reboot", `{"node":"`+n.addr+`"}`)
+	if err != nil || j.State != jobs.Done {
+		t.Fatalf("%+v %v", j, err)
+	}
+	if got := n.commands(); len(got) != 1 || got[0] != "reboot" || len(peer.commands()) != 0 {
+		t.Fatalf("node %v, peer %v", got, peer.commands())
+	}
+	// The only node: refused, nothing sent.
+	only := newCtlNode(t, k, false)
+	j, _ = runAction(t, k, settings.Settings{Nodes: []string{only.addr}}, "reboot", `{"node":"`+only.addr+`"}`)
+	if j.State != jobs.Failed || !strings.Contains(j.Error, "only node") || len(only.commands()) != 0 {
+		t.Fatalf("the only node: %+v %v", j, only.commands())
+	}
+	// Not one in settings.json: refused before it is queued.
+	if _, err := runAction(t, k, settings.Settings{Nodes: []string{peer.addr}}, "reboot", `{"node":"192.0.2.9"}`); err == nil || !strings.Contains(err.Error(), "not in settings.json") {
+		t.Fatalf("an unlisted node: %v", err)
+	}
+}
+
 // A node found only over mDNS (any host can advertise one, and have a release signed for
 // another node's ID): identify, yes; flush and reboot-pending, only for settings.json's.
 func TestActionsOnlyListedChange(t *testing.T) {
@@ -367,7 +391,7 @@ func TestActionsOnlyListedChange(t *testing.T) {
 	if _, err := act.identify(json.RawMessage(`{"node":"198.51.100.66"}`)); err != nil {
 		t.Errorf("identify an mDNS node: %v", err)
 	}
-	for _, kind := range []string{"flush", "revert", "reboot-pending"} {
+	for _, kind := range []string{"flush", "revert", "reboot-pending", "reboot"} {
 		if _, err := act.kinds()[kind](json.RawMessage(`{"node":"198.51.100.66"}`)); err == nil || !strings.Contains(err.Error(), "not in settings.json") {
 			t.Errorf("%s an mDNS node: %v", kind, err)
 		}
@@ -396,7 +420,7 @@ func TestActionKeyReadAtRun(t *testing.T) {
 	settings.Save(settings.Path(dir), settings.Settings{Nodes: []string{n.addr}})
 	cur := k
 	act := actions{dataDir: dir, key: swapKey{&cur}, known: func() []string { return []string{n.addr} }}
-	for _, kind := range []string{"identify", "flush", "revert", "reboot-pending"} {
+	for _, kind := range []string{"identify", "flush", "revert", "reboot-pending", "reboot"} {
 		cur = k
 		fn, err := act.kinds()[kind](json.RawMessage(`{"node":"` + n.addr + `"}`))
 		if err != nil {

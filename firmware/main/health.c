@@ -15,6 +15,8 @@ health_t health_compute(const health_in_t *in)
         h.reasons |= HR_NO_ADDRESS;
     if (in->board_missing)
         h.reasons |= HR_BOARD;
+    if (in->no_keys)
+        h.reasons |= HR_NO_KEYS;
     /* Only what the config runs counts: a service that is off can't fail. */
     uint32_t on = in->enabled;
     /* A card still mounting within its boot timeout isn't a fault yet; a timed-out one is.
@@ -37,6 +39,9 @@ health_t health_compute(const health_in_t *in)
      * long, or most of them get no answer in time. */
     if ((on & SVC_BIT(SVC_FORWARDING)) && health_fwd_slow(&in->fwd, in->uptime_ms))
         h.reasons |= HR_FWD_SLOW;
+    /* The DNS service is always on: more queries than it can answer, a steady share dropped. */
+    if (load_overloaded(&in->load))
+        h.reasons |= HR_OVERLOADED;
     if (in->heap_free < HEALTH_LOW_MEMORY)
         h.reasons |= HR_LOW_MEMORY;
     if (in->config_error)
@@ -81,7 +86,8 @@ static const char *const REASON_NAME[HR_NBITS] = {
     "listeners failed", "no link", "no address", "sd card", "blocking", "zone expired",
     "zone refresh failing", "forwarders failing", "low memory", "no board definition", "config",
     "config on trial", "hosted zones", "reboot pending", "listeners stalled", "service failed",
-    "service restarting", "older copy", "forwarder task stalled", "forwarders slow",
+    "service restarting", "older copy", "forwarder task stalled", "forwarders slow", "overloaded",
+    "no keys",
 };
 
 bool health_fwd_slow(const health_fwd_t *f, uint32_t now_ms)

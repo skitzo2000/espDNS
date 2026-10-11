@@ -42,6 +42,7 @@ typedef enum {
     REL_BLOCKLIST,
     REL_OVERRIDES,
     REL_CONTROL,
+    REL_KEYS, /* new keys for the keys partition (keys.h, KEYS releases): recovery key only */
     REL_KIND_END
 } rel_kind_t;
 
@@ -55,12 +56,20 @@ typedef struct {
     uint8_t sha256[32];
 } rel_manifest_t;
 
-/* What this node trusts and who it is. keys[i] may be NULL (no key in that slot). */
+/* What this node trusts and who it is. keys[i] may be NULL (no key in that slot).
+ *
+ * retired is the release key a KEYS release replaced and kept (keys.h), or NULL. It is
+ * tried for key_id 0 when keys[0] doesn't verify, and is set only in the trust the stored
+ * slots are checked with at boot (ota_trust_stored), so what the node already holds stays
+ * in use until the controller re-pushes it with the new key; a push is checked with the
+ * trust that has none (ota_trust), so the old key signs nothing new. */
 typedef struct {
     const uint8_t *keys[REL_NKEYS];
+    const uint8_t *retired;
     uint8_t node_id[6];
     const char *board;     /* the chip image this firmware is, e.g. esp32s3-octal */
     const char *board_alt; /* also accepted, or NULL: a transitional image's old board name */
+    const char *sibling;   /* also accepted, or NULL: the sibling image (same chip and layout) */
 } rel_trust_t;
 
 /* Checks the header: format, signature, target, board, and last_seq < seq <= max_seq.
@@ -70,6 +79,11 @@ typedef struct {
 const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, uint64_t last_seq,
                        uint64_t max_seq, rel_manifest_t *m);
 extern const char rel_why_ahead[];
+
+/* What a KEYS release (REL_KEYS) must be besides what rel_verify checks, given m from it:
+ * signed with the recovery key (key_id 1; the release key never rewrites the keys) and
+ * addressed to this node by its ID (never ANY_NODE). NULL if it is, else a reason. */
+const char *rel_keys_check(const rel_manifest_t *m, const rel_trust_t *t);
 
 /*
  * The highest seq a node takes. Seqs are milliseconds since 1970 (the signer's

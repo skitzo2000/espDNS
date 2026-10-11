@@ -310,7 +310,7 @@ func TestPushIgnoresStatusIDAndSeq(t *testing.T) {
 	k := testKey(t)
 	pub := PublicRaw(k)
 	var got [][]byte
-	status := NodeStatus{NodeID: "30:ed:a0:00:00:01", Image: "esp32p4-rev1", Keys: []string{Fingerprint(pub), "x"},
+	status := NodeStatus{NodeID: "30:ed:a0:00:00:01", Image: "esp32p4-rev1", Keys: []string{Fingerprint(pub), "x"}, KeysSource: "partition",
 		Seq: map[string]uint64{"firmware": math.MaxUint64 - 1, "config": math.MaxUint64 - 1, "control": 1 << 62}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

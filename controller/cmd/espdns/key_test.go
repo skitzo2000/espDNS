@@ -124,6 +124,55 @@ func TestKeyImport(t *testing.T) {
 	}
 }
 
+// espdns key generate: a new release key, 0600, never over one there and never while a node
+// is listed; then a new fleet's import (no node listed) takes any key but the recovery key,
+// which <data>/keys/recovery.pub names without -recovery-pub.
+func TestKeyGenerateAndBootstrap(t *testing.T) {
+	dir := t.TempDir()
+	if err := cmdKey([]string{"generate", "-data", dir}); err != nil {
+		t.Fatal(err)
+	}
+	k, err := keys.FileSource{Path: keys.Path(dir)}.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdKey([]string{"generate", "-data", dir}); err == nil || !strings.Contains(err.Error(), "already there") {
+		t.Fatalf("again: %v", err)
+	}
+	if got, _ := (keys.FileSource{Path: keys.Path(dir)}).Key(); !got.Equal(k) {
+		t.Fatal("replaced")
+	}
+	listed := t.TempDir()
+	settings.Save(settings.Path(listed), settings.Settings{Nodes: []string{"192.0.2.53"}})
+	if err := cmdKey([]string{"generate", "-data", listed}); err == nil || !strings.Contains(err.Error(), "lists 1 node") {
+		t.Fatalf("with a node listed: %v", err)
+	}
+	if _, err := os.Stat(keys.Path(listed)); err == nil {
+		t.Fatal("made with a node listed")
+	}
+
+	// A new fleet: no node listed, an existing key imported, no public key files given.
+	fresh := t.TempDir()
+	mine, p := testKeyPEM(t)
+	stdin(t, string(p))
+	if err := cmdKey([]string{"import", "-data", fresh}); err != nil {
+		t.Fatalf("a new fleet's import: %v", err)
+	}
+	if got, _ := (keys.FileSource{Path: keys.Path(fresh)}).Key(); !got.Equal(mine) {
+		t.Fatal("not imported")
+	}
+	// The recovery key, known from the data directory's recovery.pub: refused.
+	rec, rp := testKeyPEM(t)
+	fresh2 := t.TempDir()
+	if _, err := keys.SetRecovery(fresh2, release.PublicRaw(rec), nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	stdin(t, string(rp))
+	if err := cmdKey([]string{"import", "-data", fresh2}); err == nil || !strings.Contains(err.Error(), "recovery key") {
+		t.Fatalf("the recovery key: %v", err)
+	}
+}
+
 func TestPasswd(t *testing.T) {
 	dir := t.TempDir()
 	auth.DefaultParams = auth.Params{Time: 1, MemoryKiB: 64, Threads: 1}

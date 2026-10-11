@@ -29,6 +29,8 @@ type observe struct {
 	ring    []release.QueryEntry
 	results map[string]uint64
 	shed    uint64 // queries shed at the forward loop's caps (SetShed)
+	qFullMs uint64 // ms the UDP receive queue was full (SetQueueLoad)
+	qExp    uint64 // queries shed past the UDP queue's deadline (SetQueueLoad)
 }
 
 // QueryLogCapacity is how many queries a fake node's ring holds unless QueryLogCap says.
@@ -125,6 +127,17 @@ func (n *Node) SetShed(v uint64) {
 	n.Do(func(n *Node) {
 		n.obsInit()
 		n.obs.shed = v
+	})
+}
+
+// SetQueueLoad sets how long, in ms, the UDP receive queue was full, and how many queries
+// were shed past its deadline (espdns_udp_queue_full_seconds_total,
+// espdns_udp_queue_expired_total).
+func (n *Node) SetQueueLoad(fullMs, expired uint64) {
+	n.Do(func(n *Node) {
+		n.obsInit()
+		n.obs.qFullMs = fullMs
+		n.obs.qExp = expired
 	})
 }
 
@@ -299,6 +312,10 @@ func (n *Node) metrics() string {
 	fmt.Fprintf(&b, "espdns_fwd_tcp_retries_total 0\n")
 	fam("espdns_fwd_select_errors_total", "counter", "Times the forward loop's select() failed.")
 	fmt.Fprintf(&b, "espdns_fwd_select_errors_total 0\n")
+	fam("espdns_udp_queue_full_seconds_total", "counter", "Time the queue for the UDP workers was full: what came meanwhile was dropped.")
+	fmt.Fprintf(&b, "espdns_udp_queue_full_seconds_total %d.%03d\n", n.obs.qFullMs/1000, n.obs.qFullMs%1000)
+	fam("espdns_udp_queue_expired_total", "counter", "Queries shed unanswered: they waited in the queue past its deadline (1 s).")
+	fmt.Fprintf(&b, "espdns_udp_queue_expired_total %d\n", n.obs.qExp)
 	fam("espdns_cache_hits_total", "counter", "Lookups answered from the cache.")
 	fmt.Fprintf(&b, "espdns_cache_hits_total %d\n", n.obs.results["cache"])
 	fam("espdns_cache_misses_total", "counter", "Lookups not in the cache.")

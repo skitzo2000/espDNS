@@ -30,6 +30,19 @@ import (
 //	                                applies (live, or at a restart); the file's pending changes, if any
 //	POST /api/nodes/{id}/settings   {"settings": <an edit>, "version"}: checked and added as a pending
 //	                                change of the node's config file; the form again
+//	POST /api/nodes/{id}/move       {"settings": {"network"}, "version"}: an edit that moves the node
+//	                                to another static address, written to its config file at once
+//	                                (an apply doesn't move a node); the page then pushes it (the job
+//	                                kind config-push: dry run, then the push), which confirms the
+//	                                node on its new address and lists it there in settings.json.
+//	                                {"file", "node", "to", "hash"}
+//	POST /api/nodes/{id}/move/undo  {"hash"}: the file put back as it was before a move whose push
+//	                                didn't go through, if it is still as the move wrote it (hash)
+//
+// An edit that moves the node is refused by the settings POST with "move": the new address
+// (moveError). A node whose config file is missing or doesn't read is answered with "write":
+// the files to write or correct ({"file", "draft"}; draft: a start for a new file, from what
+// the node reports), saved with POST /api/configs/{name} (configs.go) (writeError).
 //
 // A pending change is discarded, and applied, as any other: /api/changes. {id} is the node's
 // ID (its MAC, as /api/nodes has it): a change of address keeps it. Only a node in
@@ -49,6 +62,8 @@ type nodeSettingsServer struct {
 func (n nodeSettingsServer) routes(mux *routes) {
 	mux.HandleFunc("GET /api/nodes/{id}/settings", needLogin("a node's settings need", n.get))
 	mux.HandleFunc("POST /api/nodes/{id}/settings", needLogin("a node's settings need", n.edit))
+	mux.HandleFunc("POST /api/nodes/{id}/move", needLogin("moving a node needs", n.move))
+	mux.HandleFunc("POST /api/nodes/{id}/move/undo", needLogin("moving a node needs", n.moveUndo))
 }
 
 // statusErr is an error with its HTTP status.
@@ -64,10 +79,46 @@ func fail(code int, format string, a ...any) error {
 	return &statusErr{code: code, err: fmt.Errorf(format, a...)}
 }
 
+// moveError is an edit that moves the node to another address: not a pending change (the
+// apply's config rollout doesn't move a node), but a move (POST /api/nodes/{id}/move).
+type moveError struct {
+	to  string
+	err error
+}
+
+func (e *moveError) Error() string { return e.err.Error() }
+
+// writeError is a node whose config file is missing (it runs a pushed config this controller
+// has no copy of) or doesn't read: the files to write or correct, each with a draft for a
+// new one.
+type writeError struct {
+	files []configToWrite
+	err   error
+}
+
+type configToWrite struct {
+	File  string `json:"file"`
+	Draft string `json:"draft,omitempty"`
+}
+
+func (e *writeError) Error() string { return e.err.Error() }
+
 func writeErr(w http.ResponseWriter, err error) {
 	var se *statusErr
 	var fe *nodesettings.FieldError
+	var me *moveError
+	var we *writeError
 	switch {
+	case errors.As(err, &me):
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "field": "network", "move": me.to})
+	case errors.As(err, &we):
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "write": we.files})
 	case errors.As(err, &fe):
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
@@ -139,7 +190,8 @@ func (n nodeSettingsServer) load(id string) (*nodeSettings, error) {
 	case err != nil:
 		return nil, err
 	case f.Config == nil:
-		return nil, fail(http.StatusConflict, "%s doesn't pass the node's checks (%s): fix it on the Configs page", s.file, f.Error)
+		return nil, &writeError{files: []configToWrite{{File: s.file}},
+			err: fmt.Errorf("its config %s doesn't pass the node's checks (%s): correct it", s.file, f.Error)}
 	default:
 		s.saved = &f
 	}
@@ -216,11 +268,30 @@ func (n nodeSettingsServer) configOf(node nodes.Node, st release.NodeStatus, cs 
 	case len(match) == 1:
 		return match[0], nil
 	case len(match) > 1:
-		return "", fail(http.StatusConflict, "%s is the node of several configs (%s): keep one on the Configs page",
-			node.Addr, strings.Join(match, ", "))
+		we := &writeError{err: fmt.Errorf("%s is the node of several configs (%s): keep one, and give the others "+
+			"another name and address", node.Addr, strings.Join(match, ", "))}
+		for _, m := range match {
+			we.files = append(we.files, configToWrite{File: m})
+		}
+		return "", we
 	case st.Config.Source == "node":
-		return "", fail(http.StatusConflict, "%s runs a pushed config (seq %d) with no file here: save it as its config "+
-			"on the Configs page first, so a change keeps what it sets", node.Addr, st.Config.Seq)
+		// Its contents can't be read back from the node (only its name and address are in
+		// /status): written here, from what it reports, with what else it sets added by hand.
+		draft := &nodecfg.Config{Name: st.Config.Name, Network: configs.RunningNetwork(st)}
+		text, _ := json.MarshalIndent(draft, "", "  ")
+		name := ""
+		for _, c := range []string{strings.ToLower(st.Config.Name) + ".json", "node-" + strings.ReplaceAll(strings.ToLower(st.NodeID), ":", "") + ".json"} {
+			if configs.CheckName(c) == nil && !slices.Contains(names, c) {
+				name = c
+				break
+			}
+		}
+		err := fmt.Errorf("it runs a config (seq %d) this controller has no copy of, and a node can't send one back: "+
+			"write it here, so a change keeps what it sets", st.Config.Seq)
+		if name == "" {
+			return "", fail(http.StatusConflict, "%v (no free file name for it)", err)
+		}
+		return "", &writeError{files: []configToWrite{{File: name, Draft: string(text) + "\n"}}, err: err}
 	}
 	// A new file, named for the node.
 	for _, name := range []string{strings.ToLower(st.Config.Name) + ".json", "node-" + strings.ReplaceAll(strings.ToLower(st.NodeID), ":", "") + ".json"} {
@@ -392,11 +463,11 @@ func (n nodeSettingsServer) add(s *nodeSettings, e nodesettings.Edit, version, w
 		return changes.Change{}, &nodesettings.FieldError{Field: "network", Err: err}
 	}
 	// The apply's config rollout refuses a config that moves its node (configs.Payloads),
-	// and would stop with the file written: a move goes through the Configs page's push,
-	// which confirms the node on its new address.
+	// and would stop with the file written: a move is made on its own (move), pushed by the
+	// config-push job, which confirms the node on its new address.
 	if a, ok := spec.Moves(); ok {
-		return changes.Change{}, &nodesettings.FieldError{Field: "network", Err: fmt.Errorf("network: this moves %s to %s, "+
-			"which an apply doesn't do: push it from the Configs page, which confirms the node on its new address", s.node.Addr, a)}
+		return changes.Change{}, &moveError{to: a.String(), err: fmt.Errorf("network: this moves %s to %s, which isn't a change "+
+			"to apply: a move is made on its own, now. The node restarts onto its new address and is confirmed there", s.name, a)}
 	}
 
 	fields := nodesettings.Changed(base, cfg)
@@ -428,7 +499,7 @@ func (n nodeSettingsServer) add(s *nodeSettings, e nodesettings.Edit, version, w
 	}
 	if others := slices.DeleteFunc(to, func(h string) bool { return h == s.node.Addr }); len(others) > 0 {
 		return changes.Change{}, fail(http.StatusConflict, "the apply would send %s's config to %s too (the same name, or address): "+
-			"give each node its own name first (the Configs page)", s.name, strings.Join(others, ", "))
+			"give each node its own name first (its Name, on its node page)", s.name, strings.Join(others, ", "))
 	}
 	ch, err := n.store.Add(changes.Edit{Kind: changes.Config, Name: s.file, Text: text, Hash: version,
 		Summary: nodesettings.Summary(s.name, fields), Who: who})
@@ -476,4 +547,130 @@ func (n nodeSettingsServer) nameFree(s *nodeSettings, name string) error {
 		}
 	}
 	return nil
+}
+
+// move writes an edit that moves the node to another static address to its config file, at
+// once: the page pushes it next (config-push), or puts the file back (moveUndo) when that
+// doesn't go through. Only the address moves in it, on the file as saved, with no pending
+// changes of it waiting.
+func (n nodeSettingsServer) move(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Settings nodesettings.Edit `json:"settings"`
+		Version  string            `json:"version"`
+	}
+	if err := body(w, r, &req); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s, err := n.load(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	to, hash, err := n.writeMove(s, req.Settings, req.Version, auth.User(r.Context()))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"file": s.file, "node": s.node.Addr, "to": to, "hash": hash})
+}
+
+func (n nodeSettingsServer) writeMove(s *nodeSettings, e nodesettings.Edit, version, who string) (to, hash string, err error) {
+	switch {
+	case !s.listed:
+		return "", "", fail(http.StatusBadRequest, "%s is not in settings.json: only the nodes listed there are changed", s.node.Addr)
+	case s.stale != nil:
+		return "", "", s.stale
+	case len(s.pending) > 0:
+		return "", "", fail(http.StatusConflict, "%s has changes waiting to apply: apply or discard them first, then move it", s.name)
+	case s.saved == nil || s.cfg == nil:
+		return "", "", fail(http.StatusConflict, "%s's config isn't saved here yet: save a change of its settings and apply it first, "+
+			"then move it", s.name)
+	case version != s.view.Hash:
+		return "", "", fail(http.StatusConflict, "%s's settings changed since the form was read: read them again", s.name)
+	case e.Network == nil || e.Name != nil || e.Forwarders != nil || e.TZ != nil || e.Blocking != nil || e.QueryLog != nil || len(e.Reset) > 0:
+		return "", "", fail(http.StatusBadRequest, "a move changes only the address: save the other changes apart")
+	}
+	cfg, err := nodesettings.Apply(s.cfg, e)
+	if err != nil {
+		var fe *nodesettings.FieldError
+		if errors.As(err, &fe) {
+			return "", "", err
+		}
+		return "", "", &statusErr{code: http.StatusBadRequest, err: err}
+	}
+	text, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", "", err
+	}
+	text = append(text, '\n')
+	spec, err := configs.ParseSpec(s.node.Addr, s.file, text)
+	if err != nil {
+		return "", "", &statusErr{code: http.StatusBadRequest, err: err}
+	}
+	if err := spec.Refusal(s.st, n.catalog); err != nil {
+		return "", "", &statusErr{code: http.StatusBadRequest, err: err}
+	}
+	set, err := settings.Load(settings.Path(n.dataDir))
+	if err != nil {
+		return "", "", err
+	}
+	var known []string
+	if n.known != nil {
+		known = n.known()
+	}
+	if err := spec.AddressRefusal(configs.Addressing{Settings: set, Known: known}, &s.st); err != nil {
+		return "", "", &nodesettings.FieldError{Field: "network", Err: err}
+	}
+	a, ok := spec.Moves()
+	if !ok {
+		return "", "", fail(http.StatusBadRequest, "this doesn't move %s to another address: save it as a change", s.name)
+	}
+	f, err := configs.Save(n.dataDir, s.file, text, s.saved.Hash)
+	switch {
+	case errors.Is(err, configs.ErrChanged):
+		return "", "", &statusErr{code: http.StatusConflict, err: err}
+	case err != nil:
+		return "", "", err
+	}
+	logSave(n.dataDir, who, s.file, "moves "+s.node.Addr+" to "+a.String())
+	return a.String(), f.Hash, nil
+}
+
+// moveUndo puts the node's config file back as it was before a move, while it is still as
+// the move wrote it (its hash): the version the move replaced, the newest kept.
+func (n nodeSettingsServer) moveUndo(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Hash string `json:"hash"`
+	}
+	if err := body(w, r, &req); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s, err := n.load(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if s.saved == nil || req.Hash == "" || s.saved.Hash != req.Hash {
+		httpErr(w, http.StatusConflict, fmt.Errorf("%s changed since the move: not put back", s.file))
+		return
+	}
+	vs, err := configs.History(n.dataDir, s.file)
+	if err != nil || len(vs) == 0 {
+		httpErr(w, http.StatusConflict, fmt.Errorf("%s: no earlier version kept to put back", s.file))
+		return
+	}
+	old, err := configs.Store(n.dataDir).ReadVersion(s.file, vs[0].File)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	f, err := configs.Save(n.dataDir, s.file, old, req.Hash)
+	if err != nil {
+		writeErr(w, &statusErr{code: http.StatusConflict, err: err})
+		return
+	}
+	logSave(n.dataDir, auth.User(r.Context()), s.file, "put back: the move didn't go through")
+	writeJSON(w, map[string]string{"file": f.Name, "hash": f.Hash})
 }

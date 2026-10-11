@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>espDNS node</title>
+<link rel="icon" href="img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="img/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="node.css">
+</head>
+<body>
+<main class="nodepage">
+  <a class="crumb" href="./">‹ Nodes</a>
+  <div class="head">
+    <div class="lead">
+      <h1 id="name">Reading the node…</h1>
+      <div class="row" id="summary"></div>
+      <p id="why" hidden></p>
+    </div>
+    <div class="node-acts">
+      <div class="row" id="acts"></div>
+      <p class="hint" id="acts-why" hidden></p>
+    </div>
+  </div>
+  <div id="attention" hidden></div>
+  <section id="settings-sec" hidden>
+    <div class="sec-head"><h2>Settings</h2><span class="hint">Open a row to change it. Saved changes wait in “changes to apply”.</span></div>
+    <div id="settings"></div>
+  </section>
+  <section id="serves-sec" hidden>
+    <h2>What it serves</h2>
+    <div class="panel pad stack" id="serves"></div>
+  </section>
+  <section id="hour" hidden>
+    <div class="sec-head"><h2>Last hour</h2><a class="small muted" id="hour-log" href="querylog.html">Open its query log ›</a></div>
+    <div class="minis" id="minis"></div>
+  </section>
+  <details class="ex" id="recent" hidden><summary><b>Recent changes</b><span class="val" id="recent-val"></span></summary><div class="exb" id="recent-list"></div></details>
+  <details class="panel pad" id="details" hidden><summary>Details for troubleshooting</summary><div class="stack" id="details-body"></div></details>
+</main>
+<script type="module" src="node.js"></script>
+</body>
+</html>

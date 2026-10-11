@@ -11,7 +11,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
-// DNSPeer is a resolver clients use besides the nodes (a Technitium server, say). It is
+// DNSPeer is a resolver clients use besides the nodes (the zone primary, say). It is
 // never changed and has no /health: it counts as one healthy answering peer for the
 // last-healthy-node rule when, each time the rule is checked (right before a node is
 // changed or rebooted), it passes the DNS checks: a forwarded name resolves and its zones

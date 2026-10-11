@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"slices"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
-	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -75,12 +75,19 @@ type applyKind struct {
 	fetch *blocklist.Fetch
 	// adjust, in tests only, shortens each plan's waits after it is built.
 	adjust func(*fleet.Plan)
+	// now is the clock refresh.json's times are from (nil: time.Now; a test's), rnd the
+	// jitter's (nil: rand.Float64).
+	now func() time.Time
+	rnd func() float64
 }
 
 type applyParams struct {
 	Canary       string   `json:"canary,omitempty"`
 	SoakS        int      `json:"soak_s,omitempty"`
 	AcceptChange []string `json:"accept_change,omitempty"`
+	// refresh: a scheduled refresh's lists (refresh.go), compiled again and sent with no
+	// pending change: never from the API's params.
+	refresh []string
 }
 
 // question is what an apply stopped to ask.
@@ -88,6 +95,8 @@ type question struct {
 	Kind string `json:"kind"` // size-change
 	List string `json:"list"`
 	Text string `json:"text"`
+	// Over are the measures over the limit ("blocked 1000 → 600 (-40.0%)").
+	Over []string `json:"over,omitempty"`
 	// Params are the apply's params that take it: apply again with them.
 	Params applyParams `json:"params"`
 }
@@ -133,9 +142,13 @@ type applyResult struct {
 	Rollouts  []rolloutResult `json:"rollouts,omitempty"`
 	Questions []question      `json:"questions,omitempty"`
 	Notes     []string        `json:"notes,omitempty"`
+	// Refreshed are the lists a scheduled refresh sent again (refresh.go).
+	Refreshed []string `json:"refreshed,omitempty"`
 	// compiled are the lists compiled again: once every node they go to has them, the
 	// compiled files remembered for them are forgotten.
 	compiled []string
+	// built are the compiles' results by list (what each URL source gave: refresh.json).
+	built map[string]*blocklist.Result
 }
 
 type applyTracker struct {
@@ -219,8 +232,14 @@ func (a applyKind) checkParams(p applyParams) error {
 	if len(s.Nodes) == 0 {
 		return errors.New("no nodes in settings.json: an apply changes only the nodes listed there")
 	}
+	if len(s.InService()) == 0 {
+		return errors.New("every node in settings.json is out of service: return one to service first")
+	}
 	if p.Canary != "" && !slices.Contains(s.Nodes, p.Canary) {
 		return fmt.Errorf("canary: %s is not in settings.json", p.Canary)
+	}
+	if s.IsOutOfService(p.Canary) {
+		return fmt.Errorf("canary: %s is out of service", p.Canary)
 	}
 	if p.SoakS != 0 && (p.SoakS < int(rolling.DefaultSoak/time.Second) || p.SoakS > int(rolling.MaxSoak/time.Second)) {
 		return fmt.Errorf("soak_s: %v to %v, not %d s", rolling.DefaultSoak, rolling.MaxSoak, p.SoakS)
@@ -331,6 +350,7 @@ func (a applyKind) run(ctx context.Context, run *jobs.Run, p applyParams) (any, 
 		if ferr := a.store.ForgetListSums(res.compiled); ferr != nil {
 			run.Logf("the compiled lists' earlier files are still remembered: %v", ferr)
 		}
+		a.recordSent(run, res)
 		if aerr := a.store.Applied(ids); aerr != nil {
 			run.Logf("the changes went out, but are still listed as pending: %v", aerr)
 		}
@@ -364,31 +384,38 @@ func (a applyKind) apply(ctx context.Context, run *jobs.Run, t *applyTracker, p 
 	if err != nil {
 		return err
 	}
-	c.Pusher = &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(a.dataDir), Client: c.HTTP}
+	c.Pusher = a.pusher(k, c.HTTP)
 	run.Logf("signing with the release key %s", keys.Fingerprint(k))
 
 	// 1. Check.
 	if err := begin("check"); err != nil {
 		return err
 	}
-	pl, err := a.check(ctx, c, cs, res)
+	var pl applyPlan
+	if p.refresh != nil {
+		pl, err = a.checkRefresh(ctx, c, p.refresh, res)
+	} else {
+		pl, err = a.check(ctx, c, cs, res)
+	}
 	if err != nil {
 		return err
 	}
 	t.step("check", "done", "")
 
-	// 2. Write.
-	if err := begin("write"); err != nil {
-		return err
+	// 2. Write (a refresh writes no file).
+	if p.refresh == nil {
+		if err := begin("write"); err != nil {
+			return err
+		}
+		n, err := a.write(pl.writes)
+		if n > 0 {
+			res.Written = true
+		}
+		if err != nil {
+			return err
+		}
+		t.step("write", "done", fmt.Sprintf("%d file(s) written", n))
 	}
-	n, err := a.write(pl.writes)
-	if n > 0 {
-		res.Written = true
-	}
-	if err != nil {
-		return err
-	}
-	t.step("write", "done", fmt.Sprintf("%d file(s) written", n))
 
 	// 3. Compile.
 	if len(pl.compile) == 0 {
@@ -423,6 +450,22 @@ func (a applyKind) apply(ctx context.Context, run *jobs.Run, t *applyTracker, p 
 		t.step("dry run", "skipped", "nothing to send to the nodes")
 		t.step("push", "skipped", "nothing to send to the nodes")
 		return nil
+	}
+	return a.roll(ctx, run, t, c, reqs, res, begin)
+}
+
+// roll is an apply's last two steps (the node-in job's too, service.go): every rollout a dry
+// run, before any node is touched, then each pushed (the same request, DryRun off), one after
+// the other, each one node at a time. begin starts a step (refused once a stop is asked for).
+func (a applyKind) roll(ctx context.Context, run *jobs.Run, t *applyTracker, c *fleet.Client, reqs []applyReq,
+	res *applyResult, begin func(string) error) error {
+	stopped := func() bool {
+		select {
+		case <-run.Stop():
+			return true
+		default:
+			return false
+		}
 	}
 	t.update(func(pp *applyProgress) {
 		for _, r := range reqs {
@@ -536,24 +579,9 @@ func (a applyKind) apply(ctx context.Context, run *jobs.Run, t *applyTracker, p 
 // check reads the files and the nodes and says what to do; nothing is written.
 func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Change, res *applyResult) (applyPlan, error) {
 	pl := applyPlan{listTo: map[string][]string{}, configTo: map[string]string{}, statuses: map[string]release.NodeStatus{}}
-	s, err := settings.Load(settings.Path(a.dataDir))
+	s, hosts, err := a.readNodes(ctx, c, &pl, res)
 	if err != nil {
 		return pl, err
-	}
-	if len(s.Nodes) == 0 {
-		return pl, errors.New("no nodes in settings.json")
-	}
-	var unread []string
-	for _, h := range s.Nodes {
-		st, err := c.Status(ctx, h)
-		if err != nil {
-			unread = append(unread, fmt.Sprintf("%s (%v)", h, err))
-			continue
-		}
-		pl.statuses[h] = st
-	}
-	if len(unread) > 0 {
-		return pl, fmt.Errorf("every node in settings.json must answer before a change; these don't: %s", strings.Join(unread, ", "))
 	}
 
 	// Each file: on the version its first change edits, or one an apply that stopped wrote.
@@ -638,8 +666,11 @@ func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Chan
 		}
 		// The node of the config as it becomes, as it is, or as it was before an apply
 		// that stopped wrote it (a change that renames the node, or moves its address).
-		to := configNodes(a.dataDir, w.name, [][]byte{w.text, w.cur.Text, a.store.Base(w.head)}, s.Nodes, pl.statuses)
-		if len(to) == 0 {
+		to := configNodes(a.dataDir, w.name, [][]byte{w.text, w.cur.Text, a.store.Base(w.head)}, hosts, pl.statuses)
+		if len(to) == 0 && len(s.OutOfService) > 0 {
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: no node in service runs it (by its name or address): saved, sent to none "+
+				"(a node out of service gets its config when it returns)", w.name))
+		} else if len(to) == 0 {
 			res.Notes = append(res.Notes, fmt.Sprintf("%s: no node in settings.json runs it (by its name or address): saved, sent to none", w.name))
 		}
 		for _, h := range to {
@@ -647,8 +678,8 @@ func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Chan
 			// refused here, before any file is written.
 			if sp, err := configs.ParseSpec(h, w.name, w.text); err == nil {
 				if a, ok := sp.Moves(); ok {
-					return pl, fmt.Errorf("%s moves %s to %s, which an apply doesn't do: discard the change, and push the config "+
-						"from the Configs page, which confirms the node on its new address", w.name, h, a)
+					return pl, fmt.Errorf("%s moves %s to %s, which an apply doesn't do: discard the change, and change its "+
+						"address on its node page, where it is moved on its own and confirmed on its new address", w.name, h, a)
 				}
 			}
 			if o, ok := pl.configTo[h]; ok {
@@ -670,12 +701,12 @@ func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Chan
 		}
 	}
 	if defsChanged || len(srcChanged) > 0 {
-		if err := a.checkLists(pl.statuses, s.Nodes, final, srcChanged, &pl, res); err != nil {
+		if err := a.checkLists(pl.statuses, hosts, final, srcChanged, &pl, res); err != nil {
 			return pl, err
 		}
 	}
 
-	// The firmware updates.
+	// The firmware updates, to the nodes in service they name.
 	for _, ch := range cs {
 		if ch.Kind != changes.Firmware {
 			continue
@@ -688,9 +719,120 @@ func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Chan
 				return pl, fmt.Errorf("%s: %s is not in settings.json", ch.Summary, h)
 			}
 		}
+		ch.Nodes = slices.DeleteFunc(slices.Clone(ch.Nodes), s.IsOutOfService)
+		if len(ch.Nodes) == 0 {
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: sent to none (out of service)", ch.Summary))
+			continue
+		}
 		pl.firmware = append(pl.firmware, ch)
 	}
 	return pl, nil
+}
+
+// readNodes reads settings.json and every node in service in it (hosts), into the plan:
+// each must answer. A node out of service is skipped, and said so in the notes: it is sent
+// nothing, and brought up to date when it returns to service.
+func (a applyKind) readNodes(ctx context.Context, c *fleet.Client, pl *applyPlan, res *applyResult) (s settings.Settings, hosts []string, err error) {
+	s, err = settings.Load(settings.Path(a.dataDir))
+	if err != nil {
+		return s, nil, err
+	}
+	if len(s.Nodes) == 0 {
+		return s, nil, errors.New("no nodes in settings.json")
+	}
+	for _, h := range s.OutOfService {
+		res.Notes = append(res.Notes, h+": skipped: out of service")
+	}
+	hosts = s.InService()
+	if len(hosts) == 0 {
+		return s, nil, errors.New("every node in settings.json is out of service: return one to service first")
+	}
+	var unread []string
+	for _, h := range hosts {
+		st, err := c.Status(ctx, h)
+		if err != nil {
+			unread = append(unread, fmt.Sprintf("%s (%v)", h, err))
+			continue
+		}
+		pl.statuses[h] = st
+	}
+	if len(unread) > 0 {
+		return s, nil, fmt.Errorf("every node in service must answer before a change (take one that is off or broken out of service "+
+			"from its node page); these don't: %s", strings.Join(unread, ", "))
+	}
+	return s, hosts, nil
+}
+
+// checkRefresh is a scheduled refresh's check (refresh.go): every node read, as for an
+// apply, and the lists to compile again, each to the nodes that run it (as checkLists
+// finds them). Nothing to write.
+func (a applyKind) checkRefresh(ctx context.Context, c *fleet.Client, lists []string, res *applyResult) (applyPlan, error) {
+	pl := applyPlan{listTo: map[string][]string{}, configTo: map[string]string{}, statuses: map[string]release.NodeStatus{}}
+	_, hosts, err := a.readNodes(ctx, c, &pl, res)
+	if err != nil {
+		return pl, err
+	}
+	defs, _, err := blocking.Load(a.dataDir)
+	if err != nil {
+		return pl, err
+	}
+	for _, name := range lists {
+		l, ok := defs.Lookup(a.dataDir, name)
+		if !ok || l.IsOverrides() {
+			return pl, fmt.Errorf("no list %s in %s", name, blocking.DefsFile)
+		}
+		if err := l.Ready(a.dataDir); err != nil {
+			return pl, fmt.Errorf("%s: %v", name, err)
+		}
+		to := a.runs(pl.statuses, hosts, name)
+		if len(to) == 0 && len(defs.Lists) == 1 && !a.anyRuns(pl.statuses, hosts, defs) {
+			to = slices.Clone(hosts)
+		}
+		if len(to) == 0 {
+			res.Notes = append(res.Notes, fmt.Sprintf("the list %s is on no node: compiled, sent to none", name))
+		}
+		pl.compile = append(pl.compile, l)
+		pl.listTo[name] = to
+	}
+	return pl, nil
+}
+
+// recordSent records, for the lists compiled again and sent, the versions of their URL
+// sources the nodes now have (refresh.json): the schedule's next check compares with them.
+func (a applyKind) recordSent(run *jobs.Run, res *applyResult) {
+	if len(res.built) == 0 {
+		return
+	}
+	defs, _, err := blocking.Load(a.dataDir)
+	if err != nil {
+		return
+	}
+	st, _ := settings.Load(settings.Path(a.dataDir))
+	now := a.clock()
+	err = blocking.UpdateRefresh(a.dataDir, func(rf *blocking.Refresh) {
+		for name, r := range res.built {
+			if l, ok := defs.Lookup(a.dataDir, name); ok && !l.IsOverrides() {
+				rf.Sent(l, l.FetchedOf(r), now, st.Refresh(), a.jitter())
+			}
+		}
+	})
+	if err != nil {
+		run.Logf("the blocklists' refresh state (%s) wasn't written: %v", blocking.RefreshFile, err)
+	}
+}
+
+func (a applyKind) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+func (a applyKind) jitter() float64 {
+	if a.rnd != nil {
+		return a.rnd()
+	}
+	return rand.Float64()
 }
 
 // checkLists finds the lists to compile again and their nodes.
@@ -865,9 +1007,15 @@ func (a applyKind) compileLists(ctx context.Context, run *jobs.Run, p applyParam
 		if err := l.Ready(a.dataDir); err != nil {
 			return fmt.Errorf("%s: %v", l.Name, err)
 		}
-		_, sc, err := ck.compile(ctx, run, l, slices.Contains(p.AcceptChange, l.Name))
+		out, sc, err := ck.compile(ctx, run, l, slices.Contains(p.AcceptChange, l.Name))
+		if out.Result != nil {
+			if res.built == nil {
+				res.built = map[string]*blocklist.Result{}
+			}
+			res.built[l.Name] = out.Result
+		}
 		if sc != nil {
-			q := question{Kind: "size-change", List: l.Name,
+			q := question{Kind: "size-change", List: l.Name, Over: sc.Change.Over,
 				Text: fmt.Sprintf("%s changed more than its limit (%s): apply it anyway, or discard the change and keep the list the nodes have",
 					l.Name, strings.Join(sc.Change.Over, ", "))}
 			q.Params = p
@@ -911,7 +1059,7 @@ func (a applyKind) requests(p applyParams, pl applyPlan) ([]applyReq, error) {
 	}
 	inOrder := func(hs []string) []string {
 		var out []string
-		for _, h := range s.Nodes {
+		for _, h := range s.InService() {
 			if slices.Contains(hs, h) {
 				out = append(out, h)
 			}
@@ -953,7 +1101,7 @@ func (a applyKind) requests(p applyParams, pl applyPlan) ([]applyReq, error) {
 		for _, f := range files {
 			names = append(names, f.Name)
 		}
-		if err := add("hosted zones", rolling.Web{Kind: "zones", Nodes: s.Nodes, Zones: names, EmptyZones: len(names) == 0}); err != nil {
+		if err := add("hosted zones", rolling.Web{Kind: "zones", Nodes: s.InService(), Zones: names, EmptyZones: len(names) == 0}); err != nil {
 			return nil, err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -32,10 +33,12 @@ import (
 //	                                                            keeps, as espdns revert
 //	reboot-pending  {"node": "..."}                             a coordinated reboot of a node a release left
 //	                                                            waiting for one, as make fleet-reboot-pending
+//	reboot          {"node": "..."}                             a coordinated reboot (the node page's Restart),
+//	                                                            pending or not, as espdns reboot
 //
 // The node must be one the controller knows: the page can't make it sign a release for any
 // address. Identify takes any node it knows (found over mDNS or in settings.json), to tell
-// a new board from the others; flush, pause, revert and reboot-pending only a node in settings.json, as
+// a new board from the others; flush, pause, revert, reboot and reboot-pending only a node in settings.json, as
 // the fleet-* targets run with -mdns 0. A release is signed for the node ID the address
 // reports, so a host that only advertises itself over mDNS could have one signed for
 // another node's ID and replay it there: an identify (the LED flickers) is harmless, a
@@ -60,11 +63,14 @@ type actions struct {
 	client func() *fleet.Client
 	// http reaches the nodes for identify and flush; nil: the Pusher's default.
 	http *http.Client
+	// healthy is how long a key rotation waits for each node to be in service again (0:
+	// rotation's default; a test's shorter).
+	healthy time.Duration
 }
 
 func (a actions) kinds() map[string]jobs.Kind {
 	return map[string]jobs.Kind{"identify": a.identify, "flush": a.flush, "pause": a.pause, "revert": a.revert,
-		"reboot-pending": a.rebootPending}
+		"reboot-pending": a.rebootPending, "reboot": a.reboot, "key-rotate": a.keyRotate}
 }
 
 type nodeParams struct {
@@ -122,6 +128,14 @@ func (a actions) signer() (*ecdsa.PrivateKey, error) {
 		return nil, fmt.Errorf("the release key can't be used, so no actions: %v", err)
 	}
 	return k, nil
+}
+
+// pusher signs with the release key k for the nodes pinned in the data directory, and, while
+// a key rotation is under way, for a node that has its new keys already with the new
+// release key (release.Pusher.Alt, keys.Alternates): each node gets the key it trusts.
+func (a actions) pusher(k *ecdsa.PrivateKey, client *http.Client) *release.Pusher {
+	return &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(a.dataDir), Client: client,
+		Alt: keys.Alternates(a.key, log.Printf)}
 }
 
 func (a actions) identify(raw json.RawMessage) (jobs.Func, error) {
@@ -216,7 +230,8 @@ func (a actions) control(ctx context.Context, run *jobs.Run, host string, what s
 		return nil, err
 	}
 	run.Logf("%s: %s: signing a control release with the release key %s", host, what, keys.Fingerprint(k))
-	p := &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(a.dataDir), Unadopted: unadopted, Client: a.http}
+	p := a.pusher(k, a.http)
+	p.Unadopted = unadopted
 	r, err := p.PushRelease(ctx, host, release.Control, payload)
 	if err != nil {
 		return nil, err
@@ -226,6 +241,17 @@ func (a actions) control(ctx context.Context, run *jobs.Run, host string, what s
 }
 
 func (a actions) rebootPending(raw json.RawMessage) (jobs.Func, error) {
+	return a.rebootJob(raw, true)
+}
+
+// reboot restarts a node whether or not a release waits for it (the node page's Restart),
+// coordinated as reboot-pending is: only while another node or a DNS peer answers, then
+// waited for until it is back in service.
+func (a actions) reboot(raw json.RawMessage) (jobs.Func, error) {
+	return a.rebootJob(raw, false)
+}
+
+func (a actions) rebootJob(raw json.RawMessage, onlyIfPending bool) (jobs.Func, error) {
 	p, err := a.parse(raw, false, true)
 	if err != nil {
 		return nil, err
@@ -238,7 +264,7 @@ func (a actions) rebootPending(raw json.RawMessage) (jobs.Func, error) {
 		}
 		c := a.client()
 		c.Logf = run.Logf
-		c.Pusher = &release.Pusher{Key: k, KeyID: release.KeyRelease, Pins: pins.Open(a.dataDir), Client: c.HTTP}
+		c.Pusher = a.pusher(k, c.HTTP)
 		st, err := c.Status(ctx, host)
 		if err != nil {
 			return nil, err
@@ -246,20 +272,25 @@ func (a actions) rebootPending(raw json.RawMessage) (jobs.Func, error) {
 		switch {
 		case st.Reboot == nil:
 			return nil, fmt.Errorf("%s runs firmware from before the reboot command (no \"reboot\" in /status)", host)
-		case !st.Reboot.Pending:
+		case onlyIfPending && !st.Reboot.Pending:
 			return nil, fmt.Errorf("%s: no reboot pending, so not rebooted (this only reboots a node a release left waiting for one)", host)
 		}
-		run.Logf("%s: reboot pending (%s): rebooting it, coordinated: only while another node or a DNS peer answers",
-			host, strings.Join(st.Reboot.Reasons, ", "))
+		if st.Reboot.Pending {
+			run.Logf("%s: reboot pending (%s): rebooting it, coordinated: only while another node or a DNS peer answers",
+				host, strings.Join(st.Reboot.Reasons, ", "))
+		} else {
+			run.Logf("%s: restarting it, coordinated: only while another node or a DNS peer answers", host)
+		}
 		s, err := settings.Load(settings.Path(a.dataDir))
 		if err != nil {
 			return nil, err
 		}
-		// As make fleet-reboot-pending: the settings' nodes (no mDNS) and DNS peers count.
+		// As make fleet-reboot-pending: the settings' nodes in service (no mDNS) and DNS peers
+		// count.
 		if !slices.Contains(s.Nodes, host) {
 			return nil, fmt.Errorf("%s is no longer in settings.json: not rebooted", host)
 		}
-		ns, err := c.Discover(ctx, 0, s.Nodes)
+		ns, err := c.Discover(ctx, 0, s.InService())
 		if err != nil {
 			return nil, err
 		}
@@ -271,13 +302,13 @@ func (a actions) rebootPending(raw json.RawMessage) (jobs.Func, error) {
 			run.Logf("DNS peers: %s", strings.Join(s.DNSPeers, ", "))
 		}
 		c.Count(ctx, &plan, ns, nil)
-		if err := c.Reboot(ctx, plan, host, true); err != nil {
+		if err := c.Reboot(ctx, plan, host, onlyIfPending); err != nil {
 			if errors.Is(err, fleet.ErrSingle) {
 				err = fmt.Errorf("%w (add the other nodes or a DNS peer to settings.json; the CLI's -allow-single is not offered here)", err)
 			}
 			return nil, err
 		}
-		run.Logf("%s: rebooted, back in service, no reboot pending", host)
+		run.Logf("%s: rebooted, back in service", host)
 		return map[string]any{"node": host, "rebooted": true}, nil
 	}, nil
 }

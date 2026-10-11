@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,9 +59,7 @@ func dataDir(t *testing.T) string {
 	if _, err := keys.Import(keys.Path(dir), k, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := keys.ImportToken(keys.TokenPath(dir), "0123456789abcdef", false); err != nil {
-		t.Fatal(err)
-	}
+	write(t, dir, "keys/primary.token", []byte("0123456789abcdef"), 0o600) // an older controller's: never backed up
 	write(t, dir, "configs/dns2.json", []byte(`{"name": "dns2"}`), 0o600)
 	write(t, dir, "configs/.history/dns2.json.20261003-120000", []byte(`{"name": "dns2", "old": 1}`), 0o600)
 	write(t, dir, "configs/.pushed/02:00:00:00:00:11.json", []byte(`{"seq": 1}`), 0o600)
@@ -140,7 +139,7 @@ func tree(t *testing.T, dir string) map[string]node {
 func TestRoundTrip(t *testing.T) {
 	src := dataDir(t)
 	b, s := backup(t, src, Options{})
-	if s.Files != 12 || len(s.Skipped) != 1 || !strings.Contains(s.Skipped[0], "lists/link.bin: a symbolic link") {
+	if s.Files != 11 || len(s.Skipped) != 1 || !strings.Contains(s.Skipped[0], "lists/link.bin: a symbolic link") {
 		t.Errorf("summary %+v", s)
 	}
 	dst := filepath.Join(t.TempDir(), "data")
@@ -150,7 +149,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	want, got := tree(t, src), tree(t, dst)
 	for _, gone := range []string{"firmware", "firmware/builds", "firmware/builds/p4-ip101", "firmware/builds/p4-ip101/dns2.bin",
-		"configs/.tmp-123", "lists/link.bin"} {
+		"configs/.tmp-123", "lists/link.bin", "keys/primary.token"} {
 		delete(want, gone)
 	}
 	delete(want, "fleet.lock") // each its own: the restore takes the new directory's
@@ -170,12 +169,12 @@ func TestRoundTrip(t *testing.T) {
 	if fi, _ := os.Stat(filepath.Join(dst, "keys")); fi.Mode().Perm() != 0o700 {
 		t.Errorf("keys/ %v", fi.Mode())
 	}
-	if len(c.Checked) != 4 || !strings.Contains(strings.Join(c.Checked, "\n"), "fingerprint") {
+	if len(c.Checked) != 3 || !strings.Contains(strings.Join(c.Checked, "\n"), "fingerprint") {
 		t.Errorf("checked %v", c.Checked)
 	}
 	// The firmware too, when asked.
 	b, s = backup(t, src, Options{Firmware: true})
-	if s.Files != 13 {
+	if s.Files != 12 {
 		t.Errorf("with firmware: %+v", s)
 	}
 	dst2 := filepath.Join(t.TempDir(), "data")
@@ -413,16 +412,42 @@ func TestCraftedRefused(t *testing.T) {
 // Every restored entry is the controller user's only, whatever the backup says: directories
 // 0700, files 0600, no set-id or execute bits.
 func TestRestoredModes(t *testing.T) {
-	b := craft(t, nil, []entry{dir("data/keys/"), file("data/keys/primary.token", "0123456789abcdef"), dir("data/lists/"), file("data/lists/a.bin", "x"),
+	b := craft(t, nil, []entry{dir("data/keys/"), file("data/keys/other", "0123456789abcdef"), dir("data/lists/"), file("data/lists/a.bin", "x"),
 		{h: tar.Header{Typeflag: tar.TypeReg, Name: "data/run.sh", Mode: 0o4777, Size: 2}, data: "hi"}}, nil)
 	dst := filepath.Join(t.TempDir(), "d")
 	if _, err := Restore(bytes.NewReader(b), ids(t, pass), dst, RestoreOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for rel, want := range map[string]fs.FileMode{"": fs.ModeDir | 0o700, "keys": fs.ModeDir | 0o700, "keys/primary.token": 0o600, "run.sh": 0o600, "lists": fs.ModeDir | 0o700, "lists/a.bin": 0o600} {
+	for rel, want := range map[string]fs.FileMode{"": fs.ModeDir | 0o700, "keys": fs.ModeDir | 0o700, "keys/other": 0o600, "run.sh": 0o600, "lists": fs.ModeDir | 0o700, "lists/a.bin": 0o600} {
 		if fi, err := os.Stat(filepath.Join(dst, rel)); err != nil || fi.Mode() != want {
 			t.Errorf("%s: %v, want %v", rel, fi.Mode(), want)
 		}
+	}
+}
+
+// An older backup that carries a zone primary API token: restored without it (its sum
+// still checked), and the restore says so.
+func TestRestoreSkipsOldToken(t *testing.T) {
+	b := craft(t, nil, []entry{dir("data/keys/"), file("data/keys/primary.token", "0123456789abcdef"),
+		file("data/keys/technitium.token", "fedcba9876543210"), file("data/settings.json", "{}")}, nil)
+	dst := filepath.Join(t.TempDir(), "d")
+	c, err := Restore(bytes.NewReader(b), ids(t, pass), dst, RestoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"keys/primary.token", "keys/technitium.token"} {
+		if _, err := os.Lstat(filepath.Join(dst, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s restored: %v", rel, err)
+		}
+		if !strings.Contains(strings.Join(c.Checked, "\n"), rel+": an old zone primary API token, no longer used: not restored") {
+			t.Errorf("checked %v", c.Checked)
+		}
+	}
+	if slices.ContainsFunc(c.Entries, func(e Entry) bool { return strings.HasSuffix(e.Path, ".token") }) {
+		t.Errorf("entries %v", c.Entries)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "settings.json")); err != nil {
+		t.Fatal(err)
 	}
 }
 

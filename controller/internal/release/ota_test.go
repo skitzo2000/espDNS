@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,7 @@ func appImage() []byte {
 	copy(d[80:], "18:35:05")
 	copy(d[96:], "Oct  2 2026")
 	copy(d[144:], []byte{0xe3, 0x9e, 0x79, 0x9e, 0x00, 0x12, 0x4e, 0x2d, 0xff})
+	copy(b[600:], keysPartitionMark) // it reads the keys partition, as every build since
 	return b
 }
 
@@ -82,7 +84,7 @@ func TestPushFirmware(t *testing.T) {
 		switch r.URL.Path {
 		case "/status":
 			json.NewEncoder(w).Encode(map[string]any{"node_id": "30:ed:a0:00:00:01", "image": "esp32p4-rev1",
-				"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "seq": map[string]uint64{"firmware": 7}})
+				"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "keys_source": "partition", "seq": map[string]uint64{"firmware": 7}})
 		case "/ota":
 			got, _ = io.ReadAll(r.Body)
 			later = r.Header.Get("X-OTA-Reboot")
@@ -110,6 +112,36 @@ func TestPushFirmware(t *testing.T) {
 	if _, err := (&Pusher{Key: other, Pins: ledger}).PushFirmware(context.Background(), host, img, FirmwareOptions{Image: "esp32p4-rev1"}); err == nil ||
 		!strings.Contains(err.Error(), "fingerprint") || got != nil {
 		t.Fatal(err)
+	}
+}
+
+// A sibling image's app (boards.Siblings) goes to a node over the air, signed for the image the
+// node runs: the name it checks. Any other image is refused before anything is sent.
+func TestPushFirmwareSibling(t *testing.T) {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			json.NewEncoder(w).Encode(map[string]any{"node_id": "30:ed:a0:00:00:01", "image": "esp32s3-octal",
+				"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "keys_source": "partition", "seq": map[string]uint64{"firmware": 7}})
+		case "/ota":
+			got, _ = io.ReadAll(r.Body)
+			w.Write([]byte(`{"ok":true,"message":"ok, rebooting","rebooting":true}`))
+		}
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	p := &Pusher{Key: k, Pins: pinned(t, host, "30:ed:a0:00:00:01"), Now: func() time.Time { return time.UnixMilli(1_800_000_000_000) }}
+	img := appImage()
+	if _, err := p.PushFirmware(context.Background(), host, img, FirmwareOptions{Image: "esp32s3-quad"}); err == nil || got != nil {
+		t.Fatal("another chip image pushed:", err)
+	}
+	if _, err := p.PushFirmware(context.Background(), host, img, FirmwareOptions{Image: "esp32s3-eth"}); err != nil {
+		t.Fatal(err)
+	}
+	if !Verify(PublicRaw(k), got) || string(bytes.TrimRight(got[16:32], "\x00")) != "esp32s3-octal" || !bytes.Equal(got[HeaderLen:], img) {
+		t.Fatalf("signed for %q", bytes.TrimRight(got[16:32], "\x00"))
 	}
 }
 
@@ -169,7 +201,7 @@ func TestPushFirmwareMatchesPython(t *testing.T) {
 			switch r.URL.Path {
 			case "/status":
 				st := map[string]any{"node_id": "30:ed:a0:00:00:01", "board": "p4-ip101",
-					"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "seq": map[string]uint64{"firmware": 1759400000000}}
+					"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "keys_source": "partition", "seq": map[string]uint64{"firmware": 1759400000000}}
 				if c.image != "" {
 					st["image"] = c.image
 				}
@@ -213,5 +245,105 @@ func TestBuiltinAddress(t *testing.T) {
 		if a, k := BuiltinAddress([]byte(c.image)); a != c.addr || k != c.known {
 			t.Errorf("%q: %q %v", c.image, a, k)
 		}
+	}
+}
+
+// The keys markers of a firmware image (main/keys_node.h).
+func TestKeysOf(t *testing.T) {
+	const fp0, fp1 = "0123456789abcdef", "fedcba9876543210"
+	for _, c := range []struct {
+		image     string
+		partition bool
+		seed      []string
+		bad       bool
+	}{
+		{"\xE9... an image from before the keys partition", false, nil, false},
+		{"\xE9...espdns:keys=partition-v1\x00...", true, nil, false},
+		{"\xE9...espdns:keys=partition-v1\x00...espdns:keys-seed=" + fp0 + "," + fp1 + "\x00", true, []string{fp0, fp1}, false},
+		{"\xE9...espdns:keys=partition-v2\x00...", false, nil, false},
+		{"\xE9...espdns:keys=partition-v1\x00espdns:keys-seed=" + fp0 + "\x00", true, nil, true},
+		{"\xE9...espdns:keys=partition-v1\x00espdns:keys-seed=" + fp0 + ",xyz\x00", true, nil, true},
+		{"\xE9...espdns:keys=partition-v1\x00espdns:keys-seed=" + fp0 + "," + fp1, true, nil, true}, // no end
+	} {
+		k, err := KeysOf([]byte(c.image))
+		if k.Partition != c.partition || strings.Join(k.Seed, ",") != strings.Join(c.seed, ",") || (err != nil) != c.bad {
+			t.Errorf("%q: %+v %v", c.image, k, err)
+		}
+	}
+}
+
+// The keys guards (FirmwareKeysCheck): an app without the keys partition marker is a
+// downgrade to an embedded-key build; a node in setup mode takes nothing; a node on firmware
+// from before the keys partition (or that can't use it) takes only a build whose seed is its
+// own keys.
+func TestFirmwareKeysCheck(t *testing.T) {
+	const rel, rec = "0123456789abcdef", "fedcba9876543210"
+	neutral := appImage()
+	seeded := append(appImage(), "espdns:keys-seed="+rel+","+rec+"\x00"...)
+	otherSeed := append(appImage(), "espdns:keys-seed="+rel+",1111111111111111\x00"...)
+	old := appImage()
+	copy(old[600:], bytes.Repeat([]byte{0}, len(keysPartitionMark))) // no marker
+	badSeed := append(appImage(), "espdns:keys-seed="+rel+"\x00"...)
+	node := func(src string) NodeStatus { return NodeStatus{Keys: []string{rel, rec}, KeysSource: src} }
+	for _, c := range []struct {
+		name string
+		st   NodeStatus
+		app  []byte
+		want string // "" taken
+	}{
+		{"a neutral build, keys from the partition", node("partition"), neutral, ""},
+		{"a neutral build, keys seeded", node("seeded"), neutral, ""},
+		{"a seed build, keys from the partition", node("partition"), seeded, ""},
+		{"an embedded-key build", node("partition"), old, "downgrade"},
+		{"an embedded-key build, old node", node(""), old, "downgrade"},
+		{"an unreadable seed", node("partition"), badSeed, "keys marker"},
+		{"setup mode, no keys", node("none"), neutral, "setup mode"},
+		{"setup mode, corrupt keys", node("corrupt"), seeded, "Write keys only"},
+		{"an old node, a neutral build", node(""), neutral, "key-neutral"},
+		{"an old node, its own seed", node(""), seeded, ""},
+		{"an old node, another seed", node(""), otherSeed, "is not its keys"},
+		{"an old node reporting no keys", NodeStatus{}, seeded, "reports no keys"},
+		{"a node on its built-in keys, a neutral build", node("embedded"), neutral, "can't use its keys partition"},
+		{"a node on its built-in keys, its own seed", node("embedded"), seeded, ""},
+	} {
+		err := FirmwareKeysCheck("192.0.2.53", c.st, c.app)
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
+// PushFirmware checks the keys guards on the /status it reads, and the provenance check
+// (FirmwareOptions.Check) right before it signs: either failing, nothing is sent.
+func TestPushFirmwareGuards(t *testing.T) {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	var got []byte
+	src := "none"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			json.NewEncoder(w).Encode(map[string]any{"node_id": "30:ed:a0:00:00:01", "image": "esp32p4-rev1",
+				"keys": []string{Fingerprint(PublicRaw(k)), "x"}, "keys_source": src, "seq": map[string]uint64{"firmware": 7}})
+		case "/ota":
+			got, _ = io.ReadAll(r.Body)
+			w.Write([]byte(`{"ok":true,"message":"ok, rebooting","rebooting":true}`))
+		}
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	p := &Pusher{Key: k, Pins: pinned(t, host, "30:ed:a0:00:00:01"), Now: func() time.Time { return time.UnixMilli(1_800_000_000_000) }}
+	if _, err := p.PushFirmware(context.Background(), host, appImage(), FirmwareOptions{Image: "esp32p4-rev1"}); err == nil ||
+		!strings.Contains(err.Error(), "setup mode") || got != nil {
+		t.Fatalf("a node in setup mode: %v", err)
+	}
+	src = "partition"
+	checked := 0
+	bad := FirmwareOptions{Image: "esp32p4-rev1", Check: func(b []byte) error { checked++; return errors.New("provenance broken") }}
+	if _, err := p.PushFirmware(context.Background(), host, appImage(), bad); err == nil || err.Error() != "provenance broken" || got != nil || checked != 1 {
+		t.Fatalf("a failed check: %v (%d)", err, checked)
+	}
+	ok := FirmwareOptions{Image: "esp32p4-rev1", Check: func(b []byte) error { checked++; return nil }}
+	if _, err := p.PushFirmware(context.Background(), host, appImage(), ok); err != nil || got == nil || checked != 2 {
+		t.Fatalf("checked: %v (%d)", err, checked)
 	}
 }

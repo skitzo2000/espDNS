@@ -118,6 +118,9 @@ type List struct {
 	// internal_sources), kind hosts, domains, wildcard, adblock or rpz.
 	Sources []string `json:"sources,omitempty"`
 	Allow   []string `json:"allow,omitempty"`
+	// Unused are sources kept in the definition but not compiled: blocklists turned off on
+	// the Blocking page, to turn on again without looking them up.
+	Unused []string `json:"unused,omitempty"`
 	// Popular names never blocked by accident (a Tranco CSV or one per line), and names the
 	// list must not block at all: files in blocking/sources ("": none).
 	Popular     string `json:"popular,omitempty"`
@@ -181,7 +184,7 @@ func (l List) Check() error {
 		return errors.New("no sources: at least one to block or to allow")
 	}
 	seen := map[string]bool{}
-	for _, specs := range [][]string{l.Sources, l.Allow} {
+	for _, specs := range [][]string{l.Sources, l.Allow, l.Unused} {
 		for _, spec := range specs {
 			if err := CheckSource(spec); err != nil {
 				return err

@@ -146,7 +146,7 @@ static const char *try_slot(int i, uint8_t *buf)
     if (len < 0)
         return "unreadable";
     rel_manifest_t m;
-    const char *why = cfg_slot_check(buf, buf + REL_HEADER_LEN, (size_t)len, ota_trust(), &m);
+    const char *why = cfg_slot_check(buf, buf + REL_HEADER_LEN, (size_t)len, ota_trust_stored(), &m);
     if (why)
         return why;
     char err[96];

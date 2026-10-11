@@ -2,6 +2,7 @@ package blocklist
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -108,6 +109,9 @@ type Request struct {
 	Rand  io.Reader // nil: crypto/rand
 	// Logf, if set, is told each step as it starts and ends (a job's live progress).
 	Logf func(format string, args ...any)
+	// Each, if set, is given every entry read, with the index of its source in Sources:
+	// what the Blocking page's "check a site" looks up to name the list that blocks a name.
+	Each func(source int, e Entry)
 }
 
 func (r Request) logf(format string, args ...any) {
@@ -121,6 +125,9 @@ type SourceResult struct {
 	Source string `json:"source"` // kind:path
 	Allow  bool   `json:"allow"`
 	ParseStats
+	// Fetched is what a URL source's server sent: its content's hash and its validators
+	// (nil for a file), which a scheduled refresh compares with the next fetch (Check).
+	Fetched *Fetched `json:"fetched,omitempty"`
 }
 
 // Size is a build's size as the size-change check compares it.
@@ -185,18 +192,21 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return res, err
 	}
 	var entries []Entry
-	for _, s := range req.Sources {
+	for i, s := range req.Sources {
 		sr := SourceResult{Source: s.String(), Allow: s.Allow}
 		what := "block"
 		if s.Allow {
 			what = "allow"
 		}
 		req.logf("%s (%s): reading", sr.Source, what)
-		st, err := readSource(ctx, req.Fetch, req.Internal, s, func(e Entry) {
+		st, fetched, err := readSource(ctx, req.Fetch, req.Internal, s, func(e Entry) {
 			e.Allow = e.Allow || s.Allow
 			entries = append(entries, e)
+			if req.Each != nil {
+				req.Each(i, e)
+			}
 		})
-		sr.ParseStats = st
+		sr.ParseStats, sr.Fetched = st, fetched
 		res.Sources = append(res.Sources, sr)
 		if err != nil {
 			return res, fmt.Errorf("%s: %w", s.Path, err)
@@ -251,30 +261,37 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	return res, nil
 }
 
-// readSource parses one source, from its file or URL (Fetch.get).
-func readSource(ctx context.Context, f *Fetch, internal []string, s Source, emit func(Entry)) (ParseStats, error) {
+// readSource parses one source, from its file or URL (Fetch.get). For a URL it says what
+// was fetched (its hash and validators).
+func readSource(ctx context.Context, f *Fetch, internal []string, s Source, emit func(Entry)) (ParseStats, *Fetched, error) {
 	if !s.IsURL() {
 		f, err := os.Open(s.Path)
 		if err != nil {
-			return ParseStats{}, err
+			return ParseStats{}, nil, err
 		}
 		defer f.Close()
-		return Parse(f, s.Kind, emit)
+		st, err := Parse(f, s.Kind, emit)
+		return st, nil, err
 	}
-	resp, err := f.get(ctx, s.Path, internal)
+	resp, err := f.get(ctx, s.Path, internal, nil)
 	if err != nil {
-		return ParseStats{}, err
+		return ParseStats{}, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ParseStats{}, fmt.Errorf("HTTP %s", resp.Status)
+		return ParseStats{}, nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
 	lr := &io.LimitedReader{R: resp.Body, N: maxFetch + 1}
-	st, err := Parse(lr, s.Kind, emit)
+	h := sha256.New()
+	tee := io.TeeReader(lr, h)
+	st, err := Parse(tee, s.Kind, emit)
+	if err == nil {
+		_, err = io.Copy(io.Discard, tee) // the hash is of the whole body
+	}
 	if lr.N == 0 {
 		err = fmt.Errorf("more than %d MiB", maxFetch>>20)
 	}
-	return st, err
+	return st, fetchedOf(resp, h), err
 }
 
 // ReadSize reads a list file's size from its header (the start of the file is enough for
