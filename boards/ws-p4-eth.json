@@ -4,7 +4,7 @@
   "image": "esp32p4-rev1",
   "flash_mb": 32,
   "psram_mb": 32,
-  "tier": "community",
+  "tier": "tested",
   "ethernet": { "kind": "emac", "phy": "ip101", "addr": 1, "reset": 51 },
   "sd": { "kind": "sdmmc", "slot": 0, "width": 4, "ldo": 4 },
   "led": { "kind": "none" },

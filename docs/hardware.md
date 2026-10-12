@@ -13,6 +13,7 @@ release.
 | Guition JC-ESP32P4-M3-DEV | `p4-ip101` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one on a spare GPIO |
 | Waveshare ESP32-S3-ETH | `ws-s3-eth` | `esp32s3-eth` | 16 MB | 8 MB | Ethernet: W5500 over SPI. Optional PoE module (802.3af) | SPI, its own bus | WS2812 RGB on GPIO 21 |
 | Seeed XIAO ESP32S3 Sense | `xiao-s3-sense` | `esp32s3-octal` | 8 MB | 8 MB | Wi-Fi as it ships. Wired with an added W5500 module | SPI, on the Sense board | None usable: add one |
+| Waveshare ESP32-P4-ETH | `ws-p4-eth` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
 
 - The Guition ESP32-P4 is top of the pecking order: 32 MB of PSRAM keeps large blocklists
   in RAM. It's wired only; the on-board ESP32-C6 (Wi-Fi) isn't used. The entry is for P4
@@ -26,6 +27,8 @@ release.
   on D3 (GPIO 4). The user LED shares GPIO 21 with the SD card's chip select, so it's
   unusable. Wi-Fi transmit power is capped at 15 dBm (at 20 dBm it lost packets and the
   access point dropped it). PoE needs a separate splitter. The camera isn't used.
+- The Waveshare ESP32-P4-ETH has the same Ethernet as the Guition (IP101 on the chip's MAC)
+  and 32 MB of flash. It has a header for an optional PoE module and only a power LED.
 
 ## Untested boards
 
@@ -78,7 +81,6 @@ tested, and smaller boards join once they have been.
 | Board | Catalog name | Chip image | Flash | PSRAM | Network | microSD | LED |
 |---|---|---|---|---|---|---|---|
 | Waveshare ESP32-P4-86-Panel-ETH-2RO | `ws-p4-86-panel-eth-2ro` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
-| Waveshare ESP32-P4-ETH | `ws-p4-eth` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
 | Waveshare ESP32-P4-Module-DEV-KIT | `ws-p4-module-dev-kit` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
 | Waveshare ESP32-P4-NANO | `ws-p4-nano` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
 | Waveshare ESP32-P4-NANO-WIFI6-DB | `ws-p4-nano-wifi6-db` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
