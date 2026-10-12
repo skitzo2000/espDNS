@@ -28,10 +28,12 @@ export function h(tag, attrs, ...kids) {
   return e;
 }
 
-// icon draws one of the few line icons: copy, x.
+// icon draws one of the few line icons: copy, x, ethernet (a wired port), wifi.
 const ICONS = {
   copy: [16, ["rect", { x: 5, y: 5, width: 9, height: 9, rx: 1.5 }], ["path", { d: "M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" }]],
   x: [14, ["path", { d: "M2 2l10 10M12 2L2 12", "stroke-linecap": "round" }]],
+  ethernet: [16, ["path", { d: "M2.5 4.5h11v7h-3v2h-5v-2h-3zM5.5 7v1.5M8 7v1.5M10.5 7v1.5", "stroke-linejoin": "round" }]],
+  wifi: [16, ["path", { d: "M1.5 6a9.5 9.5 0 0 1 13 0M3.8 8.6a6.2 6.2 0 0 1 8.4 0M6 11.1a3 3 0 0 1 4 0", "stroke-linecap": "round" }], ["circle", { cx: 8, cy: 13.3, r: .9, fill: "currentColor" }]],
 };
 function icon(name) {
   const [size, ...parts] = ICONS[name];
@@ -58,10 +60,12 @@ const LEDTXT = {
   identify: "Its light: white flicker (identify)",
   unknown: "Old firmware: its light doesn't follow espDNS's patterns yet",
   out: "Out of service: the controller sends it nothing",
+  todo: "Something to do",
 };
-export function led(kind) {
+// led is the dot; tip, if given, says what it means instead of the pattern.
+export function led(kind, tip) {
   const k = Object.hasOwn(LEDTXT, kind) ? kind : "unknown";
-  return h("span", { class: `led ${k}`, role: "img", title: LEDTXT[k], "aria-label": LEDTXT[k] });
+  return h("span", { class: `led ${k}`, role: "img", title: tip || LEDTXT[k], "aria-label": tip || LEDTXT[k] });
 }
 
 // ---- copying ----------------------------------------------------------------------------
@@ -92,8 +96,15 @@ function copyable(text, what, cls) {
   return h("span", { class: cls }, h("span", { class: "ip" }, text), b);
 }
 
-// addr is an address shown prominently, with a copy button.
-export function addr(ip) { return copyable(ip, ip, "ipc"); }
+// addr is an address shown prominently, with a copy button; link ("ethernet" or "wifi") an
+// icon before it, and m a MAC said on hovering it.
+export function addr(ip, link, m) {
+  const c = copyable(ip, ip, "ipc");
+  const w = link === "ethernet" ? "Wired" : link === "wifi" ? "Wi-Fi" : "";
+  if (w) c.prepend(h("span", { class: "link", role: "img", title: w, "aria-label": w }, icon(link)));
+  if (m) c.querySelector(".ip").title = `MAC ${m}`;
+  return c;
+}
 
 // MACHINT says what a node's MAC is for.
 export const MACHINT = "For a DHCP reservation in your router, or to set a static address.";

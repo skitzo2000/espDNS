@@ -86,9 +86,6 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - image: esp32
-          - image: esp32c3
-          - image: esp32c6
           - image: esp32p4
           - image: esp32p4-rev1
           - image: esp32s3-eth

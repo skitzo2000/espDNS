@@ -33,15 +33,11 @@ idf_build_get_property(image ESPDNS_IMAGE)
 idf_build_get_property(image_sibling ESPDNS_IMAGE_SIBLING)
 idf_build_get_property(fallback ESPDNS_FALLBACK)
 idf_build_get_property(fallback_json ESPDNS_FALLBACK_JSON)
-# Wi-Fi only on chips that have it; the P4 is wired only. PSRAM only on chips that have it.
+# Wi-Fi only on the S3; the P4 is wired only.
 idf_build_get_property(target IDF_TARGET)
 set(wifi "")
-if(target MATCHES "^esp32(|s3|c3|c6)$")
+if(target STREQUAL "esp32s3")
     set(wifi esp_wifi)
-endif()
-set(psram "")
-if(target MATCHES "^esp32(|s3|p4)$")
-    set(psram esp_psram)
 endif()
 # A transitional image carries its catalog board as the fallback definition.
 if(fallback_json)
@@ -54,7 +50,7 @@ set(srcs "main.c" "boot.c" "board.c" "board_def.c" "net.c" "improv.c" "server.c"
          "hzone.c" "hosted.c"
          "sd.c" "health.c" "health_node.c" "led.c" "cfg.c" "settings.c" "clock.c" "reboot.c"
          "svc.c" "services.c" "memplan.c" "share.c" "sup.c" "supervisor.c" "cpuplan.c" "power.c"
-         "qlog.c" "stats.c" "metrics.c" "querylog.c" "metrics_node.c" "httpguard.c" "jsonw.c")
+         "qlog.c" "stats.c" "metrics.c" "querylog.c" "metrics_node.c" "httpguard.c" "jsonw.c" "zread.c")
 set(incs ".")
 # Bench build (`make bench-ota`): POST /bench runs the blocklist benchmark; never confirms itself.
 if(DNS2_BENCH_BLOCKLIST)
@@ -67,7 +63,7 @@ idf_component_register(SRCS ${srcs}
                        EMBED_FILES ${embed}
                        PRIV_REQUIRES esp_eth esp_netif esp_timer esp_event nvs_flash fatfs sdmmc
                                      esp_driver_sdmmc esp_driver_sdspi esp_driver_spi esp_driver_gpio
-                                     esp_driver_usb_serial_jtag esp_driver_rmt ${wifi} ${psram} pthread lwip esp_http_server app_update
+                                     esp_driver_usb_serial_jtag esp_driver_rmt ${wifi} esp_psram pthread lwip esp_http_server app_update
                                      esp_app_format mbedtls esp_hw_support esp_pm esp_partition spi_flash json w5500)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDNS_IMAGE="${image}" ESPDNS_IMAGE_SIBLING="${image_sibling}"

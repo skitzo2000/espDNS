@@ -86,6 +86,7 @@ zone_t *reg_swap(int i, zone_t *nz)
     reg_wrlock();
     zone_t *old = s_slots[i].z;
     s_slots[i].z = nz;
+    s_slots[i].gen++;
     s_slots[i].expired = false;
     reg_unlock();
     return old;

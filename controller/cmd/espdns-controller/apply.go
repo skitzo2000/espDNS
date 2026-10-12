@@ -26,6 +26,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/updates"
 	"github.com/skitzo2000/espdns/controller/internal/zonefiles"
 	"github.com/skitzo2000/espdns/controller/internal/zones"
 )
@@ -73,6 +74,9 @@ type applyKind struct {
 	// fetch: how a blocklist's URL sources are fetched besides blocklist's rules (nil in
 	// use; a test's server).
 	fetch *blocklist.Fetch
+	// images gets a firmware update's chip image of the newest release when it isn't held
+	// (fetchKind.getImage).
+	images fetchKind
 	// adjust, in tests only, shortens each plan's waits after it is built.
 	adjust func(*fleet.Plan)
 	// now is the clock refresh.json's times are from (nil: time.Now; a test's), rnd the
@@ -710,6 +714,13 @@ func (a applyKind) check(ctx context.Context, c *fleet.Client, cs []changes.Chan
 	for _, ch := range cs {
 		if ch.Kind != changes.Firmware {
 			continue
+		}
+		if img, ok := strings.CutPrefix(ch.Firmware, "images/"); ok {
+			if got, err := a.images.getImage(ctx, img); err != nil {
+				return pl, fmt.Errorf("%s: %v", ch.Summary, err)
+			} else if got {
+				res.Notes = append(res.Notes, fmt.Sprintf("%s: got %s of release v%s", ch.Summary, img, updates.Latest(a.dataDir)))
+			}
 		}
 		if err := firmwareThere(a.dataDir, a.catalog, ch.Firmware); err != nil {
 			return pl, fmt.Errorf("%s: %v", ch.Summary, err)

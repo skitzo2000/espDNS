@@ -7,8 +7,8 @@ import { h, arr, obj, str, panel, toast, post, refreshChanges, nodeText } from "
 import { andList } from "./nodeview.js";
 
 // openUpdate opens it. o: updates (/api/updates), listed (the nodes in settings.json),
-// canWrite (logged in), only (a node's address: only it ticked; else every new version, not
-// a later build of the version a node runs), done (after adding).
+// canWrite (logged in), only (a node's address: only it ticked; else every one), done (after
+// adding).
 export function openUpdate(o) {
   const rep = obj(o.updates);
   const p = panel("Update firmware");
@@ -21,11 +21,10 @@ export function openUpdate(o) {
       right = h("span", { class: "hint" }, "Out of service");
       hint = "Returning it to service updates its firmware";
     } else if (u.state === "available" && !u.pending) {
-      const cb = h("input", { type: "checkbox", checked: o.only ? o.only === u.host : !u.rebuild, "aria-label": `Update ${nodeText(u.host)}` });
+      const cb = h("input", { type: "checkbox", checked: !o.only || o.only === u.host, "aria-label": `Update ${nodeText(u.host)}` });
       picks.set(u.host, cb);
       right = cb;
-      const label = str(obj(u.newest).label);
-      hint = `${u.rebuild ? str(u.why) : `${from} → ${to}`}${label ? ` (${label})` : ""} · restarts for a few seconds`;
+      hint = `${from} → ${to} · restarts for a few seconds`;
     } else if (u.pending) {
       right = h("span", { class: "hint" }, "Waiting to apply");
       hint = str(u.pending_summary);
@@ -53,12 +52,10 @@ export function openUpdate(o) {
   for (const cb of picks.values()) cb.addEventListener("change", say);
   go.addEventListener("click", async () => {
     const c = chosen();
-    const builds = {};
-    for (const host of c) builds[host] = str(obj(arr(rep.nodes).find(u => u.host === host).newest).build);
     go.disabled = true;
     msg.textContent = "";
     try {
-      await post("api/updates", { nodes: c, builds });
+      await post("api/updates", { nodes: c });
       p.close();
       await Promise.all([refreshChanges(), o.done ? o.done() : null]);
       toast(`Added to changes to apply: update ${andList(c.map(x => nodeText(x)))}`);

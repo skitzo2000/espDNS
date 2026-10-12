@@ -203,8 +203,8 @@ Edits wait here as pending changes until one [`apply`](#job-kinds) job sends the
 | GET | `/api/changes/file` | login | `?kind=&name=` | A file as the pending changes make it: what an edit starts from. |
 | POST | `/api/changes/{id}/discard` | login | — | Discards it, and the changes of its file stacked on it. |
 | POST | `/api/changes/discard` | login | — | Discards every pending change but the put-back ones. |
-| GET | `/api/updates` | open | — | Each node's firmware against the newest build for it, and the builds. |
-| POST | `/api/updates` | login | `{"nodes": [...], "builds": {"<host>": "<build>"}}` | `201` `{"changes": [...]}`: the updates, added as pending firmware changes. No `nodes`: every node offered one. A newer build than the one named: `409`. Nothing is pushed until an apply. |
+| GET | `/api/updates` | open | — | Each node's firmware against the newest version (`newest`), and the builds. |
+| POST | `/api/updates` | login | `{"nodes": [...]}` | `201` `{"changes": [...]}`: the updates, added as pending firmware changes, one per chip image. No `nodes`: every node offered one. Nothing is pushed or downloaded until an apply. |
 
 ### Rolling push
 

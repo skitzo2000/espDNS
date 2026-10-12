@@ -314,7 +314,8 @@ export async function waitJob(id) {
 export function watchNodes() { every(pollNodes); }
 
 // every runs a poll now and every 5 s (or ms): one at a time (a slow controller doesn't
-// stack them up), not while the tab is hidden, and at once when it is shown again.
+// stack them up), not while the tab is hidden, and at once when it is shown again. It
+// returns a function that stops it.
 export function every(f, ms = POLL) {
   let running = false;
   const run = async () => {
@@ -322,9 +323,10 @@ export function every(f, ms = POLL) {
     running = true;
     try { await f(); } finally { running = false; }
   };
-  setInterval(run, ms);
+  const t = setInterval(run, ms);
   document.addEventListener("visibilitychange", run);
   run();
+  return () => { clearInterval(t); document.removeEventListener("visibilitychange", run); };
 }
 
 // ago is how long ago a time was, in words.

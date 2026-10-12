@@ -92,6 +92,9 @@ func Build(o Options) ([]string, error) {
 		if c.Version != o.Version {
 			return nil, fmt.Errorf("chip image %s is version %q, not %s", c.Image, c.Version, o.Version)
 		}
+		if !ImageName(c.Image) {
+			return nil, fmt.Errorf("chip image %s: not one of the chip images", c.Image)
+		}
 		if filepath.Base(c.Dir()) != c.Image {
 			return nil, fmt.Errorf("%s: image.json names %s", c.Dir(), c.Image)
 		}
@@ -429,7 +432,7 @@ func importChecked(dir string, c Checked, images string, sig *Signer) ([]string,
 	var chips []chip
 	for _, f := range c.Files {
 		v, img, ok := chipOf(f)
-		if !ok {
+		if !ok || !ImageName(img) {
 			continue
 		}
 		// Read once, and the bytes read checked against SHA256SUMS: a file changed after
@@ -532,12 +535,9 @@ func readMax(path string, max int64) ([]byte, error) {
 	return b, nil
 }
 
-// imageName is a chip image's name, as a tarball's name carries it (chipOf).
-var imageName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-
-// ImageName says whether s looks like a chip image's name (esp32s3-eth): what a fetch may
-// ask for.
-func ImageName(s string) bool { return imageName.MatchString(s) }
+// ImageName says whether s is one of the chip images (boards.Images): what a fetch may ask
+// for and an import takes.
+func ImageName(s string) bool { _, ok := boards.Images[s]; return ok }
 
 // chipOf reads a chip image tarball's name: its version and image.
 func chipOf(name string) (v, img string, ok bool) {

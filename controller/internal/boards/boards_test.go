@@ -66,8 +66,7 @@ func TestChecks(t *testing.T) {
 		{"tx power", func(b *Board) { b.WiFi = &WiFi{TxPowerDBm: 25} }, "tx_power_dbm", ""},
 		{"no emac on S3", func(b *Board) { b.Ethernet = &Ethernet{Kind: "emac"} }, "no built-in Ethernet MAC", ""},
 		{"unknown image", func(b *Board) { b.Image = "esp8266" }, "not one of the chip images", ""},
-		{"too much flash", func(b *Board) { b.Image = "esp32c3"; b.FlashMB = 32; b.SD = nil }, "at most 16 MB", ""},
-		{"C3 has no SPI3", func(b *Board) { b.Image = "esp32c3"; b.SPI[0].Host = 3 }, "only SPI2", ""},
+		{"flash size", func(b *Board) { b.FlashMB = 12 }, "4, 8, 16 or 32", ""},
 		{"address", func(b *Board) {
 			b.Network = &nodecfg.Network{Address: "192.0.2.252/23", Gateway: "192.0.2.1"}
 		}, "", ""},
@@ -110,23 +109,17 @@ func TestChecks(t *testing.T) {
 			t.Errorf("%s: want a warning with %q, got %v", c.name, c.warn, warns)
 		}
 	}
-
-	// ESP32: input-only pins can't drive the PHY's reset.
-	b := Board{Name: "x", Image: "esp32", Ethernet: &Ethernet{Kind: "emac", PHY: "lan87xx", Reset: p(35)}}
-	if errs, _ := Check(b); !has(errs, "input-only") {
-		t.Errorf("input-only pin as an output: %v", errs)
-	}
 }
 
 func TestParseRefusesUnknownFields(t *testing.T) {
-	if _, err := Parse([]byte(`{"name":"x","image":"esp32","etherent":{"kind":"emac"}}`)); err == nil {
+	if _, err := Parse([]byte(`{"name":"x","image":"esp32p4","etherent":{"kind":"emac"}}`)); err == nil {
 		t.Fatal("a misspelt field was accepted")
 	}
 }
 
 // The node's address is per node: packed into its partition, never saved with a board.
 func TestNetwork(t *testing.T) {
-	b := Board{Name: "x", Image: "esp32", Network: &nodecfg.Network{Address: "198.51.100.5/24", Gateway: "198.51.100.1"}}
+	b := Board{Name: "x", Image: "esp32s3-quad", Network: &nodecfg.Network{Address: "198.51.100.5/24", Gateway: "198.51.100.1"}}
 	part, err := Entry{}.WithChanges(b).Pack()
 	if err != nil || !strings.Contains(string(part[16:]), `"network":{"address":"198.51.100.5/24","gateway":"198.51.100.1"}`) {
 		t.Fatal(err, string(part[16:80]))
@@ -141,7 +134,7 @@ func TestNetwork(t *testing.T) {
 }
 
 func TestPackFormat(t *testing.T) {
-	def := []byte(`{"name":"x","image":"esp32"}`)
+	def := []byte(`{"name":"x","image":"esp32p4"}`)
 	part, err := PackJSON(def)
 	if err != nil {
 		t.Fatal(err)

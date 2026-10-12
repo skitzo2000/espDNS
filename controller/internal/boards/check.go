@@ -11,17 +11,13 @@ import (
 // Chip is what an image's chip allows: its pins, which of them are taken or need care, and
 // which peripherals it has.
 type Chip struct {
-	Name       string
-	GPIOs      int            // GPIO 0 .. GPIOs-1
-	Missing    []int          // numbers in that range with no pin
-	Reserved   map[int]string // never usable (flash, PSRAM): an error
-	Caution    map[int]string // usable with care (strapping, USB, console): a warning
-	InputOnly  []int          // can't drive an output
-	SPI3       bool
-	EMAC       bool
-	WiFi       bool
-	SDMMC      bool
-	MaxFlashMB int
+	Name     string
+	GPIOs    int            // GPIO 0 .. GPIOs-1
+	Missing  []int          // numbers in that range with no pin
+	Reserved map[int]string // never usable (flash, PSRAM): an error
+	Caution  map[int]string // usable with care (strapping, USB, console): a warning
+	EMAC     bool
+	WiFi     bool
 }
 
 func span(from, to int, why string, m map[int]string) map[int]string {
@@ -39,30 +35,15 @@ func with(m map[int]string, why string, pins ...int) map[int]string {
 }
 
 var (
-	chipESP32 = Chip{Name: "esp32", GPIOs: 40, Missing: []int{20, 24, 28, 29, 30, 31},
-		Reserved: span(6, 11, "connected to the flash chip", map[int]string{}),
-		Caution: with(with(with(map[int]string{}, "a strapping pin: boot mode depends on its level at reset", 0, 2, 5, 12, 15),
-			"used by PSRAM on WROVER modules", 16, 17), "the serial console (UART0)", 1, 3),
-		InputOnly: []int{34, 35, 36, 37, 38, 39}, SPI3: true, EMAC: true, WiFi: true, SDMMC: true, MaxFlashMB: 16}
 	chipS3 = Chip{Name: "esp32s3", GPIOs: 49, Missing: []int{22, 23, 24, 25},
 		Reserved: span(26, 32, "connected to the flash and PSRAM", map[int]string{}),
 		Caution: with(with(with(map[int]string{}, "a strapping pin: boot mode depends on its level at reset", 0, 3, 45, 46),
 			"the USB port (logs and Improv)", 19, 20), "the serial console (UART0)", 43, 44),
-		SPI3: true, WiFi: true, SDMMC: true, MaxFlashMB: 32}
-	chipC3 = Chip{Name: "esp32c3", GPIOs: 22,
-		Reserved: span(12, 17, "connected to the flash chip", map[int]string{}),
-		Caution: with(with(with(map[int]string{}, "a strapping pin: boot mode depends on its level at reset", 2, 8, 9),
-			"the USB port (logs and Improv)", 18, 19), "the serial console (UART0)", 20, 21),
-		WiFi: true, MaxFlashMB: 16}
-	chipC6 = Chip{Name: "esp32c6", GPIOs: 31,
-		Reserved: span(24, 30, "connected to the flash chip", map[int]string{}),
-		Caution: with(with(with(map[int]string{}, "a strapping pin: boot mode depends on its level at reset", 4, 5, 8, 9, 15),
-			"the USB port (logs and Improv)", 12, 13), "the serial console (UART0)", 16, 17),
-		WiFi: true, MaxFlashMB: 16}
+		WiFi: true}
 	chipP4 = Chip{Name: "esp32p4", GPIOs: 55, Reserved: map[int]string{},
 		Caution: with(with(map[int]string{}, "a strapping pin: boot mode depends on its level at reset", 34, 35, 36, 37, 38),
 			"the USB port (logs)", 24, 25),
-		SPI3: true, EMAC: true, SDMMC: true, MaxFlashMB: 32}
+		EMAC: true}
 )
 
 // Images are the chip images (firmware/images) and their chips.
@@ -72,9 +53,6 @@ var Images = map[string]Chip{
 	"esp32s3-octal": withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
 	"esp32s3-eth":   withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
 	"esp32s3-quad":  chipS3,
-	"esp32":         chipESP32,
-	"esp32c3":       chipC3,
-	"esp32c6":       chipC6,
 }
 
 // Siblings are chip images of the same chip, PSRAM and flash layout, built differently
@@ -101,46 +79,45 @@ func withReserved(c Chip, from, to int, why string) Chip {
 	return c
 }
 
-// pinUse is one pin a board uses, and whether it must drive an output.
+// pinUse is one pin a board uses.
 type pinUse struct {
-	what   string
-	pin    int
-	output bool
+	what string
+	pin  int
 }
 
 func pins(b Board) []pinUse {
 	var u []pinUse
-	add := func(what string, p *int, out bool) {
+	add := func(what string, p *int) {
 		if p != nil {
-			u = append(u, pinUse{what, *p, out})
+			u = append(u, pinUse{what, *p})
 		}
 	}
 	for _, s := range b.SPI {
-		add(fmt.Sprintf("SPI%d SCLK", s.Host), s.SCLK, true)
-		add(fmt.Sprintf("SPI%d MOSI", s.Host), s.MOSI, true)
-		add(fmt.Sprintf("SPI%d MISO", s.Host), s.MISO, false)
+		add(fmt.Sprintf("SPI%d SCLK", s.Host), s.SCLK)
+		add(fmt.Sprintf("SPI%d MOSI", s.Host), s.MOSI)
+		add(fmt.Sprintf("SPI%d MISO", s.Host), s.MISO)
 	}
 	if e := b.Ethernet; e != nil {
 		switch e.Kind {
 		case "emac":
-			add("Ethernet PHY reset", e.Reset, true)
-			add("Ethernet power", e.Power, true)
-			add("Ethernet MDC", e.MDC, true)
-			add("Ethernet MDIO", e.MDIO, true)
+			add("Ethernet PHY reset", e.Reset)
+			add("Ethernet power", e.Power)
+			add("Ethernet MDC", e.MDC)
+			add("Ethernet MDIO", e.MDIO)
 			if e.RMIIClock != nil {
-				add("Ethernet RMII clock", e.RMIIClock.GPIO, e.RMIIClock.Mode == "out")
+				add("Ethernet RMII clock", e.RMIIClock.GPIO)
 			}
 		case "w5500":
-			add("Ethernet CS", e.CS, true)
-			add("Ethernet INT", e.Int, false)
-			add("Ethernet RST", e.Rst, true)
+			add("Ethernet CS", e.CS)
+			add("Ethernet INT", e.Int)
+			add("Ethernet RST", e.Rst)
 		}
 	}
 	if b.SD != nil && b.SD.Kind == "spi" {
-		add("SD CS", b.SD.CS, true)
+		add("SD CS", b.SD.CS)
 	}
 	if b.LED != nil && b.LED.Kind != "none" {
-		add("LED", b.LED.Pin, true)
+		add("LED", b.LED.Pin)
 	}
 	return u
 }
@@ -175,9 +152,6 @@ func Check(b Board) (errs, warns []string) {
 	if b.FlashMB != 0 && !oneOf(fmt.Sprint(b.FlashMB), "4", "8", "16", "32") {
 		e("flash_mb: 4, 8, 16 or 32")
 	}
-	if b.FlashMB > chip.MaxFlashMB {
-		e("flash_mb: an %s has at most %d MB", chip.Name, chip.MaxFlashMB)
-	}
 	if b.FlashMB != 0 && b.FlashMB < 4 {
 		e("flash_mb: at least 4 MB is needed for two app slots")
 	}
@@ -197,9 +171,6 @@ func Check(b Board) (errs, warns []string) {
 	for _, s := range b.SPI {
 		if s.Host != 2 && s.Host != 3 {
 			e("spi host %d: 2 or 3", s.Host)
-		}
-		if s.Host == 3 && !chip.SPI3 {
-			e("spi host 3: an %s has only SPI2", chip.Name)
 		}
 		if buses[s.Host] {
 			e("spi host %d defined twice", s.Host)
@@ -258,9 +229,6 @@ func Check(b Board) (errs, warns []string) {
 		switch s.Kind {
 		case "none":
 		case "sdmmc":
-			if !chip.SDMMC {
-				e("sd: an %s has no SDMMC host: use SD over SPI", chip.Name)
-			}
 			if s.Width != 0 && s.Width != 1 && s.Width != 4 {
 				e("sd width: 1 or 4")
 			}
@@ -321,9 +289,6 @@ func Check(b Board) (errs, warns []string) {
 				e("memory %s: %d-%d, or leave it out for the chip image's default", f.key, f.lo, f.hi)
 			}
 		}
-		if h := m.HostedZonesKB; h != nil && *h > 64 && (b.PSRAMMB == nil || *b.PSRAMMB == 0) {
-			w("memory hosted_zones_kb: %d KB of internal RAM on a board without PSRAM", *h)
-		}
 	}
 	if err := checkCPU(b); err != nil {
 		e("%v", err)
@@ -343,10 +308,6 @@ func Check(b Board) (errs, warns []string) {
 	for _, m := range chip.Missing {
 		missing[m] = true
 	}
-	inputOnly := map[int]bool{}
-	for _, p := range chip.InputOnly {
-		inputOnly[p] = true
-	}
 	uses := pins(b)
 	sort.SliceStable(uses, func(i, j int) bool { return uses[i].pin < uses[j].pin })
 	for _, u := range uses {
@@ -356,8 +317,6 @@ func Check(b Board) (errs, warns []string) {
 			continue
 		case chip.Reserved[u.pin] != "":
 			e("%s: GPIO %d is %s", u.what, u.pin, chip.Reserved[u.pin])
-		case u.output && inputOnly[u.pin]:
-			e("%s: GPIO %d is input-only", u.what, u.pin)
 		case chip.Caution[u.pin] != "":
 			w("%s: GPIO %d is %s", u.what, u.pin, chip.Caution[u.pin])
 		}

@@ -11,6 +11,10 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Added
 
+- Nodes hand over their copy of a zone: `GET /zone?name=<zone>` on a node returns a
+  secondary zone's records as the node holds them, 200 a page (500 at most), from private
+  addresses only. `/status` lists `"reads": ["zone"]` on nodes that have it. See
+  [docs/reference/node-endpoints.md](docs/reference/node-endpoints.md#zone).
 - A board library: 18 boards from 6 makers added to the catalog (Adafruit, Espressif,
   LilyGO, M5Stack, Seeed, Waveshare), 22 boards in all, each from the maker's pinout,
   arduino-esp32 or ESPHome, with its sources in `notes`: the wired ESP32-S3 and ESP32-P4
@@ -25,6 +29,10 @@ version may change anything. Write each change under Unreleased as it merges;
   [docs/hardware.md](docs/hardware.md#untested-boards).
 
 ### Changed
+
+- Only the supported chip images are built, released and offered: esp32p4-rev1, esp32p4,
+  esp32s3-octal, esp32s3-eth and esp32s3-quad. A board file or import naming another image
+  is refused (`not one of the chip images`).
 
 - The setup's zone step is about your own zones. "Add your zone", after the second node:
   type a name for your network, like home.example, and host it on espDNS (it starts with

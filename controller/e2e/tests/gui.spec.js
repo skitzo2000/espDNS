@@ -144,10 +144,10 @@ async function fake(page) {
   return state;
 }
 
-// clickRow clicks a row where it holds no button or link (its small text: a board, where a
+// clickRow clicks a row where it holds no button or link (its small text: a node's flag, where a
 // zone comes from, a query's node), so the row itself acts, as a real click there does.
 async function clickRow(page, row) {
-  const at = row.locator(".sub").first();
+  const at = row.locator(".sub, .flag").first();
   await expect(at).toBeVisible();
   expect(await at.evaluate(e => !e.closest("a, button"))).toBe(true);
   await at.click();

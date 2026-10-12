@@ -1671,13 +1671,12 @@
   }
  },
  {
-  "name": "a board without PSRAM: no query log",
-  "image": "esp32c3",
+  "name": "an S3 whose PSRAM isn't found: no query log",
+  "image": "esp32s3-quad",
   "chip_psram_kb": 0,
   "board": {
    "name": "x",
-   "image": "esp32c3",
-   "psram_mb": 0
+   "image": "esp32s3-quad"
   },
   "services": [
    "dns",
@@ -1686,7 +1685,7 @@
   "want": {
    "board": {
     "psram_kb": 0,
-    "internal_kb": 128,
+    "internal_kb": 160,
     "cache_kb": 64,
     "cache_entries": 512,
     "blocklist_kb": 128,
@@ -1698,7 +1697,7 @@
    },
    "fits": false,
    "capacity": [
-    131072,
+    163840,
     0
    ],
    "total": [
@@ -1735,7 +1734,7 @@
      0
     ]
    },
-   "error": "internal RAM: the services need 1005 KB, the board has 128 KB for them"
+   "error": "internal RAM: the services need 1005 KB, the board has 160 KB for them"
   }
  },
  {

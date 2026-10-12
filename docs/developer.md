@@ -68,8 +68,10 @@ docker compose up -d --no-build # start it again
 ```
 
 To update, set `ESPDNS_IMAGE` in `.env` to the new release's image, run
-`docker compose pull` and `docker compose up -d --no-build`, press **Get firmware**, then
-update the nodes from the Nodes page ([Operations](operations.md)).
+`docker compose pull` and `docker compose up -d --no-build`, then update the nodes from the
+Nodes page ([Operations](operations.md)). The controller checks GitHub for new releases
+daily, at start and when a new node shows up; a node on an older version is offered the
+update, and its firmware is downloaded when you apply it.
 
 ## The command line
 

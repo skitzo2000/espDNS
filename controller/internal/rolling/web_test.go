@@ -97,10 +97,10 @@ func TestNeededImages(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "boards"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "boards", "mine.json"), []byte(`{"image":"esp32c6"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "boards", "mine.json"), []byte(`{"image":"esp32s3-quad"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, img := range []string{"esp32s3-octal", ".esp32c3.import"} {
+	for _, img := range []string{"esp32s3-octal", ".esp32p4.import"} {
 		if err := os.MkdirAll(filepath.Join(dir, ImagesDir, img), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -110,16 +110,16 @@ func TestNeededImages(t *testing.T) {
 		{Board: "ws-s3-eth", Image: "esp32s3-octal"}, // its board's image, the sibling it moves to
 		{Board: "p4", Image: "esp32p4-rev1"},
 		{Board: "mine"},                     // a saved board, before chip images
-		{Board: "gone", Image: "esp32c5"},   // a board not here: the image it runs
+		{Board: "gone", Image: "esp32p4"},   // a board not here: the image it runs
 		{Board: "p4", Image: "esp32s3-eth"}, // not swappable: the image it runs
 		{},
 	}
-	want := []string{"esp32c5", "esp32c6", "esp32p4-rev1", "esp32s3-eth"}
+	want := []string{"esp32p4", "esp32p4-rev1", "esp32s3-eth", "esp32s3-quad"}
 	if got := NeededImages(dir, catalog, nodes, false); !slices.Equal(got, want) {
 		t.Errorf("%v, want %v", got, want)
 	}
 	// A node with no status: the imported one (esp32s3-octal) too
-	if got := NeededImages(dir, catalog, nodes, true); !slices.Equal(got, append(want, "esp32s3-octal")) {
+	if got := NeededImages(dir, catalog, nodes, true); !slices.Equal(got, []string{"esp32p4", "esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad"}) {
 		t.Errorf("with a node unknown: %v", got)
 	}
 	if got := NeededImages(dir, catalog, nil, false); len(got) != 0 {

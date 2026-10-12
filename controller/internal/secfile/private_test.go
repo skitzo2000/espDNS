@@ -114,7 +114,7 @@ func TestTighten(t *testing.T) {
 		"settings.json":          0o644,
 		"fleet.lock":             0o644,
 		"log/actions.jsonl":      0o644,
-		"firmware/images/c3.bin": 0o664,
+		"firmware/images/s3.bin": 0o664,
 		"auth.json":              0o600,
 		"readonly.txt":           0o400,
 	}
@@ -162,7 +162,7 @@ func TestTighten(t *testing.T) {
 		t.Errorf("a FIFO changed: %04o", got)
 	}
 	want := []string{root, filepath.Join(root, "firmware"), filepath.Join(root, "firmware", "images"),
-		filepath.Join(root, "firmware", "images", "c3.bin"), filepath.Join(root, "fleet.lock"),
+		filepath.Join(root, "firmware", "images", "s3.bin"), filepath.Join(root, "fleet.lock"),
 		filepath.Join(root, "log"), filepath.Join(root, "log", "actions.jsonl"), filepath.Join(root, "settings.json")}
 	if !slices.Equal(changed, want) {
 		t.Errorf("changed:\n%v\nwant\n%v", changed, want)

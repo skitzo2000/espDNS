@@ -16,8 +16,10 @@ CFLAGS += -DDNS2_FWD_PORT=15353
 NEUTRAL_SRCS = test_defaults.c $(filter-out test_core.c,$(SRCS))
 # The query log, /metrics and the querylog config (test_observe.c), with the same build
 OBS_SRCS = test_observe.c $(filter-out test_core.c,$(SRCS))
-# Local zones' lookups and zone transfers (test_zones.c), against a fake primary on the loopback
-ZONES_SRCS = test_zones.c ../main/zone.c ../main/axfr.c ../main/answer.c ../main/dns_wire.c ../main/forward.c
+# Local zones' lookups and zone transfers (test_zones.c), against a fake primary on the loopback,
+# and GET /zone's pages
+ZONES_SRCS = test_zones.c ../main/zone.c ../main/axfr.c ../main/answer.c ../main/dns_wire.c ../main/forward.c \
+             ../main/zread.c ../main/jsonw.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 # The node HTTP server's Host check, deadlines and JSON strings (test_http.c)
 HTTP_SRCS = test_http.c ../main/httpguard.c ../main/jsonw.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 # The board catalog (boards/ at the top of the repo; /boards in the build container)
@@ -67,7 +69,7 @@ test_w5500: test_w5500.c ../components/w5500/w5500_ring.h
 
 # The heap the zone code holds, counted (test_zones.c)
 ZONES_WRAP = -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
-test_zones: $(ZONES_SRCS) ../main/zone.h ../main/axfr.h ../main/answer.h
+test_zones: $(ZONES_SRCS) ../main/zone.h ../main/axfr.h ../main/answer.h ../main/zread.h
 	$(CC) $(CFLAGS) -o $@ $(ZONES_SRCS) $(ZONES_WRAP) -lpthread
 
 tls/%.o: $(MBEDTLS)/library/%.c mbedtls_host_config.h

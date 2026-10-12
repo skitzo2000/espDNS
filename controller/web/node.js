@@ -345,7 +345,7 @@ function renderAttention() {
       out.push(h("p", {}, h("b", {}, "Old firmware. "), "It doesn't report its health in detail or follow espDNS's light patterns."),
         u ? h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", disabled: !data.sess.logged_in,
           onclick: () => openUpdate({ updates: data.updates, listed: listedNodes(), canWrite: !!data.sess.logged_in, only: n.addr, done: readUpdates }) }, "Update firmware"))
-          : h("p", { class: "hint" }, str(obj(updateOf(n)).why) || "No newer firmware for it here yet: Get firmware from the account menu, or import a build of your own (espdns release import)."));
+          : h("p", { class: "hint" }, str(obj(updateOf(n)).why) || "No newer version known yet."));
     }
     if (n.source !== "settings") {
       out.push(h("b", {}, `${name} isn't one of your nodes yet.`), h("p", {}, "Found on your network. Add it to change its settings and send it changes."),

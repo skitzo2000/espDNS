@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,10 +15,12 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/dist/disttest"
+	"github.com/skitzo2000/espdns/controller/internal/image"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
+	"github.com/skitzo2000/espdns/controller/internal/updates"
 )
 
 // Get firmware: the job fetches a published release from the forge (settings.json's
@@ -87,7 +91,7 @@ func TestFetchReleaseJob(t *testing.T) {
 		t.Fatalf("%+v %s", j, j.Result)
 	}
 	// One the release doesn't have: refused, naming those it has
-	if j := run(`{"version":"v0.0.9","images":["esp32c6"]}`); j.State != jobs.Failed || !strings.Contains(j.Error, "no chip image esp32c6; it has esp32p4-rev1, esp32s3-eth, esp32s3-octal") {
+	if j := run(`{"version":"v0.0.9","images":["esp32s3-quad"]}`); j.State != jobs.Failed || !strings.Contains(j.Error, "no chip image esp32s3-quad; it has esp32p4-rev1, esp32s3-eth, esp32s3-octal") {
 		t.Fatalf("an image not in the release: %+v", j)
 	}
 	// None named: what the listed nodes need (by their board), not the one imported (esp32s3-eth);
@@ -132,5 +136,72 @@ func TestFetchReleaseJob(t *testing.T) {
 		if i.Origin != dist.SignerProject || i.Label != "project release v0.0.9" || i.Version != "0.0.9" {
 			t.Errorf("%+v", i)
 		}
+	}
+}
+
+// The forge's newest release: its version kept, logged once, nothing downloaded. No
+// release, or a forge that doesn't answer: a line logged, the version kept as it was. An
+// update applied then gets its chip image of that version when the one held is older (or of
+// no version), and nothing when it is as new.
+func TestNewRelease(t *testing.T) {
+	k := newTestKey(t)
+	rel := t.TempDir()
+	if err := disttest.Release(rel, "0.0.9", k); err != nil {
+		t.Fatal(err)
+	}
+	tags := `[]`
+	mux := http.NewServeMux()
+	mux.Handle("/owner/espdns/releases/download/v0.0.9/", http.StripPrefix("/owner/espdns/releases/download/v0.0.9/", http.FileServer(http.Dir(rel))))
+	mux.HandleFunc("/api/v1/repos/owner/espdns/releases", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(tags)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	proj := filepath.Join(t.TempDir(), "project.pub")
+	os.WriteFile(proj, release.PublicRaw(k), 0o644)
+	old := rolling.ProjectPub
+	rolling.ProjectPub = proj
+	defer func() { rolling.ProjectPub = old }()
+
+	dir := t.TempDir()
+	images := filepath.Join(dir, "firmware", "images")
+	os.MkdirAll(filepath.Join(images, "esp32p4-rev1"), 0o755)
+	os.WriteFile(filepath.Join(images, "esp32p4-rev1", "image.json"), []byte(`{"image": "esp32p4-rev1", "version": "1"}`), 0o644)
+	fk := fetchKind{dataDir: dir, forge: srv.URL + "/owner/espdns"}
+	check := func() []string {
+		var lines []string
+		newRelease(context.Background(), fk, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) })
+		return lines
+	}
+
+	if l := check(); len(l) != 1 || !strings.Contains(l[0], "no published release yet") || updates.Latest(dir) != "" {
+		t.Fatalf("no release: %q", l)
+	}
+	if got, err := fk.getImage(context.Background(), "esp32s3-eth"); got || err != nil {
+		t.Fatalf("none known: %v %v", got, err)
+	}
+	tags = `[{"tag_name": "v0.0.9"}, {"tag_name": "v0.0.8"}]`
+	if l := check(); len(l) != 1 || l[0] != "firmware v0.0.9, a new release: nodes on an older version are offered it" || updates.Latest(dir) != "0.0.9" {
+		t.Fatalf("new: %q", l)
+	}
+	if _, err := os.Stat(filepath.Join(images, "esp32s3-eth")); err == nil {
+		t.Fatal("downloaded")
+	}
+	if l := check(); len(l) != 0 {
+		t.Fatalf("again: %q", l)
+	}
+	// Applied: the image missing, and the one of no version, got; then held, nothing done.
+	for _, img := range []string{"esp32s3-eth", "esp32p4-rev1"} {
+		if got, err := fk.getImage(context.Background(), img); !got || err != nil {
+			t.Fatalf("%s: %v %v", img, got, err)
+		}
+		if c, err := image.Open(filepath.Join(images, img)); err != nil || c.Version != "0.0.9" {
+			t.Errorf("%s: %+v %v", img, c, err)
+		}
+		if got, err := fk.getImage(context.Background(), img); got || err != nil {
+			t.Fatalf("%s again: %v %v", img, got, err)
+		}
+	}
+	srv.Close()
+	if l := check(); len(l) != 1 || !strings.HasPrefix(l[0], "firmware: no check for a new release: ") || updates.Latest(dir) != "0.0.9" {
+		t.Fatalf("offline: %q", l)
 	}
 }

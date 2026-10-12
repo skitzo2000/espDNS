@@ -73,5 +73,8 @@ const char *querylog_boot_id(void);
 /* ---- HTTP ---- */
 /* GET /querylog (ota.c serves it, after its Host check). */
 esp_err_t querylog_get(httpd_req_t *req);
+/* The whole number key holds in the query string q (NULL: none), def if it isn't there;
+ * *bad set if it is but isn't one (GET /zone too). */
+uint64_t querylog_arg(const char *q, const char *key, uint64_t def, bool *bad);
 /* "querylog":{...} for /status: the service, its ring and the settings. */
 size_t querylog_status_json(char *j, size_t cap);

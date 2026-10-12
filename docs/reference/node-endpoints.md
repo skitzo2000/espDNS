@@ -11,6 +11,7 @@ Back to the [reference index](README.md).
 | GET | [`/status`](#status) | anyone | Everything the node reports, as JSON. |
 | GET | [`/metrics`](#metrics) | anyone | Prometheus metrics. |
 | GET | [`/querylog`](#querylog) | private addresses only | The node's query log. |
+| GET | [`/zone`](#zone) | private addresses only | A secondary zone's records, as the node holds them. |
 | POST | `/ota` | private addresses only | A signed firmware release. |
 | POST | [`/release`](#release-kinds) | private addresses only | Any other signed release (config, zones, blocklist, overrides, control, keys). |
 
@@ -23,7 +24,7 @@ Rules for every request:
 - A GET with a body gets `400`.
 - Each request has one deadline for its headers and reply; a slow client is
   cut off.
-- `/querylog`, `/ota` and `/release` answer `403` unless the client's
+- `/querylog`, `/zone`, `/ota` and `/release` answer `403` unless the client's
   address is in a private IPv4 range (RFC 1918) or the shared address space (RFC 6598).
 - `/ota` and `/release` take only releases signed with a key the node
   trusts, bound to the node's ID. Send them with the controller or the [espdns CLI](cli.md),
@@ -202,6 +203,8 @@ On Wi-Fi only: `rssi` (dBm), `ap` (the access point's BSSID), `channel`, `connec
 `forward_zones` lists the conditional forwarders the node runs (as of its last boot). Each
 entry: `name`, `forwarder`.
 
+`reads` lists what the node can hand over: `["zone"]` when it serves [`/zone`](#zone).
+
 ### services
 
 A list, one entry per service: `dns`, `forwarding`, `forward_zones`, `secondary`, `hosted`,
@@ -377,3 +380,44 @@ Each entry: `seq`, `uptime_ms`, `time` (Unix ms or `null`), `client` (an address
 when hidden), `transport` (`udp`, `tcp`), `qname`, `qtype`, `result` (as in
 `espdns_queries_total`), `rcode`, `latency_us`, and when they apply `rule` (`list`,
 `override`, `cname`, `allow`) and `truncated`.
+
+## /zone
+
+A secondary zone's records as the node holds them in memory, the data it answers from, a
+page at a time in the zone's canonical order. Private addresses only.
+
+Query parameters:
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `name` | | The zone, as in the node config. Required. |
+| `from` | `0` | The first record to return, counted from 0. |
+| `limit` | `200` | Records to return, 1 to 500 (higher is capped at 500). |
+| `gen` | | The `gen` from the first page. If the zone has changed since, the reply is `409`. |
+
+Reply:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | The zone. |
+| `serial` | Its SOA serial. |
+| `gen` | Goes up each time a refresh replaces the zone. |
+| `records` | Records in the zone. |
+| `from` | The `from` asked for. |
+| `rrs` | The records (below). |
+| `next` | The `from` for the next page. |
+| `more` | `true` when there are records after `next`. |
+
+Each record: `o` (the owner name; bytes other than printable ASCII, `"` and `\` show as
+`?`), `t` (the type, as a number), `ttl`, `d` (the rdata in hex, with names uncompressed).
+
+A page stops early once it holds about 32 KB, so a page of large records is shorter than
+`limit`, and a record over that is a page of its own. To read a whole zone, start at `from=0`,
+pass the `gen` from the first page on every page after it, and follow `next` while `more` is
+`true`. A `409` means the zone changed: start again from 0. If the zone changes during a
+page, the page ends after its last whole record (the next one gets the `409`), or the
+connection closes if it was inside one.
+
+Errors, as JSON with an `error` field: `400` for a missing name or a parameter that isn't a
+whole number, `404` when the node has no such secondary zone or no data for it yet, `409` as
+above.

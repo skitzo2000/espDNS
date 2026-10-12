@@ -1,8 +1,7 @@
 # Shared by every chip image; images/<image>/sdkconfig.defaults adds the chip and PSRAM.
 # Everything about a board (pins, Ethernet, SD, LED) is data read at boot, not built in.
 
-# Logs and Improv on the native USB port where the chip has one (/dev/ttyACM0); the
-# classic ESP32 has none and uses UART0.
+# Logs and Improv on the chip's native USB port (/dev/ttyACM0).
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 CONFIG_FATFS_LFN_HEAP=y

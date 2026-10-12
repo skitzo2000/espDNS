@@ -35,8 +35,7 @@ from boardpart import pack  # noqa: E402
 import keyspart  # noqa: E402
 from ota_push import app_desc  # noqa: E402
 
-CHIP_FAMILY = {"esp32": "ESP32", "esp32s3": "ESP32-S3", "esp32c3": "ESP32-C3", "esp32c6": "ESP32-C6",
-               "esp32p4": "ESP32-P4"}
+CHIP_FAMILY = {"esp32s3": "ESP32-S3", "esp32p4": "ESP32-P4"}
 BOARD_OFFSET = 0x12000  # partitions-*.csv
 KEYS_OFFSET = keyspart.PART_OFFSET  # partitions-*.csv
 FIRMWARE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

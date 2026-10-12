@@ -12,10 +12,13 @@
 // Tools, for a node in setup mode, and keeps the rest. A board whose chip image isn't in the
 // controller yet offers Get firmware (firmware.js: that chip image from the project's
 // release, fetched, checked and imported); each board says which firmware it gets ("project release v0.0.3", "your
-// build"). The page that opens it needs
+// build"). Once installed, the panel waits for the node on the network (POST
+// /api/nodes/lookup at its address, or /api/nodes/found for one on DHCP) and, when it
+// answers, hands it to o.found (+ Add node's next step for it). The page that opens it needs
 // websec.USBCSP: the flasher's "no port picked" dialog has two style attributes, and its
 // Wi-Fi form three it sets first, allowed by hash there only.
-import { h, arr, obj, str, panel, api, hostOnly } from "./shell.js";
+import { h, arr, obj, str, panel, api, hostOnly, getJSON, post, toast } from "./shell.js";
+import { every } from "./common.js";
 import { firmwareBox, readFirmware, labelOf } from "./firmware.js";
 
 // The builder's routes answer errors as text (http.Error), the others as JSON.
@@ -164,7 +167,8 @@ function boardToForm(f, b) {
 // ---- the panel ----------------------------------------------------------------------------
 // openUSB opens it. o: board (a board's name, chosen), image (a chip image: a board not in
 // the list opens the custom form on it), address and gateway (prefilled), update (a found
-// node's firmware updated: the title says so), name (what the board is called in the title).
+// node's firmware updated: the title says so), name (what the board is called in the title),
+// found(node) (the node installed, once it answers on the network; the panel closes first).
 // flashButton is ESP Web Tools' install button for a prepared build's manifest, its activate
 // slot our own button.
 function flashButton(id, label, actId) {
@@ -175,6 +179,45 @@ function flashButton(id, label, actId) {
     h("span", { slot: "not-allowed", class: "hint bad" }, "USB needs this page over https, or on this computer (localhost)."));
   return btn;
 }
+
+// ---- after the install ------------------------------------------------------------------------
+// ESP Web Tools fires no event as an install goes: its dialog (ewt-install-dialog, which the
+// install button adds to the page) keeps it in _installState, {state, message}, the state
+// "initializing", "manifest", "preparing", "erasing", "writing", then "finished" or "error".
+// watchInstall reads that while a dialog is open and calls on(state, message) as it changes
+// ("busy" for the ones before the end), and on("closed", the last state) when the dialog
+// goes. It returns a function that stops it.
+const INSTALL_POLL = 500, WAIT_POLL = 3000, HINT_AFTER = 60000;
+function watchInstall(on) {
+  let dialog = null, timer = null, last = "";
+  const check = () => {
+    const s = obj(dialog && dialog._installState), st = str(s.state);
+    if (!st || st === last) return;
+    last = st;
+    on(st === "finished" || st === "error" ? st : "busy", str(s.message));
+  };
+  const drop = () => { clearInterval(timer); timer = null; dialog = null; };
+  const mo = new MutationObserver(recs => {
+    for (const r of recs) {
+      for (const n of r.addedNodes) {
+        if (n.localName !== "ewt-install-dialog") continue;
+        drop();
+        dialog = n; last = "";
+        timer = setInterval(check, INSTALL_POLL);
+      }
+      for (const n of r.removedNodes) {
+        if (!dialog || n !== dialog) continue;
+        check();
+        const ended = last;
+        drop();
+        on("closed", ended);
+      }
+    }
+  });
+  mo.observe(document.body, { childList: true });
+  return () => { mo.disconnect(); drop(); };
+}
+const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
 
 // ---- Write keys only ------------------------------------------------------------------------
 // The controller's two public keys written to the board's keys partition and nothing else, for
@@ -270,14 +313,16 @@ function keysOnly(o, keysReady) {
 
 export async function openUSB(o = {}) {
   await loadCSS();
-  const p = panel(o.keys ? `Write keys to ${o.name || "it"} over USB` : o.update ? `Update ${o.name || "it"} over USB` : "Install a board over USB");
+  // What runs after an install (watching the installer, waiting for the node): stopped when
+  // the panel closes or another image is prepared.
+  let stops = [];
+  const stopAll = () => { stops.forEach(f => f()); stops = []; };
+  const p = panel(o.keys ? `Write keys to ${o.name || "it"} over USB` : o.update ? `Update ${o.name || "it"} over USB` : "Install a board over USB", stopAll);
   p.aside.classList.add("usb");
   const supported = "serial" in navigator;
   p.body.append(h("p", { class: "small" }, o.keys
-    ? "Plug the board into this computer by USB. Writing the keys keeps everything else; a fresh install (below) erases the board."
-    : o.update
-      ? "Plug the board into this computer by USB. Installing erases the board, then it starts espDNS with the address below."
-      : "Plug the board into this computer by USB. Installing erases the board, then it starts espDNS with the address below and shows under + Add node."),
+    ? "Plug the board into this computer with a USB cable. Writing the keys keeps everything else; a fresh install (below) erases the board."
+    : "Plug the board into this computer with a USB cable. Installing erases it, then it starts espDNS on the address below."),
   ...(supported ? [] : [h("p", { class: "hint bad", id: "usb-unsupported" }, "This browser can't reach USB devices: use Chrome or Edge on this computer.")]));
   const loading = h("p", { class: "hint" }, "Reading the boards…");
   p.body.append(loading);
@@ -431,7 +476,7 @@ export async function openUSB(o = {}) {
     };
     form.addEventListener("input", check);
     form.addEventListener("change", check);
-    facts.replaceChildren(h("p", { class: "hint" }, "Any ESP32, S3, C3, C6 or P4 board, from its pinout. Save it and it's in the list next time."), form);
+    facts.replaceChildren(h("p", { class: "hint" }, "Any ESP32-S3 or ESP32-P4 board with 8 MB or more of PSRAM, from its pinout. Save it and it's in the list next time."), form);
     addrBox.querySelector("#usb-tx-f").hidden = true; // the form has its own
     save.hidden = false;
     prep.disabled = !keysReady;
@@ -485,23 +530,117 @@ export async function openUSB(o = {}) {
       } else return;
     } catch (e) { out.replaceChildren(h("p", { class: "hint bad" }, e.message)); return; }
     prep.disabled = true;
-    out.replaceChildren(h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Preparing the image…"));
+    stopAll();
+    out.replaceChildren(spinning("Preparing the image…"));
     try {
       const build = await send("api/build", body);
       try { await loadFlasher(); } catch (e) { throw new Error(`The installer didn't load: ${e.message}`); }
       const btn = flashButton(build.id, "Install on the board over USB", "usb-go");
       const c = obj(build.chip), k = obj(build.keys);
+      const after = h("div", { class: "stack", id: "usb-after" }, h("p", { class: "hint" }, "Once it's installed, this panel waits for it to show up on your network."));
       out.replaceChildren(h("p", { class: "small" }, `Ready: ${str(obj(build.board).title) || str(obj(build.board).name)}, ${str(c.image)} ${str(c.version)}, with your keys (release `,
         h("span", { class: "mono" }, str(k.release)), ", recovery ", h("span", { class: "mono" }, str(k.recovery)), ")."), btn,
         ...(onWiFi(obj(build.board)) ? [h("p", { class: "hint", id: "usb-wifi" },
           "After it installs, it asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.")] : []),
         h("p", { class: "hint mono" }, `built ${str(c.built)} · ${str(c.elf_sha256).slice(0, 12)} · image ${str(build.id)}`),
-        h("p", { class: "hint" }, o.update ? "Once it restarts, it shows on Nodes again, ready to add." : "Once it restarts, it shows under + Add node."));
+        after);
+      afterInstall(after, btn.querySelector("#usb-go"), body.network, obj(build.board));
     } catch (e) {
       out.replaceChildren(h("p", { class: "hint bad" }, e.message));
     }
     prep.disabled = !keysReady;
   });
+
+  // afterInstall follows the install in ESP Web Tools' dialog and says how it went, in box.
+  // Once it's done, it waits for the node on the network: at its address (POST
+  // /api/nodes/lookup), or, on DHCP, as a node of this board not found before
+  // (/api/nodes/found). One that answers goes to o.found (+ Add node, with it chosen), or is
+  // said. Nothing after a minute: what to check, still waiting.
+  function afterInstall(box, act, net, board) {
+    const ip = net.address === "dhcp" ? "" : str(net.address).split("/")[0];
+    const wifi = onWiFi(board);
+    const say = (...kids) => box.replaceChildren(...kids);
+    let gen = 0, halt = null;
+    const stopWait = () => { gen++; if (halt) { halt(); halt = null; } };
+    stops.push(stopWait);
+    // On DHCP, the nodes found before it: a new one of this board is it.
+    const keyOf = n => `${str(n.id)}|${str(n.host)}|${str(n.version)}|${str(n.install)}`;
+    const readFound = async () => arr(obj(await getJSON("api/nodes/found")).nodes);
+    let before = new Set();
+    if (!ip) readFound().then(ns => { before = new Set(ns.map(keyOf)); }).catch(() => { /* none known */ });
+    const failed = (what, next) => {
+      stopWait();
+      say(h("p", { class: "small bad", id: "usb-failed" }, what), h("p", { class: "hint" }, next));
+    };
+
+    stops.push(watchInstall((state, msg) => {
+      if (!box.isConnected) { stopAll(); return; }
+      if (state === "busy") {
+        stopWait();
+        say(spinning("Installing. Keep the board plugged in until the installer says it's done."));
+      } else if (state === "finished") {
+        wait();
+      } else if (state === "error") {
+        failed(`The install stopped: ${msg || "the installer hit an error"}`, `Unplug the board, plug it back in, and press ${act.textContent} to try again.`);
+      } else if (state === "closed" && msg && msg !== "finished" && msg !== "error") {
+        // The dialog closed partway through (msg is the last state it had).
+        failed("The installer closed before it finished, so the board isn't ready.", `Press ${act.textContent} to start again.`);
+      }
+    }));
+
+    function wait() {
+      stopWait();
+      const my = gen, started = Date.now();
+      act.textContent = "Install again";
+      const hint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
+      say(h("p", { class: "small", id: "usb-installed" }, wifi
+        ? `Installed. It joins the Wi-Fi network you enter in the installer${obj(board.ethernet).optional ? ", or uses Ethernet if its add-on is fitted" : ""}. USB can stay in for power.`
+        : "Installed. Plug it into your network with an Ethernet cable; USB can stay in for power."),
+      h("div", { id: "usb-waiting" }, spinning(ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…")), hint);
+      halt = every(async () => {
+        if (!box.isConnected) { stopAll(); return; }
+        let node = null, listed = false, other = false;
+        try {
+          if (ip) {
+            const r = await post("api/nodes/lookup", { address: ip });
+            if (r.listed) { listed = true; node = obj(r.node); }
+            else if (r.found && r.node) node = r.node;
+            else other = !!r.answered;
+          } else {
+            node = (await readFound()).find(n => str(n.board) === str(board.name) && !before.has(keyOf(n))) || null;
+          }
+        } catch { /* not there yet */ }
+        if (my !== gen) return; // stopped meanwhile
+        if (node) { stopWait(); arrived(node, listed); return; }
+        if (!other && Date.now() - started < HINT_AFTER) return;
+        hint.hidden = false;
+        hint.replaceChildren(...nothingYet(other));
+      }, WAIT_POLL);
+    }
+
+    function nothingYet(other) {
+      const again = h("p", { class: "hint" }, "To use another address, change it above, press Prepare image and install again.");
+      if (other) return [h("p", { class: "small bad" }, `Something else answers at ${ip}, so that address is taken.`), again];
+      const check = wifi ? "Check the installer said it joined your Wi-Fi" : "Check the cable is in";
+      return [h("p", { class: "small" }, ip
+        ? `Nothing yet. ${check}, and that ${ip} is free on your network and outside your router's DHCP pool.`
+        : `Nothing yet. ${check}, and that your router hands out addresses on that network.`),
+      ...(ip && net.gateway ? [h("p", { class: "hint" }, `Its gateway is ${net.gateway}. That has to be your router's address on this network.`)] : []),
+      again];
+    }
+
+    function arrived(n, listed) {
+      const at = hostOnly(n.host) || ip;
+      if (listed) { say(h("p", { class: "small", id: "usb-arrived" }, `It's back on your network at ${at}, and on Nodes as before.`)); return; }
+      if (o.found) {
+        toast(`It's on your network at ${at}.`);
+        p.close();
+        o.found(n);
+        return;
+      }
+      say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Add it from + Add node on Nodes.`));
+    }
+  }
 
   p.body.append(
     h("label", { class: "f" }, h("span", {}, "Find the board"), q),

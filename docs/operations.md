@@ -92,19 +92,16 @@ controller is down.
 
 ### Versions
 
-The firmware and the controller share one version number. Each node gets a state from
-comparing its version with the newest firmware the controller holds for it:
+The firmware and the controller share one version number, the same on every board. Each
+node gets a state from comparing its version with the newest release (or a newer firmware
+you imported):
 
 | State | Meaning |
 | --- | --- |
-| `available` | A newer build is there for this node. |
-| `current` | The node runs the newest build there. |
-| `newer` | The node runs a newer build than any the controller has. |
-| `unordered` | The node runs firmware from before version numbers. Update it with a rollout. |
-| `no_build` | The controller has no build for this node's chip image. |
-| `unknown` | The controller has not read the node yet. |
-
-Two builds of the same version are ordered by build time.
+| `available` | The node runs an older version: "Update available: 0.0.1 → 0.0.2". |
+| `current` | The node runs the newest version. |
+| `newer` | The node runs a newer version than the newest release. |
+| `unknown` | The controller has not read the node yet, its firmware is from before version numbers, or no release is known yet. |
 
 ### Get the firmware into the controller
 
@@ -113,8 +110,10 @@ The controller loads chip images only as a signed release: the project's (checke
 ever see your key: the controller signs every update with it, after checking again that the
 release still vouches for the app it sends.
 
-- The project's release: **Get firmware** in the account menu's Firmware (or in Install
-  over USB, for a board whose chip image isn't there yet), or:
+- The project's release: the controller checks GitHub for new releases daily, at start and
+  when a new node shows up, and offers the update; applying it downloads the chip image
+  each node needs. To get one now, **Get firmware** in the account menu's
+  Firmware (or in Install over USB, for a board whose chip image isn't there yet), or:
 
   ```sh
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data

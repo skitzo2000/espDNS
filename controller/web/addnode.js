@@ -81,9 +81,10 @@ const viaUSB = f => f.install === "usb" || f.install === "keys";
 
 // usbButton is "Update over USB" for a found node (or "Write keys over USB" for one with no
 // keys): the Install over USB panel with its board, chip image and address filled in.
-// before, if given, runs first (the address box closes: the panel is the next step).
-export function usbButton(f, cls, name, before) {
-  return h("button", { class: cls, type: "button", onclick: () => { if (before) before(); openUSB(usbFor(f, name)); } },
+// before, if given, runs first (the address box closes: the panel is the next step); found,
+// if given, gets the node once it answers on the network after the install.
+export function usbButton(f, cls, name, before, found) {
+  return h("button", { class: cls, type: "button", onclick: () => { if (before) before(); openUSB({ ...usbFor(f, name), found }); } },
     f.install === "keys" ? "Write keys over USB" : "Update over USB");
 }
 
@@ -272,7 +273,7 @@ export function addNode(box, opts) {
       return [h("div", { class: "found" }, h("b", { class: "mono" }, l.addr),
         h("span", { class: "small" }, r.answered ? "Something answers there, but it isn't an espDNS node."
           : "No espDNS node answers there. A new board needs installing over USB first.")),
-      h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => { close(); openUSB(); } }, "Install a board over USB"))];
+      h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => { close(); openUSB({ found: next }); } }, "Install a board over USB"))];
     }
     const found = arr(opts.found());
     // Every item acts on a click anywhere on it, or Enter: a found node opens its setup
@@ -282,14 +283,14 @@ export function addNode(box, opts) {
         h("div", { class: "tagline" }, h("span", { class: "mono" }, hostOnly(f.host)), [linkWord(f.net), f.version && `firmware ${f.version}`].filter(Boolean).map(x => ` · ${x}`).join("")),
         f.next ? null : h("div", { class: "tagline" }, blocker(f))),
       f.next ? h("button", { class: "btn small", type: "button", onclick: () => choose(f) }, "Add")
-        : viaUSB(f) ? usbButton(f, "btn small", opts.boardName(f.board) || str(f.hostname), close)
+        : viaUSB(f) ? usbButton(f, "btn small", opts.boardName(f.board) || str(f.hostname), close, next)
           : h("button", { class: "btn small", type: "button", onclick: () => pick(f) }, "Set up")));
     return [h("div", { class: "stack nogap" },
       h("span", { class: "small muted" }, "Found on your network"),
       rows.length ? rows : h("p", { class: "hint" }, "Nothing new right now."),
-      item(() => { close(); openUSB(); }, "A new board over USB: start",
+      item(() => { close(); openUSB({ found: next }); }, "A new board over USB: start",
         h("div", {}, h("b", {}, "A new board over USB"), h("div", { class: "tagline" }, "Plug it into this computer and install espDNS")),
-        h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB(); } }, "Start"))),
+        h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB({ found: next }); } }, "Start"))),
     h("span", { class: "hint" }, "Or type the address of a node not listed here.")];
   }
 
@@ -305,6 +306,12 @@ export function addNode(box, opts) {
   function pick(f) {
     close();
     setup(f);
+  }
+
+  // next is a node just installed over USB, once it answers on the network: chosen here, as
+  // its Add does, when it can be added; else its setup panel, which says what it needs.
+  function next(f) {
+    if (f.next && !viaUSB(f)) open(f); else setup(f);
   }
 
   const back = () => h("button", { class: "btn small link", type: "button", onclick: () => { st.sel = null; st.flow = null; st.q = ""; st.look = null; input.value = ""; render(); input.focus(); } }, "Back");
@@ -324,7 +331,7 @@ export function addNode(box, opts) {
     const refusals = arr(f.refusals);
     if (viaUSB(f)) {
       return [intro(f), h("p", { class: "small" }, usbWhy(f)),
-        h("div", { class: "actions" }, usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), close), back())];
+        h("div", { class: "actions" }, usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), close, next), back())];
     }
     if (refusals.length || !f.next) {
       return [intro(f), h("p", { class: "small bad" }, `Can't be added yet: ${refusals.join("; ") || "it's one of your nodes already"}.`),
@@ -607,7 +614,7 @@ export function addNode(box, opts) {
       h("div", {}, h("b", {}, title), detail ? h("div", { class: "hint" }, detail) : null, action ? h("div", { class: "actions" }, action) : null));
     const steps = h("ol", { class: "steps" },
       usb ? step("next", keys ? "Write its keys over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer.`,
-        usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname)))
+        usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), null, next))
         : step("done", "Firmware takes node configs", f.version ? `It runs ${f.version}.` : ""),
       step(addNow ? "next" : "", "Add it to your nodes",
         addNow ? "Give it a name and an address; it copies your zones and starts serving."

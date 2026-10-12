@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -16,11 +15,12 @@ import (
 // Update availability (internal/updates), for the Nodes page's "update available" and its
 // Update panel:
 //
-//	GET  /api/updates   each node's firmware against the newest build for it, as versions; the builds
-//	POST /api/updates   {"nodes": [...], "builds": {host: build}}: the updates, as pending firmware changes (201)
+//	GET  /api/updates   each node's firmware against the newest version, as versions; the builds
+//	POST /api/updates   {"nodes": [...]}: the updates, as pending firmware changes (201)
 //
-// An update is never pushed from here: it waits in the pending changes until Apply. The
-// read is open like /api/nodes (no file it reads holds a secret); the update needs a login.
+// An update is never pushed or downloaded from here: it waits in the pending changes until
+// Apply, which fetches the chip image if it isn't held (fetchKind.getImage). The read is
+// open like /api/nodes (no file it reads holds a secret); the update needs a login.
 
 type updatesServer struct {
 	dataDir string
@@ -70,7 +70,7 @@ func (u updatesServer) report() (updates.Report, error) {
 		un.OutOfService = s.IsOutOfService(h)
 		ns = append(ns, un)
 	}
-	return updates.For(ns, updates.Builds(u.dataDir, u.catalog), pending), nil
+	return updates.For(ns, updates.Builds(u.dataDir, u.catalog), updates.Latest(u.dataDir), pending), nil
 }
 
 func (u updatesServer) list(w http.ResponseWriter, r *http.Request) {
@@ -82,11 +82,9 @@ func (u updatesServer) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rep)
 }
 
-// updateBody is POST /api/updates's body: the nodes (none: every one offered, "Update
-// all"), and the build the page showed for each (optional: a newer one since is a 409).
+// updateBody is POST /api/updates's body: the nodes (none: every one offered, "Update all").
 type updateBody struct {
-	Nodes  []string          `json:"nodes"`
-	Builds map[string]string `json:"builds"`
+	Nodes []string `json:"nodes"`
 }
 
 func (u updatesServer) add(w http.ResponseWriter, r *http.Request) {
@@ -102,22 +100,12 @@ func (u updatesServer) add(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	offers, err := rep.Plan(b.Nodes, b.Builds)
+	offers, err := rep.Plan(b.Nodes)
 	if err != nil {
-		code := http.StatusBadRequest
-		if errors.Is(err, updates.ErrMoved) {
-			code = http.StatusConflict
-		}
-		httpErr(w, code, err)
+		httpErr(w, http.StatusBadRequest, err)
 		return
 	}
-	for _, o := range offers {
-		if err := firmwareThere(u.dataDir, u.catalog, o.Source); err != nil {
-			httpErr(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	// One change per build; all or none, in one save (an apply started meanwhile takes
+	// One change per chip image; all or none, in one save (an apply started meanwhile takes
 	// either all of them or none).
 	cs := changesServer{dataDir: u.dataDir}
 	var es []changes.Edit

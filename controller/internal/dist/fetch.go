@@ -98,7 +98,7 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	want := map[string]bool{}
 	for _, img := range o.Images {
 		if !ImageName(img) {
-			return out, fmt.Errorf("chip image %q: not a chip image's name (esp32s3-eth)", img)
+			return out, fmt.Errorf("chip image %q: not one of the chip images", img)
 		}
 		want[img] = true
 	}
@@ -213,6 +213,18 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 		need[s.Name] = true
 	}
 	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, need)
+}
+
+// Latest is the tag of the newest published release (newest) on the forge ("": DefaultForge).
+func Latest(ctx context.Context, c *http.Client, forge string) (string, error) {
+	if forge == "" {
+		forge = DefaultForge
+	}
+	f, err := ParseForge(forge)
+	if err != nil {
+		return "", err
+	}
+	return newest(ctx, c, f)
 }
 
 // newest is the tag of the newest published release (not a draft) named vMAJOR.MINOR.PATCH;

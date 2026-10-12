@@ -155,7 +155,7 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 	if sub == "fetch" {
 		for _, img := range imgs {
 			if !dist.ImageName(img) {
-				return fmt.Errorf("-image %q: not a chip image's name (esp32s3-eth)", img)
+				return fmt.Errorf("-image %q: not one of the chip images", img)
 			}
 		}
 		s, err := settings.Load(settings.Path(*data))

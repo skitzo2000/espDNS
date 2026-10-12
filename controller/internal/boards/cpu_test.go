@@ -68,7 +68,7 @@ func TestCPUClocks(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cpu min_mhz: 90, 180 on esp32p4-rev1, or leave it out for the image's 180") {
 		t.Fatal(err)
 	}
-	if _, err := Parse([]byte(`{"name":"x","image":"esp32","cpu":{"dfs":true,"idle":1}}`)); err == nil {
+	if _, err := Parse([]byte(`{"name":"x","image":"esp32p4","cpu":{"dfs":true,"idle":1}}`)); err == nil {
 		t.Fatal("an unknown cpu key was taken")
 	}
 }

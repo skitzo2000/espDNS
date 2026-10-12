@@ -140,9 +140,10 @@ func TestServiceOutSkipped(t *testing.T) {
 func TestServiceReturnCatchesUp(t *testing.T) {
 	e := newServiceEnv(t, 3, false)
 	back := e.nodes[2]
-	// Its firmware is older than its board's build.
+	// Its firmware is older than its chip image held.
 	back.Do(func(n *fakenode.Node) { n.Version = "0.0.1" })
-	writeFile(t, filepath.Join(e.dir, "firmware/builds/p4-ip101/dns2.bin"), fakenode.App("0.0.3", "0000000000000003"))
+	writeFile(t, filepath.Join(e.dir, "firmware/images/esp32p4-rev1/image.json"), []byte(`{"image": "esp32p4-rev1", "chip": "esp32p4"}`))
+	writeFile(t, filepath.Join(e.dir, "firmware/images/esp32p4-rev1/app.bin"), fakenode.App("0.0.3", "0000000000000003"))
 	if j, err := e.job("node-out", map[string]any{"node": e.addrs[2]}); err != nil || j.State != jobs.Done {
 		t.Fatalf("node-out: %v %+v", err, j)
 	}

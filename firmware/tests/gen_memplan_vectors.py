@@ -30,9 +30,6 @@ DEFAULTS = {
     "esp32s3-octal": (160, 2944, 8192, 2048, 0, 256, 64, 32),
     "esp32s3-eth": (160, 2944, 8192, 2048, 0, 256, 64, 32),
     "esp32s3-quad": (160, 1024, 2048, 512, 0, 128, 32, 32),
-    "esp32": (96, 1024, 2048, 512, 0, 128, 32, 32),
-    "esp32c3": (128, 64, 512, 128, 0, 64, 16, 32),
-    "esp32c6": (160, 64, 512, 128, 0, 64, 16, 32),
 }
 OTHER = (96, 64, 512, 128, 0, 64, 16, 32)
 NO_PSRAM = (0, 64, 512, 128, 0, 64, 0, 8)
@@ -130,7 +127,7 @@ cases = [
      dict(s3, memory=dict(s3["memory"], querylog_kb=512)), "esp32s3-eth", 8192, ALL),
     ("the same with the query log off", dict(s3, memory=dict(s3["memory"], querylog_kb=512)), "esp32s3-eth", 8192,
      [s for s in ALL if s != "querylog"]),
-    ("a board without PSRAM: no query log", {"name": "x", "image": "esp32c3", "psram_mb": 0}, "esp32c3", 0,
+    ("an S3 whose PSRAM isn't found: no query log", {"name": "x", "image": "esp32s3-quad"}, "esp32s3-quad", 0,
      ["dns", "querylog"]),
     ("a P4 with a bigger table of upstream queries", dict(p4, memory=dict(p4["memory"], fwd_pending=256)),
      "esp32p4-rev1", 32768, ALL),

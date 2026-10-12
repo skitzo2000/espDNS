@@ -89,7 +89,7 @@ func TestFetch(t *testing.T) {
 	}
 	// A version asked for, with or without its v
 	for _, v := range []string{"v0.0.4", "0.0.4"} {
-		if _, err := Fetch(context.Background(), FetchOptions{Forge: f.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32c6"}}, work,
+		if _, err := Fetch(context.Background(), FetchOptions{Forge: f.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
 			filepath.Join(t.TempDir(), "images")); err != nil {
 			t.Errorf("%s: %v", v, err)
 		}
@@ -120,7 +120,7 @@ func TestFetchRefuses(t *testing.T) {
 
 	// Signed by the project, a tarball changed on the forge
 	dir2, pub := signedRelease(t)
-	tb := filepath.Join(dir2, ChipFile("0.0.4", "esp32c6"))
+	tb := filepath.Join(dir2, ChipFile("0.0.4", "esp32p4"))
 	b, _ := os.ReadFile(tb)
 	b[len(b)/2] ^= 1
 	os.WriteFile(tb, b, 0o644)
@@ -143,7 +143,7 @@ func TestFetchRefuses(t *testing.T) {
 		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "latest", ProjectPub: pub, Images: catalogImages}, "not vMAJOR"},
 		{FetchOptions{Forge: f.URL + "/owner/espdns", Images: catalogImages}, "no project public key"},
 		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}, "no chip images asked for"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub, Images: []string{"../x"}}, "not a chip image's name"},
+		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub, Images: []string{"../x"}}, "not one of the chip images"},
 	} {
 		if _, err := Fetch(context.Background(), c.o, work, images); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
@@ -164,8 +164,8 @@ func TestFetchOnly(t *testing.T) {
 	opts := FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}
 
 	// Two chip images first, from a full fetch of them
-	opts.Images = []string{"esp32p4-rev1", "esp32c6"}
-	if imp, err := Fetch(context.Background(), opts, work, images); err != nil || !slices.Equal(imp.Images, []string{"esp32c6", "esp32p4-rev1"}) {
+	opts.Images = []string{"esp32p4-rev1", "esp32p4"}
+	if imp, err := Fetch(context.Background(), opts, work, images); err != nil || !slices.Equal(imp.Images, []string{"esp32p4-rev1", "esp32p4"}) {
 		t.Fatalf("%+v %v", imp, err)
 	}
 	p4 := filepath.Join(images, "esp32p4-rev1")
@@ -192,7 +192,7 @@ func TestFetchOnly(t *testing.T) {
 	for _, e := range ents {
 		have = append(have, e.Name())
 	}
-	if want := []string{"esp32c6", "esp32p4-rev1", "esp32s3-eth"}; !slices.Equal(have, want) {
+	if want := []string{"esp32p4", "esp32p4-rev1", "esp32s3-eth"}; !slices.Equal(have, want) {
 		t.Errorf("images %v, want %v", have, want)
 	}
 	if !bytes.Equal(before, mustRead(t, filepath.Join(p4, ProvenanceDir, SignerFile))) {
@@ -212,12 +212,19 @@ func TestFetchOnly(t *testing.T) {
 	}
 
 	// One the release doesn't have: refused, nothing more downloaded or imported
+	sub, k := filepath.Join(t.TempDir(), "dist"), testKey(t)
+	if _, err := Build(Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", catalogImages[:4]...), Catalog: catalog, Out: sub}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sign(sub, k); err != nil {
+		t.Fatal(err)
+	}
 	f.mu.Lock()
-	f.got = nil
+	f.got, f.rels["v0.0.4"] = nil, sub
 	f.mu.Unlock()
-	opts.Images = []string{"esp32s3-eth", "esp32h9"}
+	opts.Images, opts.ProjectPub = []string{"esp32s3-eth", "esp32p4"}, release.PublicRaw(k)
 	if _, err := Fetch(context.Background(), opts, work, filepath.Join(t.TempDir(), "images")); err == nil ||
-		!strings.Contains(err.Error(), "no chip image esp32h9; it has esp32, esp32c6, esp32p4-rev1, esp32s3-eth, esp32s3-octal, esp32s3-quad") {
+		!strings.Contains(err.Error(), "no chip image esp32p4; it has esp32p4-rev1, esp32s3-eth, esp32s3-octal, esp32s3-quad") {
 		t.Fatalf("an image not in the release: %v", err)
 	}
 	for _, p := range f.asked() {
@@ -231,7 +238,7 @@ func TestFetchOnly(t *testing.T) {
 	f.mu.Lock()
 	f.got = nil
 	f.mu.Unlock()
-	opts.Images = []string{"esp32c6"}
+	opts.Images = []string{"esp32p4"}
 	opts.ProjectPub = release.PublicRaw(testKey(t))
 	if _, err := Fetch(context.Background(), opts, work, images); err == nil || !strings.Contains(err.Error(), "not the project's release key") {
 		t.Fatalf("another key's release: %v", err)

@@ -180,7 +180,7 @@ bool querylog_broken(void) { return s_failed; }
 #define LIMIT_DEF 100
 #define LIMIT_MAX 1000
 
-static uint64_t arg_u64(const char *q, const char *key, uint64_t def, bool *bad)
+uint64_t querylog_arg(const char *q, const char *key, uint64_t def, bool *bad)
 {
     char v[24];
     if (!q)
@@ -222,8 +222,8 @@ esp_err_t querylog_get(httpd_req_t *req)
     esp_err_t qerr = httpd_req_get_url_query_str(req, q, sizeof(q));
     const char *qs = qerr == ESP_OK ? q : NULL;
     bool bad = qerr != ESP_OK && qerr != ESP_ERR_NOT_FOUND; /* too long for any it takes */
-    uint64_t cursor = arg_u64(qs, "cursor", 0, &bad);
-    uint64_t limit = arg_u64(qs, "limit", LIMIT_DEF, &bad);
+    uint64_t cursor = querylog_arg(qs, "cursor", 0, &bad);
+    uint64_t limit = querylog_arg(qs, "limit", LIMIT_DEF, &bad);
     if (bad || limit == 0) {
         httpd_resp_set_status(req, "400 Bad Request");
         return httpd_resp_sendstr(req, "cursor and limit: whole numbers, limit 1 or more\n");

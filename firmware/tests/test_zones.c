@@ -1,6 +1,7 @@
 /* Host tests for local zones' lookups and zone transfers (zone.h, axfr.h): canonical order,
  * existence in O(log n), the zone's memory limit, and the transfer's deadline, against a
- * fake primary on the loopback. gcc + ASan/UBSan, no hardware. */
+ * fake primary on the loopback; and GET /zone's pages (zread.h), on a fake registry.
+ * gcc + ASan/UBSan, no hardware. */
 #include <arpa/inet.h>
 #include <assert.h>
 #include <malloc.h>
@@ -16,8 +17,11 @@
 
 #include "answer.h"
 #include "axfr.h"
+#include "cJSON.h"
 #include "dns_wire.h"
+#include "registry.h"
 #include "zone.h"
+#include "zread.h"
 
 static int s_fail;
 #define CHECK(c)                                                          \
@@ -698,6 +702,138 @@ static void test_soa_deadline(void)
     primary_stop(&pr);
 }
 
+/* ---- GET /zone's pages (zread.h) ---- */
+
+/* The registry, one slot: a refresh "swaps" the zone (bumps gen) as the swap_at'th read
+ * lock is taken. */
+static zslot_t s_slot = { .name = "example.test" };
+static int s_locks, s_swap_at;
+void reg_rdlock(void)
+{
+    if (++s_locks == s_swap_at)
+        s_slot.gen++;
+}
+void reg_unlock(void) {}
+int reg_nslots(void) { return 1; }
+zslot_t *reg_slot(int i) { return &s_slot; }
+
+static char s_out[300000];
+static size_t s_len;
+static int out_send(void *ctx, const char *buf, size_t len)
+{
+    assert(s_len + len < sizeof(s_out));
+    memcpy(s_out + s_len, buf, len);
+    s_len += len;
+    s_out[s_len] = 0;
+    return 0;
+}
+
+/* One page, parsed (NULL unless 200 and valid JSON). */
+static cJSON *page(const char *name, uint64_t from, uint64_t limit, uint64_t gen, int *code)
+{
+    static char buf[ZR_BUF];
+    s_len = 0;
+    s_locks = 0;
+    *code = zread_page(name, from, limit, gen, buf, sizeof(buf), out_send, NULL);
+    return *code == 200 ? cJSON_Parse(s_out) : NULL;
+}
+static double num(const cJSON *j, const char *k) { return cJSON_GetNumberValue(cJSON_GetObjectItem(j, k)); }
+static bool more(const cJSON *j) { return cJSON_IsTrue(cJSON_GetObjectItem(j, "more")); }
+static const cJSON *rrs(const cJSON *j) { return cJSON_GetObjectItem(j, "rrs"); }
+
+static void test_zread(void)
+{
+    int code;
+    s_slot.apex_len = N(APEX, s_slot.apex);
+    CHECK(!page(APEX, 0, 10, UINT64_MAX, &code) && code == 404); /* no data yet */
+    s_slot.z = big_zone(600);
+    zone_t *z = s_slot.z;
+    CHECK(!page("other.test", 0, 10, UINT64_MAX, &code) && code == 404);
+
+    /* Every page in turn, record for record as the zone holds them; the name in any case. */
+    uint64_t from = 0;
+    int pages = 0;
+    for (bool go = true; go && pages < 10; pages++) {
+        cJSON *j = page("EXAMPLE.test.", from, 200, s_slot.gen, &code);
+        CHECK(j && num(j, "records") == (double)z->n && num(j, "from") == (double)from &&
+              num(j, "gen") == s_slot.gen && num(j, "serial") == 1);
+        const cJSON *r;
+        cJSON_ArrayForEach(r, rrs(j)) {
+            char o[DNS_MAX_NAME], d[9];
+            const zrr_t *e = &z->rrs[from];
+            dns_name_to_str(zrr_owner(z, e), o, sizeof(o));
+            CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(r, "o")), o) && num(r, "t") == e->type &&
+                  num(r, "ttl") == e->ttl);
+            if (e->type == DNS_T_A) {
+                const uint8_t *a = zrr_rdata(z, e);
+                snprintf(d, sizeof(d), "%02x%02x%02x%02x", a[0], a[1], a[2], a[3]);
+                CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(r, "d")), d));
+            }
+            from++;
+        }
+        CHECK(num(j, "next") == (double)from && more(j) == (from < z->n));
+        go = more(j);
+        cJSON_Delete(j);
+    }
+    CHECK(pages == 4 && from == z->n);
+    /* From the end and beyond it: nothing, nothing more. */
+    const uint64_t ends[] = { z->n, z->n + 1, 1000000000000 };
+    for (int i = 0; i < 3; i++) {
+        uint64_t f = ends[i];
+        cJSON *j = page(APEX, f, 200, UINT64_MAX, &code);
+        CHECK(j && cJSON_GetArraySize(rrs(j)) == 0 && num(j, "next") == (double)f && !more(j));
+        cJSON_Delete(j);
+    }
+
+    /* A refresh: the old gen gets 409. One during a page ends it after the last whole record. */
+    uint64_t g = s_slot.gen;
+    s_slot.gen++;
+    CHECK(!page(APEX, 0, 10, g, &code) && code == 409);
+    s_swap_at = 4;
+    cJSON *j = page(APEX, 0, 10, UINT64_MAX, &code);
+    CHECK(j && cJSON_GetArraySize(rrs(j)) == 2 && num(j, "next") == 2 && more(j) && num(j, "gen") == g + 1);
+    cJSON_Delete(j);
+    CHECK(!page(APEX, 2, 10, g + 1, &code) && code == 409);
+    s_swap_at = 0;
+    zone_free(z);
+
+    /* Large records: one of 65535 bytes is a page of its own, sent through the buffer in
+     * pieces; one taken by a swap halfway is a connection closed. 1000-byte ones stop a page
+     * at the byte budget. Odd bytes in an owner show as '?'. */
+    z = s_slot.z = new_zone(SIZE_MAX);
+    static uint8_t rd[65535];
+    for (size_t i = 0; i < sizeof(rd); i++)
+        rd[i] = (uint8_t)i;
+    uint8_t o[256];
+    CHECK(zone_add(z, o, N("a.example.test", o), DNS_T_TXT, 60, rd, 65535));
+    for (int i = 0; i < 100; i++) {
+        char s[64];
+        snprintf(s, sizeof(s), "b%03d.example.test", i);
+        CHECK(zone_add(z, o, N(s, o), DNS_T_TXT, 60, rd, 1000));
+    }
+    static const uint8_t odd[] = { 5, '"', '\\', 1, 0xff, ' ', 1, 'z', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 4, 't', 'e', 's', 't', 0 };
+    CHECK(zone_add(z, odd, sizeof(odd), DNS_T_A, 60, rd, 4));
+    CHECK(zone_finalize(z));
+    j = page(APEX, 1, 500, UINT64_MAX, &code);
+    const cJSON *r = cJSON_GetArrayItem(rrs(j), 0);
+    const char *d = cJSON_GetStringValue(cJSON_GetObjectItem(r, "d"));
+    CHECK(j && cJSON_GetArraySize(rrs(j)) == 1 && more(j) && d && strlen(d) == 2 * 65535 &&
+          !strncmp(d, "000102", 6) && !strcmp(d + 2 * 65533, "fdfe"));
+    cJSON_Delete(j);
+    s_swap_at = 3;
+    CHECK(!page(APEX, 1, 500, UINT64_MAX, &code) && code == -1);
+    s_swap_at = 0;
+    j = page(APEX, 2, 500, UINT64_MAX, &code);
+    int k = cJSON_GetArraySize(rrs(j));
+    CHECK(j && k >= 14 && k <= 17 && more(j) && s_len >= ZR_BUDGET && s_len < ZR_BUDGET + 2200);
+    cJSON_Delete(j);
+    j = page(APEX, z->n - 1, 1, UINT64_MAX, &code);
+    CHECK(j && !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(rrs(j), 0), "o")), "?????.z.example.test"));
+    cJSON_Delete(j);
+    zone_free(z);
+    s_slot.z = NULL;
+}
+
 int main(void)
 {
     test_canonical_order();
@@ -706,6 +842,7 @@ int main(void)
     test_zone_limit();
     test_axfr();
     test_soa_deadline();
+    test_zread();
     if (s_fail) {
         fprintf(stderr, "%d check(s) failed\n", s_fail);
         return 1;

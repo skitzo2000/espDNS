@@ -136,7 +136,11 @@ section { display: grid; gap: 12px; min-width: 0 }
 .r[data-href]:hover { background: var(--hover) }
 .r[data-found] { cursor: pointer }
 .r[data-found] .actions { margin-top: 6px }
-.nodes .r { grid-template-columns: minmax(150px, 1.2fr) minmax(170px, 1.5fr) minmax(190px, 1.1fr) 80px 18px }
+.nodes .r { grid-template-columns: minmax(110px, 1fr) minmax(220px, 2fr) minmax(210px, 1.3fr) 90px 80px 18px }
+/* A node's flag by its dot, cut short to stay on one line (whole on hovering it). */
+.nodes .state { max-width: 100% }
+.nodes .flag { overflow: hidden; text-overflow: ellipsis; min-width: 0 }
+.ipc .link { display: inline-flex; color: var(--muted) }
 .chev { color: var(--faint) }
 .empty { padding: 26px 18px; display: grid; gap: 10px; justify-items: start }
 .empty p { color: var(--muted) }
@@ -166,6 +170,7 @@ section { display: grid; gap: 12px; min-width: 0 }
 .led.identify { background: #ffffff; animation: blink .08s steps(1) infinite }
 .led.unknown { background: transparent; box-shadow: inset 0 0 0 2px var(--faint) }
 .led.out { background: var(--faint) }
+.led.todo { background: var(--led-amber) }
 @keyframes blink { 50% { opacity: .2 } }
 @keyframes duo { 0% { opacity: 1 } 10% { opacity: .2 } 20% { opacity: 1 } 30%, 100% { opacity: .2 } }
 @keyframes tri { 0% { opacity: 1 } 10% { opacity: .2 } 20% { opacity: 1 } 30% { opacity: .2 } 40% { opacity: 1 } 50%, 100% { opacity: .2 } }
@@ -175,14 +180,16 @@ section { display: grid; gap: 12px; min-width: 0 }
 .r.r-warn { background: color-mix(in srgb, var(--led-amber) 24%, var(--surface)); box-shadow: inset 6px 0 0 var(--led-amber) }
 .r.r-bad { background: color-mix(in srgb, var(--led-red) 26%, var(--surface)); box-shadow: inset 6px 0 0 var(--led-red) }
 .r.r-new { background: color-mix(in srgb, var(--sky) 28%, var(--surface)); box-shadow: inset 6px 0 0 var(--sky) }
-.r.r-warn .stw, .r.r-bad .stw, .r.r-new .stw { font-weight: 600; color: var(--fg) }
+.r.r-warn .stw, .r.r-bad .stw, .r.r-new .stw, .r.r-warn .flag, .r.r-bad .flag, .r.r-new .flag { font-weight: 600; color: var(--fg) }
 .r.r-warn .sub, .r.r-bad .sub, .r.r-new .sub { color: var(--fg); opacity: .85 }
 .r.r-new[data-found]:hover { background: color-mix(in srgb, var(--sky) 40%, var(--surface)) }
 .r.r-warn[data-href]:hover { background: color-mix(in srgb, var(--led-amber) 22%, var(--surface)) }
 .r.r-bad[data-href]:hover { background: color-mix(in srgb, var(--led-red) 24%, var(--surface)) }
-/* A node out of service: muted, not an alert; its badge says so. */
+/* A node out of service: muted, not an alert; its flag says so. */
 .r.r-out > :not(.chev) { opacity: .62 }
-.out-badge { font-size: 12px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; color: var(--muted); white-space: nowrap; font-weight: 500 }
+/* A node's firmware update offered in its row: amber, dark text, on either theme. */
+.btn.upd { padding: 1px 8px; background: var(--led-amber); border-color: color-mix(in srgb, var(--led-amber) 70%, #000); color: #0d2b4e; font-weight: 600 }
+.btn.upd:hover { background: color-mix(in srgb, var(--led-amber) 85%, #000) }
 
 /* A copyable address */
 .ipc { display: inline-flex; align-items: center; gap: 6px }

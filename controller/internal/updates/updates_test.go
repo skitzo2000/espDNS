@@ -1,7 +1,6 @@
 package updates
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,61 +32,6 @@ func status(image, board, version, elf, built, name string) *release.NodeStatus 
 }
 
 func TestVersion(t *testing.T) {
-	old := Of("0.0.3", "Oct  7 2026 12:00:00", "00000000000000a1")
-	newer := Of("0.0.10", "Oct  3 2026 09:30:00", "00000000000000b2")
-	// By version, whatever the build times say.
-	if c, ok := Compare(newer, old); !ok || c <= 0 {
-		t.Errorf("newer vs old: %d %v", c, ok)
-	}
-	if c, ok := Compare(old, newer); !ok || c >= 0 {
-		t.Errorf("old vs newer: %d %v", c, ok)
-	}
-	if c, ok := Compare(Of("0.1.0", "", "00000000000000c1"), Of("0.0.99", "", "00000000000000c2")); !ok || c <= 0 {
-		t.Errorf("minor over patch: %d %v", c, ok)
-	}
-	// The same build, whatever its text and time say.
-	if c, ok := Compare(old, Of("other", "", "00000000000000A1")); !ok || c != 0 {
-		t.Errorf("same build: %d %v", c, ok)
-	}
-	// One version, two builds: the build time breaks the tie.
-	rebuilt := Of("0.0.3", "Oct  8 2026 08:00:00", "00000000000000c3")
-	if c, ok := Compare(rebuilt, old); !ok || c <= 0 {
-		t.Errorf("rebuilt vs old: %d %v", c, ok)
-	}
-	if c, ok := Compare(old, rebuilt); !ok || c >= 0 {
-		t.Errorf("old vs rebuilt: %d %v", c, ok)
-	}
-	// ... and without one to break it, or the same second: not ordered.
-	untimed := Of("0.0.3", "garbage", "00000000000000c4")
-	if _, ok := Compare(old, untimed); ok {
-		t.Error("one version, no build time: ordered")
-	}
-	if _, ok := Compare(old, Of("0.0.3", "Oct  7 2026 12:00:00", "00000000000000c5")); ok {
-		t.Error("one version, same second: ordered")
-	}
-	// A build without a version (a commit, as firmware from before versions says) is not
-	// ordered against any other, whatever the build times.
-	commit := Of("3fbae0a", "Oct  1 2026 08:00:00", "00000000000000c6")
-	if _, ok := Compare(old, commit); ok {
-		t.Error("a commit vs a version: ordered")
-	}
-	if _, ok := Compare(commit, Of("bff81c1-dirty", "Oct  9 2026 08:00:00", "00000000000000c7")); ok {
-		t.Error("two commits: ordered")
-	}
-	// The newer pick of two builds: by Compare, else the one with a version, else (one
-	// version) the one with a build time.
-	if !Later(newer, old) || Later(old, newer) || !Later(rebuilt, old) {
-		t.Error("later: ordered")
-	}
-	if !Later(old, commit) || Later(commit, old) || Later(commit, commit) {
-		t.Error("later: a version over none")
-	}
-	if !Later(old, untimed) || Later(untimed, old) || Later(untimed, untimed) {
-		t.Error("later: a build time over none")
-	}
-	if Later(Of("0.0.2", "", "00000000000000c8"), untimed) {
-		t.Error("later: an older version for its build time")
-	}
 	// What is shown: the descriptor's version, plain, else the build.
 	if v := Of(" 0.0.4\x00\n", "", "00000000000000d4"); v.Text != "0.0.4" || !v.ok {
 		t.Errorf("text %q", v.Text)
@@ -100,122 +44,110 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-// fleet is a data directory with a P4 board's build, an exported S3 image and a board
-// whose definition is missing.
+// fleet is a data directory with a P4 board's build and an exported S3 image of 0.0.3.
 func fleet(t *testing.T) (dir, catalog string) {
 	dir, catalog = t.TempDir(), t.TempDir()
 	write(t, filepath.Join(catalog, "p4-board.json"), []byte(`{"image": "esp32p4-rev1"}`))
-	write(t, filepath.Join(dir, "firmware/builds/p4-board/dns2.bin"), fakenode.AppBuilt("0.0.4", "00000000000000b2", "Oct  7 2026", "09:30:00"))
-	write(t, filepath.Join(dir, "firmware/builds/gone/dns2.bin"), fakenode.App("x", "00000000000000ff"))
+	write(t, filepath.Join(dir, "firmware/builds/p4-board/dns2.bin"), fakenode.AppBuilt("0.0.9", "00000000000000b2", "Oct  7 2026", "09:30:00"))
 	write(t, filepath.Join(dir, "firmware/images/esp32s3/image.json"), []byte(`{"image": "esp32s3", "chip": "esp32s3"}`))
 	write(t, filepath.Join(dir, "firmware/images/esp32s3/app.bin"), fakenode.AppBuilt("0.0.3", "00000000000000c1", "Oct  5 2026", "08:00:00"))
 	return dir, catalog
 }
 
+func TestLatest(t *testing.T) {
+	dir := t.TempDir()
+	if Latest(dir) != "" {
+		t.Fatal("none yet")
+	}
+	if err := SetLatest(dir, "0.0.4"); err != nil || Latest(dir) != "0.0.4" {
+		t.Fatalf("%q %v", Latest(dir), err)
+	}
+}
+
+// The newest version is the forge's newest release, or a newer chip image held; a board's
+// build doesn't count. A node on an older version is out of date whatever its chip or board.
 func TestReport(t *testing.T) {
 	dir, catalog := fleet(t)
 	builds := Builds(dir, catalog)
-	if len(builds) != 3 {
-		t.Fatalf("builds %+v", builds)
+	if n := Newest("", builds); n.Text != "0.0.3" {
+		t.Errorf("the image held: %q", n.Text)
 	}
-	if b := builds[1]; b.Source != "builds/p4-board" || b.Image != "esp32p4-rev1" || b.Text != "0.0.4" || b.Build != "00000000000000b2" || b.Error != "" {
-		t.Errorf("the P4's build: %+v", b)
+	if n := Newest("0.0.2", builds); n.Text != "0.0.3" {
+		t.Errorf("a newer image held over the release: %q", n.Text)
 	}
-	if b := builds[0]; b.Source != "builds/gone" || b.Error == "" {
-		t.Errorf("a board without a definition: %+v", b)
+	if n := Newest("0.0.4", builds); n.Text != "0.0.4" {
+		t.Errorf("the release: %q", n.Text)
 	}
 	ns := []Node{
-		{Host: "192.0.2.52", Listed: true, Online: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "dns2")},
-		{Host: "192.0.2.53", Listed: true, Online: true, Status: status("esp32s3", "s3-board", "0.0.3", "00000000000000c1", "Oct  5 2026 08:00:00", "dns3")},
-		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3", "s3-board", "0.0.9", "00000000000000d1", "Oct  1 2026 08:00:00", "")},
-		{Host: "192.0.2.55", Listed: true, Status: status("esp32c6", "", "1", "00000000000000e1", "Oct  1 2026 08:00:00", "")},
+		// A chip whose image isn't held, on a board with a build: out of date all the same.
+		{Host: "192.0.2.52", Listed: true, Online: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "", "dns2")},
+		{Host: "192.0.2.53", Listed: true, Online: true, Status: status("esp32s3", "s3-board", "0.0.4", "00000000000000c1", "", "dns3")},
+		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3-octal", "xiao", "0.0.9", "00000000000000d1", "", "")},
+		{Host: "192.0.2.55", Listed: true, Status: status("esp32s3", "", "3fbae0a", "00000000000000e1", "", "")},
 		{Host: "192.0.2.56", Listed: true},
-		{Host: "192.0.2.57", Listed: true, Status: status("esp32s3", "", "f00d", "00000000000000d1", "Oct  1 2026 08:00:00", "")},
-		{Host: "192.0.2.58", Listed: false, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "")},
-		{Host: "192.0.2.59", Listed: true, Status: status("esp32p4-rev1", "other-p4", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "")},
-		{Host: "192.0.2.60", Listed: true, Status: status("esp32p4-rev1", "", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "")},
-		// The newest build's version, built before it and after it: the build time decides.
-		{Host: "192.0.2.61", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.4", "00000000000000a4", "Oct  6 2026 12:00:00", "")},
-		{Host: "192.0.2.62", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.4", "00000000000000a5", "Oct  8 2026 12:00:00", "")},
-		// A build from before versions (its descriptor says a commit): not ordered.
-		{Host: "192.0.2.63", Listed: true, Status: status("esp32p4-rev1", "p4-board", "3fbae0a", "00000000000000a6", "Oct  3 2026 12:00:00", "")},
+		{Host: "192.0.2.57", Listed: false, Status: status("esp32s3", "", "0.0.1", "00000000000000a1", "", "")},
+		{Host: "192.0.2.58", Listed: true, Status: status("esp32s3-octal", "xiao", "0.0.2", "00000000000000a1", "", "")},
 	}
-	pending := []changes.Change{{ID: "c1", Kind: changes.Firmware, Firmware: "builds/p4-board", Nodes: []string{"192.0.2.60"}, Summary: "Update 192.0.2.60"}}
-	r := For(ns, builds, pending)
-	if r.Scheme != Scheme {
-		t.Errorf("scheme %q", r.Scheme)
+	pending := []changes.Change{{ID: "c1", Kind: changes.Firmware, Firmware: "images/esp32s3-octal", Nodes: []string{"192.0.2.58"}, Summary: "Update 192.0.2.58"}}
+	r := For(ns, builds, "0.0.4", pending)
+	if r.Scheme != Scheme || r.Newest != "0.0.4" {
+		t.Errorf("scheme %q newest %q", r.Scheme, r.Newest)
 	}
-	want := []string{Available, Current, Newer, NoBuild, Unknown, Unordered, Available, NoBuild, Available, Available, Newer, Unordered}
+	want := []string{Available, Current, Newer, Unknown, Unknown, Available, Available}
 	for i, u := range r.Nodes {
 		if u.State != want[i] {
 			t.Errorf("%s: %s (%s), want %s", u.Host, u.State, u.Why, want[i])
 		}
 	}
-	dns2 := r.Nodes[0]
-	if dns2.Name != "dns2" || dns2.Runs.Text != "0.0.1" || dns2.Newest.Source != "builds/p4-board" || dns2.Why != "Update available: 0.0.1 → 0.0.4" {
-		t.Errorf("dns2 %+v", dns2)
+	if u := r.Nodes[0]; u.Name != "dns2" || u.Runs.Text != "0.0.1" || u.Newest.Text != "0.0.4" || u.Why != "Update available: 0.0.1 → 0.0.4" {
+		t.Errorf("dns2 %+v", u)
 	}
-	// A later build of the version it runs: said as that, never "0.0.4 → 0.0.4", and
-	// offered for the node alone, not in "Update all".
-	if u := r.Nodes[9]; u.Why != "A newer build of 0.0.4 (built Oct 7 2026 09:30)" || !u.Rebuild || !u.Offered() || u.Announced() {
-		t.Errorf("a later build: %+v", u)
-	}
-	if r.Nodes[0].Rebuild {
-		t.Error("a new version: a rebuild")
-	}
-	if w := r.Nodes[10].Why; w != "It runs 0.0.4, built later than any build of it here" {
-		t.Errorf("an earlier build: %q", w)
-	}
-	if r.Nodes[1].Newest.Source != "images/esp32s3" {
-		t.Errorf("the S3 takes its image's export: %+v", r.Nodes[1])
-	}
-	if u := r.Nodes[8]; u.Pending != "c1" || u.Offered() {
+	if u := r.Nodes[6]; u.Pending != "c1" || u.Offered() {
 		t.Errorf("pending: %+v", u)
 	}
 	// Offered: listed, available, none pending.
 	if !slices.Equal(r.Available, []string{"192.0.2.52"}) {
 		t.Errorf("available %v", r.Available)
 	}
+	// No newest known: unknown, nothing offered.
+	if u := For(ns[:1], nil, "", nil).Nodes[0]; u.State != Unknown || u.Newest != nil {
+		t.Errorf("none known: %+v", u)
+	}
 }
 
 func TestPlan(t *testing.T) {
-	dir, catalog := fleet(t)
-	builds := Builds(dir, catalog)
 	ns := []Node{
-		{Host: "192.0.2.52", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "dns2")},
-		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3", "s3-board", "0.0.2", "00000000000000aa", "Oct  1 2026 08:00:00", "dns3")},
-		{Host: "192.0.2.54", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "")},
-		{Host: "192.0.2.55", Listed: true, Status: status("esp32s3", "s3-board", "0.0.3", "00000000000000c1", "Oct  5 2026 08:00:00", "dns5")},
-		{Host: "192.0.2.56", Listed: false, Status: status("esp32s3", "s3-board", "0.0.2", "00000000000000aa", "Oct  1 2026 08:00:00", "")},
+		{Host: "192.0.2.52", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "", "", "dns2")},
+		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3", "s3-board", "0.0.2", "", "", "dns3")},
+		{Host: "192.0.2.54", Listed: true, Status: status("esp32p4-rev1", "other-p4", "0.0.1", "", "", "")},
+		{Host: "192.0.2.55", Listed: true, Status: status("esp32s3", "s3-board", "0.0.3", "", "", "dns5")},
+		{Host: "192.0.2.56", Listed: false, Status: status("esp32s3", "s3-board", "0.0.2", "", "", "")},
+		{Host: "192.0.2.57", Listed: true, Status: status("", "", "0.0.1", "", "", "")},
 	}
-	r := For(ns, builds, nil)
-	// Update all: one change per build, in the builds' order.
-	offers, err := r.Plan(nil, nil)
+	r := For(ns, nil, "0.0.3", nil)
+	// Update all: one change per chip image, whatever the boards.
+	offers, err := r.Plan(nil)
+	if err == nil {
+		t.Fatal("a node of no chip image: planned")
+	}
+	offers, err = r.Plan([]string{"192.0.2.52", "192.0.2.53", "192.0.2.54"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(offers) != 2 || offers[0].Source != "builds/p4-board" || !slices.Equal(offers[0].Nodes, []string{"192.0.2.52", "192.0.2.54"}) ||
+	if len(offers) != 2 || offers[0].Source != "images/esp32p4-rev1" || !slices.Equal(offers[0].Nodes, []string{"192.0.2.52", "192.0.2.54"}) ||
 		offers[1].Source != "images/esp32s3" || !slices.Equal(offers[1].Nodes, []string{"192.0.2.53"}) {
 		t.Fatalf("offers %+v", offers)
 	}
-	if offers[0].Summary != "Update dns2, 192.0.2.54 from 0.0.1 to 0.0.4" || offers[0].To.Build != "00000000000000b2" {
-		t.Errorf("summary %+v", offers[0])
-	}
-	// One node, the build the page showed.
-	offers, err = r.Plan([]string{"192.0.2.53"}, map[string]string{"192.0.2.53": "00000000000000c1"})
-	if err != nil || len(offers) != 1 || offers[0].Summary != "Update dns3 from 0.0.2 to 0.0.3" {
-		t.Errorf("one: %+v %v", offers, err)
-	}
-	if _, err := r.Plan([]string{"192.0.2.53"}, map[string]string{"192.0.2.53": "00000000000000aa"}); !errors.Is(err, ErrMoved) {
-		t.Errorf("another build since: %v", err)
+	if offers[0].Summary != "Update dns2, 192.0.2.54 from 0.0.1 to 0.0.3" || offers[1].Summary != "Update dns3 from 0.0.2 to 0.0.3" {
+		t.Errorf("summaries %+v", offers)
 	}
 	for _, bad := range [][]string{{"192.0.2.55"}, {"192.0.2.56"}, {"192.0.2.99"}, {"192.0.2.52", "192.0.2.52"}, {""}} {
-		if _, err := r.Plan(bad, nil); err == nil {
+		if _, err := r.Plan(bad); err == nil {
 			t.Errorf("%v: planned", bad)
 		}
 	}
 	// Nothing to update.
-	if _, err := For(ns[3:4], builds, nil).Plan(nil, nil); err == nil {
+	if _, err := For(ns[3:4], nil, "0.0.3", nil).Plan(nil); err == nil {
 		t.Error("nothing offered: planned")
 	}
 	// Many nodes: counted.
@@ -228,67 +160,6 @@ func TestPlan(t *testing.T) {
 	}
 	if s := summary([]string{"a"}, []string{"1", "2"}, "3"); s != "Update a to 3" {
 		t.Errorf("from two: %q", s)
-	}
-}
-
-// A node with a build for its board takes that build, never its chip image's, however much
-// later the image's is: a board's build is made for its pins and partitions. Without one, it
-// takes its chip image's.
-func TestBoardBuildFirst(t *testing.T) {
-	dir, catalog := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(catalog, "ws-s3-eth.json"), []byte(`{"image": "esp32s3-octal"}`))
-	write(t, filepath.Join(dir, "firmware/builds/ws-s3-eth/dns2.bin"), fakenode.AppBuilt("0.0.1", "00000000000000b1", "Oct  3 2026", "09:00:00"))
-	write(t, filepath.Join(dir, "firmware/images/esp32s3-octal/image.json"), []byte(`{"image": "esp32s3-octal", "chip": "esp32s3"}`))
-	write(t, filepath.Join(dir, "firmware/images/esp32s3-octal/app.bin"), fakenode.AppBuilt("0.0.1", "00000000000000c1", "Oct  6 2026", "08:00:00"))
-	builds := Builds(dir, catalog)
-	r := For([]Node{
-		// Runs its board's build: up to date, the image's later build of 0.0.1 notwithstanding.
-		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000b1", "Oct  3 2026 09:00:00", "dns3")},
-		// An earlier build of its board's version: the board's build, a newer build of 0.0.1.
-		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000a1", "Oct  1 2026 09:00:00", "dns4")},
-		// A board without a build of its own: the chip image's.
-		{Host: "192.0.2.55", Listed: true, Status: status("esp32s3-octal", "other-s3", "0.0.0", "00000000000000a2", "Oct  1 2026 09:00:00", "dns5")},
-	}, builds, nil)
-	if u := r.Nodes[0]; u.State != Current || u.Newest.Source != "builds/ws-s3-eth" || u.Rebuild {
-		t.Errorf("dns3: %+v", u)
-	}
-	if u := r.Nodes[1]; u.State != Available || !u.Rebuild || u.Newest.Source != "builds/ws-s3-eth" || u.Why != "A newer build of 0.0.1 (built Oct 3 2026 09:00)" {
-		t.Errorf("dns4: %+v", u)
-	}
-	if u := r.Nodes[2]; u.State != Available || u.Rebuild || u.Newest.Source != "images/esp32s3-octal" || u.Why != "Update available: 0.0.0 → 0.0.1" {
-		t.Errorf("dns5: %+v", u)
-	}
-	// "Update all" is the new version only; the rebuild is updated on its own, said as one.
-	if !slices.Equal(r.Available, []string{"192.0.2.55"}) {
-		t.Errorf("available %v", r.Available)
-	}
-	offers, err := r.Plan([]string{"192.0.2.54"}, nil)
-	if err != nil || len(offers) != 1 || offers[0].Summary != "Update dns4 to a newer build of 0.0.1" {
-		t.Errorf("rebuild: %+v %v", offers, err)
-	}
-	if err := changes.CheckSummary(offers[0].Summary); err != nil {
-		t.Error(err)
-	}
-}
-
-// A board whose catalog image is now its image's sibling (boards.Siblings): its board's
-// build, of the sibling, is its update, as a rollout moves it there over the air. A node of
-// another board on the same image, with no build of its own, stays on its image's.
-func TestBoardBuildSibling(t *testing.T) {
-	dir, catalog := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(catalog, "ws-s3-eth.json"), []byte(`{"image": "esp32s3-eth"}`))
-	write(t, filepath.Join(dir, "firmware/builds/ws-s3-eth/dns2.bin"), fakenode.AppBuilt("0.0.2", "00000000000000b2", "Oct  9 2026", "09:00:00"))
-	write(t, filepath.Join(dir, "firmware/images/esp32s3-eth/image.json"), []byte(`{"image": "esp32s3-eth", "chip": "esp32s3"}`))
-	write(t, filepath.Join(dir, "firmware/images/esp32s3-eth/app.bin"), fakenode.AppBuilt("0.0.3", "00000000000000c3", "Oct  9 2026", "10:00:00"))
-	r := For([]Node{
-		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3-octal", "ws-s3-eth", "0.0.1", "00000000000000b1", "Oct  3 2026 09:00:00", "dns3")},
-		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3-octal", "xiao-s3-sense", "0.0.1", "00000000000000a1", "Oct  3 2026 09:00:00", "dns4")},
-	}, Builds(dir, catalog), nil)
-	if u := r.Nodes[0]; u.State != Available || u.Newest == nil || u.Newest.Source != "builds/ws-s3-eth" {
-		t.Errorf("dns3: %+v", u)
-	}
-	if u := r.Nodes[1]; u.State != NoBuild {
-		t.Errorf("dns4: %+v", u)
 	}
 }
 
@@ -311,14 +182,12 @@ func TestClean(t *testing.T) {
 // A node's config name with a control character (its /status says it) is shown, and an
 // update of it summarized, without it: the summary a change takes is one plain line.
 func TestPlanNameCleaned(t *testing.T) {
-	dir, catalog := fleet(t)
 	r := For([]Node{{Host: "192.0.2.52", Listed: true,
-		Status: status("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "dns2\nx"+strings.Repeat("y", 300))}},
-		Builds(dir, catalog), nil)
+		Status: status("esp32p4-rev1", "p4-board", "0.0.1", "", "", "dns2\nx"+strings.Repeat("y", 300))}}, nil, "0.0.4", nil)
 	if n := r.Nodes[0].Name; strings.ContainsAny(n, "\n") || len(n) > maxName {
 		t.Errorf("name %q", n)
 	}
-	offers, err := r.Plan(nil, nil)
+	offers, err := r.Plan(nil)
 	if err != nil || len(offers) != 1 {
 		t.Fatalf("%+v %v", offers, err)
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/image"
@@ -18,6 +19,8 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/updates"
+	"github.com/skitzo2000/espdns/controller/internal/version"
 )
 
 // The firmware the controller has, and Get firmware (docs/releasing.md, Using a release):
@@ -133,7 +136,7 @@ func (k fetchKind) kind(raw json.RawMessage) (jobs.Func, error) {
 	}
 	for _, img := range p.Images {
 		if !dist.ImageName(img) {
-			return nil, fmt.Errorf(`params: "images": %q is not a chip image's name (esp32s3-eth)`, img)
+			return nil, fmt.Errorf(`params: "images": %q is not one of the chip images`, img)
 		}
 	}
 	if _, err := k.projectKey(); err != nil {
@@ -225,6 +228,74 @@ func (k fetchKind) run(ctx context.Context, run *jobs.Run, p fetchParams) (any, 
 		Fingerprint: imp.Signer.Fingerprint, From: imp.Signer.From}
 	run.Logf("imported %s: %s", res.Label, strings.Join(imp.Images, ", "))
 	return res, nil
+}
+
+// releaseEvery is how often the controller asks its forge for a new release (newRelease),
+// besides at start and when a new node shows up.
+const releaseEvery = 24 * time.Hour
+
+// newRelease asks the forge releases come from (releaseFrom: GitHub unless settings.json
+// says otherwise) for its newest release and keeps its version (updates.SetLatest): a node
+// on an older one is offered the update, with nothing downloaded until it is applied
+// (getImage). It logs a new version, or why there was no check.
+func newRelease(ctx context.Context, k fetchKind, logf func(string, ...any)) {
+	forge, err := releaseFrom(k.dataDir, k.forge)
+	c := k.client
+	if c == nil {
+		c = &http.Client{Timeout: time.Minute}
+	}
+	var tag string
+	if err == nil {
+		tag, err = dist.Latest(ctx, c, forge)
+	}
+	if err != nil {
+		logf("firmware: no check for a new release: %v", err)
+		return
+	}
+	v := strings.TrimPrefix(tag, "v")
+	if _, err := version.Parse(v); err != nil {
+		logf("firmware: release %s: %v", tag, err)
+		return
+	}
+	if v == updates.Latest(k.dataDir) {
+		return
+	}
+	if err := updates.SetLatest(k.dataDir, v); err != nil {
+		logf("firmware %s, a new release: not kept: %v", tag, err)
+		return
+	}
+	logf("firmware %s, a new release: nodes on an older version are offered it", tag)
+}
+
+// getImage gets the chip image img of the newest release (updates.Latest), as Get firmware
+// does, when the one held is missing, older or of no version; got says it did. None known,
+// or one held as new: nothing done.
+func (k fetchKind) getImage(ctx context.Context, img string) (got bool, err error) {
+	v := updates.Latest(k.dataDir)
+	want, err := version.Parse(v)
+	if err != nil {
+		return false, nil
+	}
+	fw := filepath.Join(k.dataDir, "firmware")
+	if c, err := image.Open(filepath.Join(fw, "images", img)); err == nil {
+		if has, err := version.Parse(c.Version); err == nil && has.Compare(want) >= 0 {
+			return false, nil
+		}
+	}
+	pub, err := k.projectKey()
+	if err != nil {
+		return false, err
+	}
+	forge, err := releaseFrom(k.dataDir, k.forge)
+	if err != nil {
+		return false, err
+	}
+	_, err = dist.Fetch(ctx, dist.FetchOptions{Forge: forge, Version: "v" + v, ProjectPub: pub, Images: []string{img}, Client: k.client,
+		Logf: func(string, ...any) {}}, fw, filepath.Join(fw, "images"))
+	if err != nil {
+		return false, fmt.Errorf("%s of release v%s not got: %w", img, v, err)
+	}
+	return true, nil
 }
 
 // projectPubThere says, at startup, whether the project's public key is there.

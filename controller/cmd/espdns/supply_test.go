@@ -117,7 +117,7 @@ func TestReleaseFetch(t *testing.T) {
 	if _, err := fetch(); err == nil || !strings.Contains(err.Error(), rolling.NothingToGet) {
 		t.Fatalf("nothing needed: %v", err)
 	}
-	if _, err := fetch("-image", "../x"); err == nil || !strings.Contains(err.Error(), "not a chip image's name") {
+	if _, err := fetch("-image", "../x"); err == nil || !strings.Contains(err.Error(), "not one of the chip images") {
 		t.Fatalf("a bad name: %v", err)
 	}
 	got, err := fetch("-image", "esp32p4-rev1")
@@ -149,7 +149,7 @@ func TestReleaseFetch(t *testing.T) {
 		!strings.HasSuffix(got, ": esp32p4-rev1, esp32s3-eth\n") {
 		t.Fatalf("fetch with a node not answering: %v\n%s", err, got)
 	}
-	if _, err := fetch("-image", "esp32c6"); err == nil || !strings.Contains(err.Error(), "no chip image esp32c6") {
+	if _, err := fetch("-image", "esp32p4"); err == nil || !strings.Contains(err.Error(), "no chip image esp32p4") {
 		t.Fatalf("one not in the release: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "firmware", "images", "esp32p4-rev1", dist.ProvenanceDir, dist.SignerFile)); err != nil {
@@ -160,7 +160,7 @@ func TestReleaseFetch(t *testing.T) {
 	}
 	// Signed by another key than the project's: refused
 	_, other := releaseKey(t)
-	if _, err := runRelease(t, "", "fetch", "-data", t.TempDir(), "-pub", other, "-url", srv.URL+"/owner/espdns", "-version", "v0.0.4", "-image", "esp32c6"); err == nil ||
+	if _, err := runRelease(t, "", "fetch", "-data", t.TempDir(), "-pub", other, "-url", srv.URL+"/owner/espdns", "-version", "v0.0.4", "-image", "esp32p4-rev1"); err == nil ||
 		!strings.Contains(err.Error(), "not the project's release key") {
 		t.Fatalf("fetch with another project key: %v", err)
 	}

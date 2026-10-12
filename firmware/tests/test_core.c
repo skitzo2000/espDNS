@@ -3675,80 +3675,80 @@ static void test_board_defs(void)
           b.eth.mdc == BOARD_NC && b.eth.rmii_clock == BOARD_CLK_DEFAULT);
     CHECK(b.sd.kind == BOARD_SD_SDMMC && b.sd.width == 4 && b.sd.ldo == 4 && b.led.kind == BOARD_LED_NONE);
 
-    /* A classic ESP32 board: LAN8720 with its clock from GPIO0 and an oscillator enable pin. */
-    CHECK(parse("{\"name\":\"wt32-eth01\",\"image\":\"esp32\",\"ethernet\":{\"kind\":\"emac\",\"phy\":\"lan87xx\","
-                "\"addr\":1,\"power\":16,\"mdc\":23,\"mdio\":18,\"rmii_clock\":{\"mode\":\"in\",\"gpio\":0}}}", &b, err));
+    /* A LAN8720 with its clock in from a GPIO and an oscillator enable pin. */
+    CHECK(parse("{\"name\":\"p-lan\",\"image\":\"esp32p4\",\"ethernet\":{\"kind\":\"emac\",\"phy\":\"lan87xx\","
+                "\"addr\":1,\"power\":16,\"mdc\":31,\"mdio\":52,\"rmii_clock\":{\"mode\":\"in\",\"gpio\":50}}}", &b, err));
     CHECK(b.eth.phy == BOARD_PHY_LAN87XX && b.eth.power_pin == 16 && b.eth.rmii_clock == BOARD_CLK_IN &&
-          b.eth.rmii_clock_gpio == 0);
+          b.eth.rmii_clock_gpio == 50);
 
     /* Malformed definitions say why. */
     CHECK(!parse("[1,2]", &b, err) && strstr(err, "not a JSON object"));
-    CHECK(!parse("{\"image\":\"esp32\"}", &b, err) && strstr(err, "name: missing"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"ethernet\":{\"kind\":\"enc28j60\"}}", &b, err) &&
+    CHECK(!parse("{\"image\":\"esp32s3-quad\"}", &b, err) && strstr(err, "name: missing"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"ethernet\":{\"kind\":\"enc28j60\"}}", &b, err) &&
           strstr(err, "kind: unknown value"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"ethernet\":{\"kind\":\"w5500\",\"spi_host\":2,"
                  "\"cs\":14}}", &b, err) && strstr(err, "no such SPI bus"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"spi\":[{\"host\":2,\"sclk\":7,\"mosi\":9,"
                  "\"miso\":8}],\"sd\":{\"kind\":\"spi\",\"spi_host\":2,\"cs\":21},\"led\":{\"kind\":\"gpio\",\"pin\":21}}",
                  &b, err) && strstr(err, "GPIO 21 used twice"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"led\":{\"kind\":\"gpio\",\"pin\":99}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"led\":{\"kind\":\"gpio\",\"pin\":99}}", &b, err) &&
           strstr(err, "out of range"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"wifi\":{\"tx_power_dbm\":25}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"wifi\":{\"tx_power_dbm\":25}}", &b, err) &&
           strstr(err, "tx_power_dbm"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"sd\":{\"kind\":\"sdmmc\",\"width\":2.5}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"sd\":{\"kind\":\"sdmmc\",\"width\":2.5}}", &b, err) &&
           strstr(err, "not an integer"));
-    CHECK(!parse("{\"name\":\"a-name-that-is-far-too-long\",\"image\":\"esp32\"}", &b, err) && strstr(err, "name"));
+    CHECK(!parse("{\"name\":\"a-name-that-is-far-too-long\",\"image\":\"esp32s3-quad\"}", &b, err) && strstr(err, "name"));
     /* Memory budgets: board data, the firmware's default when left out. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && b.mem.hosted_zones_kb == -1 && b.psram_mb == -1 &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && b.mem.hosted_zones_kb == -1 && b.psram_mb == -1 &&
           b.mem.internal_kb == -1 && b.mem.cache_kb == -1 && b.mem.cache_entries == -1 && b.mem.blocklist_kb == -1 &&
           b.mem.blocklist_index_kb == -1 && b.mem.secondary_zones_kb == -1 && b.mem.fwd_pending == -1);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"psram_mb\":8,\"memory\":{\"hosted_zones_kb\":256,"
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"psram_mb\":8,\"memory\":{\"hosted_zones_kb\":256,"
                 "\"internal_kb\":100,\"cache_kb\":2048,\"cache_entries\":4096,\"blocklist_kb\":3000,"
                 "\"blocklist_index_kb\":0,\"secondary_zones_kb\":128}}", &b, err) &&
           b.mem.hosted_zones_kb == 256 && b.psram_mb == 8 && b.mem.internal_kb == 100 && b.mem.cache_kb == 2048 &&
           b.mem.cache_entries == 4096 && b.mem.blocklist_kb == 3000 && b.mem.blocklist_index_kb == 0 &&
           b.mem.secondary_zones_kb == 128);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"hosted_zones_kb\":8}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"hosted_zones_kb\":8}}", &b, err) &&
           strstr(err, "hosted_zones_kb"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"cache_entries\":4}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"cache_entries\":4}}", &b, err) &&
           strstr(err, "cache_entries"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"blocklist_kb\":0}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"blocklist_kb\":0}}", &b, err) &&
           strstr(err, "blocklist_kb"));
     /* fwd_pending, a count: at least 2 (each half of the table has a slot), left out -1. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":2}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":2}}", &b, err) &&
           b.mem.fwd_pending == 2);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":1}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":1}}", &b, err) &&
           strstr(err, "fwd_pending"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":1025}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":1025}}", &b, err) &&
           strstr(err, "fwd_pending"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"internal_kb\":1.5}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"internal_kb\":1.5}}", &b, err) &&
           strstr(err, "not an integer"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"psram_mb\":128}", &b, err) && strstr(err, "psram_mb"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":7}", &b, err) && strstr(err, "memory"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"psram_mb\":128}", &b, err) && strstr(err, "psram_mb"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":7}", &b, err) && strstr(err, "memory"));
     /* A key this firmware doesn't know (from a newer catalog) is left for the newer firmware. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"query_log_kb\":64}}", &b, err));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"query_log_kb\":64}}", &b, err));
     /* The node's address, which the builder adds when it flashes a node; DHCP only if asked. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && !b.net.set);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"192.0.2.52/25\","
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && !b.net.set);
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"192.0.2.52/25\","
                 "\"gateway\":\"192.0.2.1\"}}", &b, err) &&
           b.net.set && !b.net.dhcp && b.net.ip == ip4("192.0.2.52") && b.net.netmask == ip4("255.255.255.128") &&
           b.net.gateway == ip4("192.0.2.1"));
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"dhcp\"}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"dhcp\"}}", &b, err) &&
           b.net.set && b.net.dhcp && !b.net.ip);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"203.0.113.5/24\","
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"203.0.113.5/24\","
                  "\"gateway\":\"192.0.2.1\"}}", &b, err) && strstr(err, "another address in the node's network"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"203.0.113.5/24\"}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"203.0.113.5/24\"}}", &b, err) &&
           strstr(err, "gateway: required"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"gateway\":\"203.0.113.1\"}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"gateway\":\"203.0.113.1\"}}", &b, err) &&
           strstr(err, "network.address: required"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"dhcp\",\"dns\":1}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"dhcp\",\"dns\":1}}", &b, err) &&
           strstr(err, "network.dns: unknown setting"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":\"dhcp\"}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":\"dhcp\"}", &b, err) &&
           strstr(err, "network: an object"));
 
     /* The partition: header and CRC (vector: zlib.crc32(b"123456789") = 0xCBF43926). */
     CHECK(board_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
-    static const char def[] = "{\"name\":\"x\",\"image\":\"esp32\"}";
+    static const char def[] = "{\"name\":\"x\",\"image\":\"esp32s3-quad\"}";
     uint8_t part[BOARD_PART_SIZE];
     memset(part, 0xFF, sizeof(part));
     uint32_t n = sizeof(def) - 1, crc = board_crc32((const uint8_t *)def, n);
@@ -3760,7 +3760,7 @@ static void test_board_defs(void)
     const char *json, *why;
     size_t len;
     CHECK(board_part_open(part, sizeof(part), &json, &len, &why) && len == n && memcmp(json, def, n) == 0);
-    CHECK(board_def_parse(json, len, &b, err, sizeof(err)) && strcmp(b.image, "esp32") == 0);
+    CHECK(board_def_parse(json, len, &b, err, sizeof(err)) && strcmp(b.image, "esp32s3-quad") == 0);
     part[BOARD_PART_HDR + 3] ^= 1;
     CHECK(!board_part_open(part, sizeof(part), &json, &len, &why) && strstr(why, "CRC"));
     uint8_t erased[BOARD_PART_SIZE];
@@ -5328,17 +5328,15 @@ static void test_cpuplan(void)
     CHECK(cp_idle_mhz(&p, true, false) == 80 && cp_idle_mhz(&p, true, true) == 80);
     p.min_mhz = 40; /* Wi-Fi awake keeps 80; the W5500 holds it only while it transfers */
     CHECK(cp_idle_mhz(&p, true, false) == 40 && cp_idle_mhz(&p, true, true) == 80);
-    cp_board(NULL, "esp32", &p); /* a wired ESP32 would never clock down */
-    CHECK(cp_idle_mhz(&p, true, true) == 240 && cp_idle_mhz(&p, true, false) == 40);
 
     /* The board definition's "cpu": its shape, and the reasons. */
     board_desc_t b;
     char err[160];
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && b.cpu.dfs == -1 && b.cpu.min_mhz == -1);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32c3\",\"cpu\":{\"dfs\":false,\"min_mhz\":40}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && b.cpu.dfs == -1 && b.cpu.min_mhz == -1);
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":{\"dfs\":false,\"min_mhz\":40}}", &b, err) &&
           b.cpu.dfs == 0 && b.cpu.min_mhz == 40);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"cpu\":true}", &b, err) && strstr(err, "cpu: an object"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"cpu\":{\"dfs\":1}}", &b, err) && strstr(err, "dfs"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":true}", &b, err) && strstr(err, "cpu: an object"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":{\"dfs\":1}}", &b, err) && strstr(err, "dfs"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-rev1\",\"cpu\":{\"min_mhz\":100}}", &b, err) &&
           !strcmp(err, "cpu min_mhz: 90, 180 on esp32p4-rev1, or leave it out for the image's 180"));
 }

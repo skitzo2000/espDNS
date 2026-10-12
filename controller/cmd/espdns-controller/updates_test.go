@@ -24,13 +24,13 @@ func nodeStatus(image, board, version, elf, built, name string) map[string]any {
 }
 
 // updatesEnv is the controller with two P4 nodes and an S3 listed (no network: their
-// /status as last polled), a newer P4 build and the S3's build in its data directory.
+// /status as last polled), 0.0.4 the newest release, a P4 board build and an S3 image held.
 func updatesEnv(t *testing.T) *changesEnv {
 	catalog := t.TempDir()
 	writeFile(t, filepath.Join(catalog, "p4-board.json"), []byte(`{"image": "esp32p4-rev1"}`))
 	ns := []nodes.Node{
 		{Addr: "192.0.2.52", Online: true, Status: nodeStatus("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "dns2")},
-		{Addr: "192.0.2.53", Online: true, Status: nodeStatus("esp32s3", "s3-board", "0.0.3", "00000000000000c1", "Oct  5 2026 08:00:00", "dns3")},
+		{Addr: "192.0.2.53", Online: true, Status: nodeStatus("esp32s3", "s3-board", "0.0.4", "00000000000000c1", "Oct  5 2026 08:00:00", "dns3")},
 		{Addr: "192.0.2.54", Online: true, Status: nodeStatus("esp32p4-rev1", "p4-board", "0.0.1", "00000000000000a1", "Oct  3 2026 12:00:00", "dns4")},
 	}
 	e := &changesEnv{t: t}
@@ -43,13 +43,17 @@ func updatesEnv(t *testing.T) *changesEnv {
 	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"192.0.2.52", "192.0.2.53", "192.0.2.54", "192.0.2.55"}}); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(e.dir, "firmware/builds/p4-board/dns2.bin"), fakenode.AppBuilt("0.0.4", "00000000000000b2", "Oct  7 2026", "09:30:00"))
+	if err := updates.SetLatest(e.dir, "0.0.4"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(e.dir, "firmware/builds/p4-board/dns2.bin"), fakenode.AppBuilt("0.0.9", "00000000000000b2", "Oct  7 2026", "09:30:00"))
 	writeFile(t, filepath.Join(e.dir, "firmware/images/esp32s3/image.json"), []byte(`{"image": "esp32s3", "chip": "esp32s3"}`))
 	writeFile(t, filepath.Join(e.dir, "firmware/images/esp32s3/app.bin"), fakenode.AppBuilt("0.0.3", "00000000000000c1", "Oct  5 2026", "08:00:00"))
 	return e
 }
 
-// Each listed node's firmware against the newest build for it, as versions.
+// Each listed node's firmware against the newest version, whatever its chip or board (a
+// board's build doesn't count).
 func TestUpdatesList(t *testing.T) {
 	e := updatesEnv(t)
 	var rep updates.Report
@@ -65,8 +69,7 @@ func TestUpdatesList(t *testing.T) {
 		t.Errorf("states %v", states)
 	}
 	dns2 := rep.Nodes[0]
-	if dns2.Name != "dns2" || dns2.Runs.Text != "0.0.1" || dns2.Newest.Text != "0.0.4" || dns2.Newest.Build != "00000000000000b2" ||
-		dns2.Newest.Source != "builds/p4-board" || !dns2.Online || !dns2.Listed {
+	if dns2.Name != "dns2" || dns2.Runs.Text != "0.0.1" || dns2.Newest.Text != "0.0.4" || !dns2.Online || !dns2.Listed {
 		t.Errorf("dns2 %+v", dns2)
 	}
 	if !slices.Equal(rep.Available, []string{"192.0.2.52", "192.0.2.54"}) {
@@ -78,20 +81,20 @@ func TestUpdatesList(t *testing.T) {
 	}
 }
 
-// An update is a pending firmware change, never a push: one per build, in the action log,
-// shown as pending afterwards; a second for the same node is refused.
+// An update is a pending firmware change of the node's chip image, never a push or a
+// download (its image isn't held): in the action log, shown as pending afterwards; a second
+// for the same node is refused.
 func TestUpdatesQueue(t *testing.T) {
 	e := updatesEnv(t)
 	var out struct {
 		Changes []changes.Change `json:"changes"`
 	}
-	e.json(e.do("POST", "/api/updates", jsonBody(map[string]any{"nodes": []string{"192.0.2.52"},
-		"builds": map[string]string{"192.0.2.52": "00000000000000b2"}})), http.StatusCreated, &out)
+	e.json(e.do("POST", "/api/updates", jsonBody(map[string]any{"nodes": []string{"192.0.2.52"}})), http.StatusCreated, &out)
 	if len(out.Changes) != 1 {
 		t.Fatalf("changes %+v", out)
 	}
 	ch := out.Changes[0]
-	if ch.Kind != changes.Firmware || ch.Firmware != "builds/p4-board" || !slices.Equal(ch.Nodes, []string{"192.0.2.52"}) ||
+	if ch.Kind != changes.Firmware || ch.Firmware != "images/esp32p4-rev1" || !slices.Equal(ch.Nodes, []string{"192.0.2.52"}) ||
 		ch.Summary != "Update dns2 from 0.0.1 to 0.0.4" || ch.Who != "admin" {
 		t.Errorf("change %+v", ch)
 	}
@@ -134,16 +137,6 @@ func TestUpdatesRefused(t *testing.T) {
 		if w := e.do("POST", "/api/updates", bad); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", bad, w.Code, w.Body)
 		}
-	}
-	// The page showed another build: look again.
-	if w := e.do("POST", "/api/updates", jsonBody(map[string]any{"nodes": []string{"192.0.2.52"},
-		"builds": map[string]string{"192.0.2.52": "00000000000000a9"}})); w.Code != http.StatusConflict {
-		t.Errorf("moved: %d %s", w.Code, w.Body)
-	}
-	// A build that can't be read as a rollout reads it is never queued.
-	writeFile(t, filepath.Join(e.dir, "firmware/builds/p4-board/dns2.bin"), []byte("not an image"))
-	if w := e.do("POST", "/api/updates", jsonBody(map[string]any{"nodes": []string{"192.0.2.52"}})); w.Code != http.StatusBadRequest {
-		t.Errorf("broken build: %d %s", w.Code, w.Body)
 	}
 	if cs, _ := e.store.List(); len(cs) != 0 {
 		t.Errorf("pending %+v", cs)

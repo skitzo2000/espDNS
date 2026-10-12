@@ -44,6 +44,7 @@
 #include "services.h"
 #include "settings.h"
 #include "share.h"
+#include "zread.h"
 
 static const char *TAG = "ota";
 
@@ -827,7 +828,7 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     reg_unlock();
     if (n < cap)
-        n += (size_t)snprintf(j + n, cap - n, "],");
+        n += (size_t)snprintf(j + n, cap - n, "],\"reads\":[\"zone\"],");
     if (n < cap)
         n += services_status_json(j + n, cap - n);
     if (n + 1 < cap) {
@@ -871,6 +872,47 @@ static esp_err_t status_get(httpd_req_t *req)
     esp_err_t r = httpd_resp_send(req, j, n < cap ? (ssize_t)n : (ssize_t)cap - 1);
     free(j);
     return r;
+}
+
+static int zone_send(void *req, const char *buf, size_t len)
+{
+    return httpd_resp_send_chunk(req, buf, (ssize_t)len) == ESP_OK ? 0 : -1;
+}
+
+static esp_err_t zone_fail(httpd_req_t *req, const char *status, const char *msg)
+{
+    httpd_resp_set_status(req, status);
+    return httpd_resp_sendstr(req, msg);
+}
+
+/* GET /zone (zread.h): private addresses only, as /querylog. */
+static esp_err_t zone_get(httpd_req_t *req)
+{
+    if (!ota_peer_private(req)) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "private addresses only\n");
+    }
+    char q[320], name[DNS_MAX_NAME];
+    bool bad = httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+               httpd_query_key_value(q, "name", name, sizeof(name)) != ESP_OK;
+    uint64_t from = querylog_arg(bad ? NULL : q, "from", 0, &bad);
+    uint64_t limit = querylog_arg(bad ? NULL : q, "limit", ZR_LIMIT_DEF, &bad);
+    uint64_t gen = querylog_arg(bad ? NULL : q, "gen", UINT64_MAX, &bad);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (bad || limit == 0)
+        return zone_fail(req, "400 Bad Request",
+                         "{\"error\":\"name: a zone; from, limit and gen: whole numbers, limit 1 or more\"}\n");
+    char *buf = heap_caps_malloc_prefer(ZR_BUF, 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_8BIT);
+    if (!buf)
+        return httpd_resp_send_500(req);
+    int r = zread_page(name, from, limit < ZR_LIMIT_MAX ? limit : ZR_LIMIT_MAX, gen, buf, ZR_BUF, zone_send, req);
+    free(buf);
+    if (r == 404)
+        return zone_fail(req, "404 Not Found", "{\"error\":\"no such zone held here\"}\n");
+    if (r == 409)
+        return zone_fail(req, "409 Conflict", "{\"error\":\"the zone changed: read it again from 0\"}\n");
+    return r == 200 ? httpd_resp_send_chunk(req, NULL, 0) : ESP_FAIL;
 }
 
 /* GET /health: cheap and open (no names), for load balancers, monitoring and the controller.
@@ -1129,12 +1171,14 @@ void ota_start(void)
     }
     static const hroute_t status = { .fn = status_get }, health = { .fn = health_get },
                           metrics = { .fn = metrics_get }, querylog = { .fn = querylog_get },
+                          zone = { .fn = zone_get },
                           ota = { .head = ota_head, .body = ota_body, .lock = true },
                           rel = { .head = release_head, .body = release_body, .lock = true };
     route(srv, "/status", HTTP_GET, &status);
     route(srv, "/health", HTTP_GET, &health);   /* open (no names), for monitoring */
     route(srv, "/metrics", HTTP_GET, &metrics); /* open, as /health */
     route(srv, "/querylog", HTTP_GET, &querylog); /* private addresses only */
+    route(srv, "/zone", HTTP_GET, &zone);         /* private addresses only */
     route(srv, "/ota", HTTP_POST, &ota);
     route(srv, "/release", HTTP_POST, &rel);
 #ifdef DNS2_BENCH_BLOCKLIST
@@ -1142,7 +1186,7 @@ void ota_start(void)
     route(srv, "/bench", HTTP_POST, &bench);
     ESP_LOGW(TAG, "bench build: POST /bench; rolls back by itself in %d s", HEALTH_TIMEOUT_S);
 #endif
-    ESP_LOGI(TAG, "http on :80 (/health, /status, /metrics, /querylog, /ota, /release)");
+    ESP_LOGI(TAG, "http on :80 (/health, /status, /metrics, /querylog, /zone, /ota, /release)");
 }
 
 static bool any_zone_loaded(void)

@@ -196,7 +196,7 @@ test("Nodes opens a node's page", async ({ page }) => {
   await login(page);
   await fake(page);
   await page.goto("./");
-  await page.locator("#nodes .r[data-href]").nth(1).locator(".sub").first().click();
+  await page.locator("#nodes .r[data-href]").nth(1).locator(".flag").click();
   await expect(page).toHaveURL(new RegExp(`node\\.html#${encodeURIComponent(ID3)}$`));
   await expect(page.locator("#name")).toHaveText("dns3");
 });
@@ -297,7 +297,7 @@ test("Blink its light, Restart, Update firmware and the quick fixes run as jobs"
   await expect(u).toContainText("dns3 keeps answering while dns2 restarts");
   await u.getByRole("button", { name: "Add to changes" }).click();
   await expect(page.locator("#toast")).toContainText("Added to changes to apply: update dns2");
-  expect(state.posts.find(p => p[0] === "updates")[1]).toEqual({ nodes: [DNS2], builds: { [DNS2]: "b4" } });
+  expect(state.posts.find(p => p[0] === "updates")[1]).toEqual({ nodes: [DNS2] });
 
   await page.locator("#details > summary").click();
   await page.getByRole("button", { name: "Older blocklist" }).click();
@@ -390,8 +390,8 @@ test("out of service: taken out while offline, muted, returned to service, remov
   expect(jobs()[2]).toEqual({ kind: "node-remove", params: { node: DNS3 } });
   await expect(page).toHaveURL(/\/(index\.html)?$/);
 
-  // On Nodes: its row muted with its badge, not counted as a node down.
-  await expect(page.locator("#nodes .r.r-out .out-badge")).toHaveText("Out of service");
+  // On Nodes: its row muted with its flag, not counted as a node down.
+  await expect(page.locator("#nodes .r.r-out .flag")).toHaveText("Out of service");
   await expect(page.locator("#nodes .r.r-out")).not.toHaveClass(/r-bad|r-warn/);
   await expect(page.locator("#facts")).toContainText("1 of 1 node answering");
   await expect(page.locator("#sentence")).toHaveText("DNS is answering on dns2");

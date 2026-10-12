@@ -1,26 +1,24 @@
 // Nodes, the home page (index.html): one
 // sentence first (whether DNS is answering, or what needs attention), Copy DNS servers and
-// + Add node at the top right, a firmware update offered as versions, the fleet's facts, one
-// row per node (its LED, state and reason, its address to copy, its load, and its MAC to copy
-// while it is on DHCP), the nodes found on the network and not added yet (with their MACs to
-// copy, for a DHCP reservation or a static address), and the last hour's charts. A node
+// + Add node at the top right (and Update all while two or more nodes have an update), the
+// fleet's facts, one row per node on one line (nodeRow), the nodes found on the network and
+// not added yet, and the last hour's charts. A node
 // opens its page (node.html, node.js); a found node its setup panel (addnode.js: what it
-// needs next, a click away). A later build of the version a node runs is said so in its row,
-// with no banner (internal/updates, Rebuild). A node's keys are said in its row when they
+// needs next, a click away). A node's keys are said in its row when they
 // aren't the controller's: "Needs keys" (setup mode), "Old keys (rotation pending)" (not the
 // release key the controller signs with, or not the new keys of a rotation under way). Read
 // from /api/nodes and /api/nodes/found every 5 s, /api/dashboard every 10 s, /api/updates and
 // /api/key every 30 s.
-import { shell, h, arr, obj, str, hostOnly, led, addr, mac, copyText, toast, refreshChanges, onChanges,
+import { shell, h, arr, obj, str, hostOnly, led, addr, copyText, toast, refreshChanges, onChanges,
   getJSON, session, nodeText, answering, inService } from "./shell.js";
 import { onNodes, every, releaseKey } from "./common.js";
 import { addNode, blocker, usbButton } from "./addnode.js";
-import { stateOf, upFor, linkWord, readBoards, mini, fmtNum, pct, andList } from "./nodeview.js";
+import { stateOf, upFor, readBoards, mini, fmtNum, pct, andList } from "./nodeview.js";
 import { openUpdate as updatePanel } from "./update.js";
 import { setupCheck } from "./setupcheck.js";
 
 shell("index.html");
-setupCheck(document.getElementById("update"));
+setupCheck(document.querySelector("main > section"));
 
 const $ = id => document.getElementById(id);
 const data = { nodes: null, found: [], updates: null, dash: null, boards: new Map(), sess: {}, key: null };
@@ -31,16 +29,15 @@ const data = { nodes: null, found: [], updates: null, dash: null, boards: new Ma
 const boardName = b => data.boards.get(str(b)) || str(b);
 const nodeKey = n => n.id || n.addr;
 
-// updateOf is a node's firmware update in versions (/api/updates), or "": a later build of
-// the version it runs said as that (its why), never "0.0.1 → 0.0.1".
-const updateFor = n => arr(obj(data.updates).nodes).find(x => x.host === n.addr);
+// offered are the updates offered (/api/updates): a listed node in service, nothing waiting.
+const offered = () => arr(obj(data.updates).nodes).filter(u => u.state === "available" && u.listed && !u.out_of_service && !u.pending);
+
+// updateOf is a node's firmware update (/api/updates), waiting to apply or offered: its
+// entry and versions; null for none.
 function updateOf(n) {
-  const u = updateFor(n);
-  if (!u) return "";
-  const from = str(obj(u.runs).version), to = str(obj(u.newest).version);
-  if (u.pending) return u.rebuild ? `A newer build of ${to} waiting to apply` : `Update waiting to apply: ${from} → ${to}`;
-  if (u.state === "available") return u.rebuild ? str(u.why) : `Update available: ${from} → ${to}`;
-  return "";
+  const u = arr(obj(data.updates).nodes).find(x => x.host === n.addr);
+  if (!u || !(u.pending || offered().includes(u))) return null;
+  return { pending: !!u.pending, from: str(obj(u.runs).version), to: str(obj(u.newest).version) };
 }
 
 const listed = () => arr(data.nodes).filter(n => n.source === "settings");
@@ -104,35 +101,12 @@ const adder = addNode($("add-node"), {
 
 // ---- the update -------------------------------------------------------------------------
 
-function renderUpdate() {
-  const box = $("update");
-  const rep = obj(data.updates);
-  // A new version only: a later build of the one a node runs is said in its row.
-  const offered = arr(rep.nodes).filter(u => u.state === "available" && u.listed && !u.out_of_service && !u.pending && !u.rebuild);
-  if (!offered.length) { box.hidden = true; box.replaceChildren(); return; }
-  const others = serving().filter(n => !offered.some(u => u.host === n.addr));
-  const nm = u => nodeText(u.host);
-  const b = h("button", { class: "btn primary", type: "button", onclick: () => openUpdate() }, offered.length === 1 ? `Update ${nm(offered[0])}` : "Update all");
-  let line;
-  if (offered.length === 1) {
-    const u = offered[0];
-    line = h("div", {}, h("b", {}, `Firmware ${str(obj(u.newest).version)} for ${nm(u)}`), " ",
-      h("span", { class: "muted" }, `(now ${str(obj(u.runs).version)}). Applies with a restart${others.length ? `; ${andList(names(others))} keep${others.length === 1 ? "s" : ""} answering meanwhile` : ""}.`));
-  } else {
-    line = h("div", {}, h("b", {}, `New firmware for ${andList(offered.map(nm))}`), " ",
-      h("span", { class: "muted" }, "Applies with a restart each, one node at a time; the others keep answering."));
-  }
-  box.className = "panel pad row spread accent";
-  box.replaceChildren(line, b);
-  box.hidden = false;
-}
-
-// The Update panel (update.js): adds the updates to the changes to apply. only, a host, is
-// the node whose row opened it: only it is chosen; else the new versions are (a later build
-// of the one a node runs is not).
+// The Update panel (update.js): adds the updates to the changes to apply, the one node's
+// (only) chosen, else every one offered. Update all, by + Add node, while two or more are.
 function openUpdate(only) {
   updatePanel({ updates: data.updates, listed: serving(), canWrite: !!data.sess.logged_in, only, done: readUpdates });
 }
+$("update-all").addEventListener("click", () => openUpdate());
 
 // ---- the facts and the rows -------------------------------------------------------------
 
@@ -149,12 +123,6 @@ function renderFacts() {
     fact(pct(hour.blocked_share), "of queries blocked"));
 }
 
-// macLine is a node's MAC to copy, on its own line under its address; null for none.
-function macLine(m) {
-  const c = mac(m);
-  return c ? h("div", { class: "sub" }, c) : null;
-}
-
 // keysOf is a node's keys in words when they aren't the controller's, or "": in setup mode
 // (no keys, or damaged ones), or trusting another release key than the one the controller
 // signs with (during a rotation: than the rotation's new keys).
@@ -167,45 +135,51 @@ function keysOf(n) {
   return k.present && str(k.fingerprint) && ks[0] !== k.fingerprint ? "Old keys (rotation pending)" : "";
 }
 
+// A node's row, on one line: its name (its board on hovering it); its dot, green while it
+// serves, amber for something to do, red when it doesn't work, with a flag beside one not
+// green (a word, or an update's button) and the state and reason on hovering it; its link,
+// address and copy button (its MAC on hovering the address); its uptime and its load.
 function nodeRow(n) {
   const s = obj(n.status), net = obj(s.net);
   const st = stateOf(n);
   const keys = keysOf(n);
   // Setup mode is said once: its health reason "no keys" is this.
   const stWhy = keys.startsWith("Needs") ? st.why.split(", ").filter(w => w !== "No keys").join(", ") : st.why;
-  const why = [stWhy, keys, !st.tint && !st.out ? updateOf(n) : ""].filter(Boolean).join(" · ");
-  // A later build of its version: no banner, so its row offers it.
-  const u = updateFor(n);
-  const rebuild = !st.tint && !st.out && u && u.rebuild && u.state === "available" && u.listed && !u.pending
-    ? h("button", { class: "btn small link", type: "button", onclick: () => openUpdate(n.addr) }, "Update") : null;
+  const u = st.out ? null : updateOf(n);
+  const v = u ? `${u.from} → ${u.to}` : "";
+  const off = st.out ? "Out of service" : !n.online ? "Offline" : "";
+  const flag = off || [st.tint || st.led !== "healthy" ? stWhy || st.word : "", keys, u && u.pending ? `Update waiting to apply: ${v}` : ""].filter(Boolean).join(" · ");
+  const dot = off || st.tint === "bad" ? "fault" : st.tint === "warn" ? "degraded" : u || keys || st.led === "unknown" ? "todo" : st.led;
+  const tip = [st.word, stWhy, keys, u && `Update ${u.pending ? "waiting to apply" : "available"}: ${v}`].filter(Boolean).join(" · ");
+  const btn = u && !u.pending ? h("button", { class: "btn small upd", type: "button", "aria-label": `Update ${nodeText(n)} from ${u.from} to ${u.to}`,
+    onclick: e => { e.stopPropagation(); openUpdate(n.addr); } }, `Update ${v}`) : null;
   const href = `node.html#${encodeURIComponent(nodeKey(n))}`;
-  const up = n.online ? upFor(s.uptime_s) : "";
-  // Out of service: muted, its badge for its state.
-  const word = st.out ? h("span", { class: "out-badge" }, st.word) : h("span", { class: "stw" }, st.word);
   return h("div", { class: `r${st.tint ? ` r-${st.tint}` : ""}${st.out ? " r-out" : ""}`, "data-href": href },
-    h("div", {}, h("a", { class: "name", href }, nodeText(n)), h("div", { class: "sub" }, boardName(s.board) || "–")),
-    h("div", { class: "full-n" }, h("span", { class: "state" }, led(st.led), word), why ? h("div", { class: "sub" }, why, rebuild ? " " : null, rebuild) : null),
-    h("div", { class: "full-n" }, addr(hostOnly(n.addr)), h("div", { class: "sub" }, [linkWord(net.kind), up && `up ${up}`].filter(Boolean).join(" · ")),
-      obj(s.config).address === "dhcp" ? macLine(n.mac) : null),
-    h("div", { class: "hide-n num" }, n.online && typeof n.qps === "number" ? n.qps.toFixed(1) : "–", " ", h("span", { class: "sub" }, "q/s")),
+    h("div", {}, h("a", { class: "name", href, title: boardName(s.board) || null }, nodeText(n))),
+    h("div", { class: "full-n" }, h("span", { class: "state" }, led(dot, tip), flag ? h("span", { class: "flag", title: flag }, flag) : null, btn)),
+    h("div", { class: "full-n" }, addr(hostOnly(n.addr), net.kind, n.mac)),
+    h("div", { class: "hide-n num" }, n.online ? upFor(s.uptime_s) || "–" : "–"),
+    h("div", { class: "hide-n num" }, n.online && typeof n.qps === "number" ? n.qps.toFixed(1) : "–"),
     h("span", { class: "chev", "aria-hidden": "true" }, "›"));
 }
 
-// A node found on the network (mDNS, or looked up) and not added: a light-blue row. A click
-// on it opens its setup panel; its button does the next step itself.
+// A node found on the network (mDNS, or looked up) and not added: a light-blue row, its dot
+// amber. A click on it opens its setup panel; its button does the next step itself.
 function foundRow(f) {
   const link = f.net === "ethernet" ? "Wired" : f.net === "wifi" ? "Wi-Fi" : "";
-  const sub = !f.next ? blocker(f)
+  const flag = f.next ? "Not added yet" : blocker(f);
+  const tip = !f.next ? flag
     : `Found ${f.source === "lookup" ? "at its address" : "on your network"}${link ? ` over ${link}` : ""}${f.version ? `, firmware ${f.version}` : ""}`;
-  // The next step's button: Add in the narrow last column; Update over USB, wider, under why.
+  // The next step's button: Add in the Load column; Update over USB beside its flag.
   const act = f.next ? h("button", { class: "btn small primary", type: "button", onclick: () => adder.open(f) }, "Add")
     : f.install === "usb" ? null : h("button", { class: "btn small", type: "button", onclick: () => adder.setup(f) }, "Set up");
-  const usb = f.install === "usb" ? h("div", { class: "actions" }, usbButton(f, "btn small primary", boardName(f.board) || str(f.hostname))) : null;
+  const usb = f.install === "usb" ? usbButton(f, "btn small primary", boardName(f.board) || str(f.hostname)) : null;
   return h("div", { class: "r r-new", "data-found": "", onclick: e => { if (!e.target.closest("button, a, input, label")) adder.setup(f); } },
-    h("div", {}, h("div", { class: "name" }, f.adopted && f.name ? str(f.name) : "New device found"),
-      h("div", { class: "sub" }, [boardName(f.board), str(f.hostname)].filter(Boolean).join(" · "))),
-    h("div", { class: "full-n" }, h("span", { class: "state" }, led("unknown"), h("span", { class: "stw" }, "Not added yet")), h("div", { class: "sub" }, sub), usb),
-    h("div", { class: "full-n" }, addr(hostOnly(f.host)), macLine(f.mac)),
+    h("div", {}, h("span", { class: "name", title: [boardName(f.board), str(f.hostname)].filter(Boolean).join(" · ") || null },
+      f.adopted && f.name ? str(f.name) : "New device found")),
+    h("div", { class: "full-n" }, h("span", { class: "state" }, led("todo", tip), h("span", { class: "flag", title: tip }, flag), usb)),
+    h("div", { class: "full-n" }, addr(hostOnly(f.host), f.net, f.mac)),
+    h("div", { class: "hide-n" }),
     h("div", { class: "hide-n" }, act),
     h("div", {}));
 }
@@ -245,7 +219,7 @@ function renderHour() {
 
 function render() {
   renderHead();
-  renderUpdate();
+  $("update-all").hidden = offered().length < 2;
   renderFacts();
   renderRows();
   renderHour();
