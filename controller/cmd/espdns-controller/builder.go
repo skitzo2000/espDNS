@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -20,9 +21,8 @@ import (
 
 // builder serves the board catalog and builds a board's image for flashing from the browser.
 type builder struct {
-	catalogDir string // shipped boards
-	customDir  string // data/boards
-	imagesDir  string // data/firmware/images
+	catalog   *boards.Catalog // the shipped boards (loaded once) and data/boards, in memory
+	imagesDir string          // data/firmware/images
 
 	// keys is the two public keys a new node is given (keys.Public: the release key's and
 	// the recovery key's), written into its keys partition; nil, or an error, and no image is
@@ -52,7 +52,7 @@ type buildKeys struct {
 }
 
 func newBuilder(catalogDir, customDir, imagesDir string) *builder {
-	return &builder{catalogDir: catalogDir, customDir: customDir, imagesDir: imagesDir, builds: map[string]*build{}}
+	return &builder{catalog: boards.NewCatalog(catalogDir, customDir), imagesDir: imagesDir, builds: map[string]*build{}}
 }
 
 func (b *builder) routes(mux jobs.Mux) {
@@ -114,16 +114,28 @@ type boardView struct {
 	ImageReady bool `json:"image_ready"` // its chip image has been imported
 }
 
+// listBoards is the library from memory, ordered by maker then title, with an ETag (the
+// list's, plus which chip images are imported), so a browser that has it gets 304.
 func (b *builder) listBoards(w http.ResponseWriter, r *http.Request) {
-	entries, err := boards.Load(b.catalogDir, b.customDir)
+	entries, etag, err := b.catalog.Entries()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	imgs, _ := image.List(b.imagesDir)
 	ready := map[string]bool{}
+	names := make([]string, 0, len(imgs))
 	for _, c := range imgs {
 		ready[c.Image] = true
+		names = append(names, c.Image)
+	}
+	sort.Strings(names)
+	etag = strings.TrimSuffix(etag, `"`) + "-" + strings.Join(names, ",") + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	out := make([]boardView, 0, len(entries))
 	for _, e := range entries {
@@ -165,12 +177,7 @@ func (b *builder) saveBoard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	entries, err := boards.Load(b.catalogDir, b.customDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := boards.Save(b.customDir, bd, entries); err != nil {
+	if err := b.catalog.Save(bd); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -193,11 +200,6 @@ func (b *builder) prepare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	entries, err := boards.Load(b.catalogDir, b.customDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	var e boards.Entry
 	switch {
 	case len(req.Board) > 0:
@@ -209,7 +211,7 @@ func (b *builder) prepare(w http.ResponseWriter, r *http.Request) {
 		e = boards.Entry{Source: "custom"}.WithChanges(bd)
 	case req.Name != "":
 		var ok bool
-		if e, ok = boards.Find(entries, req.Name); !ok {
+		if e, ok = b.catalog.Find(req.Name); !ok {
 			http.Error(w, "no board "+req.Name, http.StatusNotFound)
 			return
 		}
@@ -246,7 +248,7 @@ func (b *builder) make(e boards.Entry) (*build, error) {
 	}
 	chip, err := image.Open(b.imagesDir + "/" + e.Board.Image)
 	if err != nil {
-		return nil, fmt.Errorf("chip image %s isn't imported: build it and load it with espdns release import (docs/getting-started.md, steps 4 and 8)", e.Board.Image)
+		return nil, fmt.Errorf("chip image %s isn't imported: build it and load it with espdns release import (docs/developer.md)", e.Board.Image)
 	}
 	part, err := e.Pack()
 	if err != nil {

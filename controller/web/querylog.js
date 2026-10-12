@@ -99,14 +99,14 @@ function answer(e) {
       const site = str(e.qname).toLowerCase().replace(/\.$/, "");
       const s = sub("By a blocklist");
       if (!e.truncated && site && st.sess && st.sess.logged_in) {
-        const b = h("button", { class: "btn link small", type: "button", title: `Always allow ${site}: it waits in the changes to apply` }, "Allow");
+        const b = h("button", { class: "btn link small", type: "button", title: `Always allow ${site} (waits in changes to apply)` }, "Allow");
         b.addEventListener("click", () => allow(site, b));
         s.append(" · ", b);
       }
       return [blockedMark(), s];
     }
     case "refused": return failed("Refused", "Not allowed to ask this node");
-    case "servfail": return failed("Failed", "No answer could be found (SERVFAIL)");
+    case "servfail": return failed("Failed", "No answer found (SERVFAIL)");
     case "error": return failed("Bad query", rc || "The node couldn't read it");
     case "dropped": return failed("Dropped", "Not answered");
     default: return plain(r || "?", rc);
@@ -122,7 +122,7 @@ function row(e) {
     dev = h("div", {}, h("button", { class: full ? "btn link dev" : "btn link dev mono", type: "button", title: `${full ? `${full} · ` : ""}Show only this device`, onclick: () => setDevice(e.client) }, devShort(e.client)),
       full ? h("div", { class: "sub mono" }, e.client) : null);
   } else {
-    dev = h("div", { class: "muted", title: "This node keeps nothing about each device (its query log setting)." }, "Not kept");
+    dev = h("div", { class: "muted", title: "This node keeps nothing about devices (its query log setting)." }, "Not kept");
   }
   const site = h("div", { class: "mono full-n site" }, str(e.qname));
   if (e.truncated) site.append(" ", h("span", { class: "hint", title: "The name was longer than the node keeps: its last labels." }, "(cut)"));
@@ -162,7 +162,7 @@ async function allow(site, btn) {
   btn.disabled = true;
   try {
     const f = await getJSON(`api/changes/file?kind=source&name=${encodeURIComponent(ALLOWF)}`);
-    if (f.partial) throw new Error("the always-allowed sites are too many to add to here: add it on the Blocking page");
+    if (f.partial) throw new Error("the always-allowed list is too long to add to here: add it on the Blocking page");
     const text = str(f.text);
     if (text.split("\n").some(l => l.trim().toLowerCase() === site)) { toast(`${site} is already always allowed`); return; }
     const next = (text && !text.endsWith("\n") ? `${text}\n` : text) + `${site}\n`;
@@ -184,17 +184,17 @@ function empty(text, cls, action) {
 function renderRows() {
   const box = $("qlrows"), head = box.firstElementChild;
   let body;
-  if (st.sess && !st.sess.logged_in) body = [empty("Log in to see the query log: it says which device asked for what.")];
+  if (st.sess && !st.sess.logged_in) body = [empty("Log in to see the query log.")];
   else if (st.error && !st.loaded) body = [empty(`Couldn't read the query log: ${st.error}`, "bad")];
   else if (!st.loaded) body = [empty("Reading the query log…")];
   else if (st.rows.length) body = st.rows.map(row);
-  else if (!st.held) body = [empty("No queries yet. Each node's log is read every few seconds.")];
-  else if (st.show === "failed" && !st.q && !st.device && !st.node) body = [empty("No failed queries in what the controller holds. That is good.")];
+  else if (!st.held) body = [empty("No queries yet; the nodes' logs are read every few seconds.")];
+  else if (st.show === "failed" && !st.q && !st.device && !st.node) body = [empty("No failed queries.")];
   else body = [empty("No queries match.", null, h("button", { class: "btn small", type: "button", onclick: clearAll }, "Show everything"))];
   box.replaceChildren(head, ...body);
   const span = st.oldest && st.newest ? `, from ${clock(st.oldest)} to ${clock(st.newest)}` : "";
   $("qlmore").textContent = st.loaded && st.matched > st.rows.length
-    ? `The newest ${fmt(st.rows.length)} of ${fmt(st.matched)} that match are shown${span}. Narrow the filter to see older ones.` : "";
+    ? `Showing the newest ${fmt(st.rows.length)} of ${fmt(st.matched)} matches${span}. Narrow the filter to see older ones.` : "";
 }
 
 function renderBar() {

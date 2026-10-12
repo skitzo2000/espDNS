@@ -1,0 +1,12 @@
+{
+  "name": "lilygo-t-relay-s3",
+  "title": "LilyGO T-Relay S3 + W5500 shield",
+  "image": "esp32s3-octal",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [{ "host": 2, "sclk": 9, "mosi": 13, "miso": 11 }],
+  "ethernet": { "kind": "w5500", "optional": true, "spi_host": 2, "cs": 3, "int": 12, "rst": 8, "mhz": 8 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB octal PSRAM, external antenna); 6-relay board. Wired only with the T-Relay S3 W5500 shield on the expansion header: SCLK 9, MOSI 13, MISO 11, CS 3, INT 12, RST 8; LilyGO's ESPHome config clocks it at 8 MHz. Wi-Fi without the shield. The LEDs hang off the relay shift register, not a GPIO. CS GPIO3 is a strapping pin. No SD slot: zones and blocking live in RAM only. Pins: T-Relay 6 ESP32-S3 schematic Rev1.1, LilyGO pin table and pin_config.h, LilyGO's ESPHome T-Relay-S3 W5500 config."
+}

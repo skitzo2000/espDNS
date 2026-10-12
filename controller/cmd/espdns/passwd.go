@@ -34,7 +34,7 @@ func cmdPasswd(args []string) error {
 	wait := fl.Duration("wait", stdinWait, "no terminal: how long standard input may stay silent before the first line (0: no limit)")
 	fl.Parse(args)
 	if fi, err := os.Stat(*dataDir); err != nil || !fi.IsDir() {
-		return fmt.Errorf("-data %s: not a directory (make it before you start the controller: docs/getting-started.md, step 5)", *dataDir)
+		return fmt.Errorf("-data %s: not a directory (make it before you start the controller: docs/getting-started.md)", *dataDir)
 	}
 	path := auth.Path(*dataDir)
 	before := ""

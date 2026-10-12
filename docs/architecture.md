@@ -9,11 +9,11 @@ Security model: [security.md](security.md). Making and checking a release:
 
 ## The idea
 
-espDNS is reliable internal DNS on cheap, low-power ESP32 boards. A basic setup is **two
-nodes and one Docker container**:
+espDNS is reliable internal DNS on cheap, low-power ESP32 boards. A basic setup is two
+nodes and one Docker container:
 
-- Each **node** is an ESP32 board with Ethernet and a microSD card. It answers DNS.
-- The **controller** is a Docker container. It sets nodes up, signs changes and pushes them.
+- Each node is an ESP32 board with Ethernet and a microSD card. It answers DNS.
+- The controller is a Docker container. It sets nodes up, signs changes and pushes them.
 - Your router hands out both nodes as the clients' DNS servers. If one is down, clients use
   the other.
 
@@ -38,84 +38,84 @@ clients see a short delay, not a failure. Add more nodes the same way; they floc
 
 In priority order. When two conflict, the higher one wins.
 
-1. **Always answering.** At least one node answers at all times, including during updates.
+1. Always answering. At least one node answers at all times, including during updates.
    Nothing optional (blocking, logs, zone checks, the clock, the SD card) may delay or stop
    a node answering. A failure there makes the node *degraded*, not silent.
-2. **Easy to stand up.** Two boards and one container. Flash from the browser, adopt from
+2. Easy to stand up. Two boards and one container. Flash from the browser, adopt from
    the web UI, hand both nodes to your router. No toolchain, no hand-edited files.
-3. **Efficient.** A node runs only the services its config enables; one that's off costs
+3. Efficient. A node runs only the services its config enables; one that's off costs
    nothing. A node draws about half a watt to a watt.
-4. **Fast cold start.** DNS answered within 15 seconds of power-on, with no controller and
+4. Fast cold start. DNS answered within 15 seconds of power-on, with no controller and
    no zone primary reachable.
-5. **Optional blocking.** Adlists, allow and deny rules, overrides, pause, a query log and a
+5. Optional blocking. Adlists, allow and deny rules, overrides, pause, a query log and a
    dashboard.
-6. **Cheap.** Roughly US$20 to $40 per node.
+6. Cheap. Roughly US$20 to $40 per node.
 
 Four rules keep those goals honest:
 
-- **Nodes never depend on the controller.** It builds, signs and pushes, and you can switch
+- Nodes never depend on the controller. It builds, signs and pushes, and you can switch
   it off any time. A node never contacts it; at run time a node talks only to DNS clients,
   its forwarders, its zone primary (if any) and NTP servers.
-- **Answering comes first.** The DNS listeners open before anything optional starts.
-- **Never take down the last healthy node.** The controller changes one node at a time and
+- Answering comes first. The DNS listeners open before anything optional starts.
+- Never take down the last healthy node. The controller changes one node at a time and
   won't start a change that needs a reboot while another node is unhealthy, unless you
   force it.
-- **Make faults obvious.** A degraded node says so in `/health`, in the controller and on
+- Make faults obvious. A degraded node says so in `/health`, in the controller and on
   its LED, so you can find the bad board and swap it.
 
 ## Scope
 
-- **Your router owns the network.** It hands out DNS servers, sends IPv6 router adverts,
+- Your router owns the network. It hands out DNS servers, sends IPv6 router adverts,
   provides time and routes traffic. espDNS doesn't run DHCP, and it doesn't stop clients
   using other resolvers (IPv6 DNS from router adverts, a browser's DNS over HTTPS). Setting
   up the router is part of setup.
-- **Nodes forward.** They don't resolve from the root servers.
-- **Not supported yet:** one shared IP address for several nodes, and Pi-hole regex rules.
+- Nodes forward. They don't resolve from the root servers.
+- Not supported yet: one shared IP address for several nodes, and Pi-hole regex rules.
 
 ## The node
 
-The firmware is a small operating system on ESP-IDF and FreeRTOS, not a fixed program.
+The firmware is a small operating system on ESP-IDF and FreeRTOS.
 
-- **One image per chip, not per board.** A small data file in flash (the board definition)
+- One image per chip, not per board. A small data file in flash (the board definition)
   says how the board is wired. The image holds no board details, site settings or secrets.
-- **Services.** The DNS listeners and cache (always on), forwarding, forward zones, secondary
-  zones, hosted zones, blocking and the query log each start and stop on their own. One
-  that's off has no task, stack, buffers or timers.
-- **Live where possible.** Turning forwarding, hosted zones, blocking or the query log on or
+- The DNS listeners and cache (always on), forwarding, forward zones, secondary zones,
+  hosted zones, blocking and the query log each start and stop on their own. One that's
+  off has no task, stack, buffers or timers.
+- Live where possible. Turning forwarding, hosted zones, blocking or the query log on or
   off applies at once. Changes that need a new memory layout or address wait for a reboot,
   which the controller schedules.
-- **Watchdogs.** If the UDP receive or TCP accept task stalls (or every UDP worker at once),
+- Watchdogs. If the UDP receive or TCP accept task stalls (or every UDP worker at once),
   the node reboots, at most 3 times in a row; after that it stays up in *fault* rather than
   boot-looping. An optional service that fails is retried after 5 s, 10 s, 20 s and so on up
   to 5 minutes, and after 3 failures in a row the node is *degraded*. A stalled forward loop
   also makes it *degraded*; it keeps answering from cache and local zones. The node never
   reboots for anything else.
-- **Idle means idle.** Services wait on events rather than poll. Where it's safe, the CPU
+- Idle means idle. Services wait on events rather than poll. Where it's safe, the CPU
   clock drops when idle; the board sets the default and the node config can switch it live.
 
 ## Answering a query
 
 For each query the node checks, in order:
 
-1. **Local zones.** A secondary or hosted zone; the longest matching name wins. Never
+1. Local zones. A secondary or hosted zone; the longest matching name wins. Never
    blocked.
-2. **Blocking**, if it's on. A blocked name gets `0.0.0.0` for A, `::` for AAAA and an empty
+2. Blocking, if it's on. A blocked name gets `0.0.0.0` for A, `::` for AAAA and an empty
    answer for other types, with a 10-second TTL (or NXDOMAIN, if chosen). Never cached.
-3. **Forward zones**: a zone whose queries go to its own forwarder.
-4. **The cache, then the default forwarders.** With blocking on, CNAME targets in a
+3. Forward zones: a zone whose queries go to its own forwarder.
+4. The cache, then the default forwarders. With blocking on, CNAME targets in a
    forwarded answer are checked too, which catches trackers hiding behind first-party names.
 
-A node with no default forwarders answers such a query **REFUSED**, so the client asks its
+A node with no default forwarders answers such a query REFUSED, so the client asks its
 next server at once.
 
 ## Forwarding: the pending table and the forward loop
 
 No DNS worker ever waits on a forwarder, so a slow or dead one can't tie up the node.
-Queries that miss the cache park in the **pending table**, one *flight* per question, and
+Queries that miss the cache park in the pending table, one *flight* per question, and
 every query for the same question shares that flight's answer (or SERVFAIL). One task, the
-**forward loop**, drives all the flights, each with its own random source port and query ID.
+forward loop, drives all the flights, each with its own random source port and query ID.
 
-The table has `memory.fwd_pending` slots (32 by default, 8 on chips without PSRAM). The
+The table has `memory.fwd_pending` slots (32 by default). The
 default forwarders and each forward zone may use at most half of them, so one dead forwarder
 can't starve the rest. Each flight tries every forwarder twice, each try bounded by
 `upstream_timeout_ms`, plus one TCP retry for a truncated answer.
@@ -124,12 +124,12 @@ can't starve the rest. Each flight tries every forwarder twice, each try bounded
 
 Each zone has exactly one source:
 
-- **Secondary.** Copied from your zone primary over AXFR, saved to SD, refreshed on NOTIFY
+- Secondary. Copied from your zone primary over AXFR, saved to SD, refreshed on NOTIFY
   and SOA checks. Any standards-compliant primary works (BIND, Knot, PowerDNS, Windows DNS,
   Technitium and others).
-- **Hosted.** espDNS is the primary. The controller keeps RFC 1035 zone files and sends a
+- Hosted. espDNS is the primary. The controller keeps RFC 1035 zone files and sends a
   node's hosted zones as one signed bundle, swapped in live. At most 32 per node.
-- **Forward.** Queries under the zone go to a named forwarder.
+- Forward. Queries under the zone go to a named forwarder.
 
 One setup can mix all three, but a zone can't be two kinds on one node. Secondary zones
 saved on SD answer at boot, before any check with the primary. How-to: [zones.md](zones.md).
@@ -138,15 +138,15 @@ saved on SD answer at boot, before any check with the primary. How-to: [zones.md
 
 An optional service; off, none of it runs or uses memory. How-to: [blocking.md](blocking.md).
 
-- **The controller compiles; nodes only receive.** It downloads your lists, removes
+- The controller compiles; nodes only receive. It downloads your lists, removes
   duplicates, writes one compact file (about 3 to 3.6 bytes per domain), signs it and pushes
   it. Every node gets the same bytes and never fetches lists itself.
-- **The decision.** Overrides are checked first. Then the most specific match wins; on a
-  tie, allow beats block.
-- **Two slots on SD**, so the previous list is always kept for a revert. If two copies fit
+- Overrides are checked first. Then the most specific match wins; on a tie, allow beats
+  block.
+- Two slots on SD, so the previous list is always kept for a revert. If two copies fit
   the board's memory share, a new list swaps in live; if not, it loads at the next reboot. A
   list too big for RAM is looked up from SD, one sector per likely match.
-- **Checks before a push.** The compiler refuses a build whose size changes by more than a
+- Checks before a push. The compiler refuses a build whose size changes by more than a
   set percentage (20% by default) or that blocks a must-resolve name, unless you accept that
   build once.
 
@@ -168,7 +168,7 @@ An optional service; off, none of it runs or uses memory. How-to: [blocking.md](
 With two slots, the node boots the valid copy with the highest sequence number. If it had to
 fall back to an older one, it reports *degraded*, reason `older copy`.
 
-**If the SD card fails** or is too slow at boot, the node keeps answering from its config
+If the SD card fails or is too slow at boot, the node keeps answering from its config
 and forwarders. Secondary zones are transferred again and kept in RAM; hosted zones and
 blocking are unavailable. It reports *degraded*, reason `sd card`.
 
@@ -184,7 +184,7 @@ Anything left out comes from the chip image's default; the full list is in
 [`boards/README.md`](../boards/README.md). At boot, and for every config pushed, the node
 plans memory for the services the config enables:
 
-| Service | Internal RAM | Data (PSRAM if the board has it, else internal RAM) |
+| Service | Internal RAM | Data (PSRAM) |
 |---|---|---|
 | dns | Listener, worker and forward-loop stacks | The cache, worker buffers, the UDP receive pool, the forward loop's TCP buffer, and the pending table |
 | secondary | The zone task's stack | `secondary_zones_kb` and the transfer buffers |
@@ -214,15 +214,13 @@ Everything else about a board is data.
 | `esp32p4` | ESP32-P4 v3 and later |
 | `esp32s3-octal` | ESP32-S3 with octal PSRAM |
 | `esp32s3-eth` | ESP32-S3 with octal PSRAM, wired: `esp32s3-octal`'s sibling, faster for less internal RAM |
-| `esp32s3-quad` | ESP32-S3 with quad PSRAM or none |
-| `esp32` | Classic ESP32 |
-| `esp32c3`, `esp32c6` | Single-core chips without PSRAM |
+| `esp32s3-quad` | ESP32-S3 with 8 MB of quad PSRAM |
 
 Each image carries every driver its chip can use (built-in Ethernet with IP101, LAN87xx,
 RTL8201 and DP83848 PHYs, W5500 SPI Ethernet, SD over SDMMC or SPI, Wi-Fi, LEDs). Unused
 drivers cost flash, not RAM.
 
-**The board catalog** is JSON files in [`boards/`](../boards/), each marked *tested*,
+The board catalog is JSON files in [`boards/`](../boards/), each marked *tested*,
 *community* or *untested*. Tested on hardware today:
 
 - Guition JC-ESP32P4-M3-DEV (ESP32-P4, built-in Ethernet with an IP101 PHY, SDMMC)
@@ -235,11 +233,11 @@ release and recovery public keys) in milliseconds; it doesn't compile anything. 
 board it then sends the network name and password over USB. **Write keys only** writes just
 the `keys` partition, for a node with no keys.
 
-Chip images are **key-neutral**: no board, address or keys built in, the same for everyone.
+Chip images are key-neutral: no board, address or keys built in, the same for everyone.
 The controller gets them from the project's release (Get firmware) or from your own build
 signed with your release key.
 
-**Settings come in layers.** A value comes from the first of:
+Settings come in layers. A value comes from the first of:
 
 1. the node config (signed, pushed by the controller);
 2. the board definition (the catalog's values, plus the address from Install over USB);
@@ -247,12 +245,12 @@ signed with your release key.
 
 The board definition only changes by flashing over USB.
 
-**Wired is the supported way.** Wi-Fi is a best-effort fallback for boards without Ethernet.
+Wired is the supported way. Wi-Fi is a best-effort fallback for boards without Ethernet.
 Keep at least one node wired; the controller warns when only Wi-Fi nodes are answering.
 
 ## Boot
 
-**DNS answered within 15 seconds of power-on.** Only these come before the listeners open:
+DNS is answered within 15 seconds of power-on. Only these come before the listeners open:
 the bootloader and image check, PSRAM start-up, the Ethernet link, the address, and mounting
 the SD card (in parallel, 1.5-second limit).
 
@@ -275,10 +273,10 @@ Install over USB gives the node a static address (prefix length and gateway), or
 network with a DHCP server; it refuses to make an image with no address. A release has no
 factory images: a new node is always installed from the controller.
 
-**Adoption**, from the web UI or the CLI:
+Adoption, from the web UI or the CLI:
 
 1. **Discovery.** Nodes advertise `_espdns._tcp` over mDNS. The controller lists unadopted
-   nodes with board, firmware, address and **MAC address** (with a copy button, for a DHCP
+   nodes with board, firmware, address and MAC address (with a copy button, for a DHCP
    reservation). *Identify* blinks a node's LED so you can match it to the board in your
    hand.
 2. **Address.** Keep the current one or give a static one; the controller first checks that
@@ -310,26 +308,26 @@ Every node reports one state in `/health` and `/status`:
 | fault | The listeners failed, or stalled 3 times in a row | No |
 | updating | Receiving a release | Yes |
 
-`/health` returns **200 while the node answers** and 503 otherwise, so a monitor only needs
+`/health` returns 200 while the node answers and 503 otherwise, so a monitor only needs
 the status code. It also lists every reason that holds: `sd card`, `blocking`,
 `zone expired`, `zone refresh failing`, `forwarders failing`, `forwarders slow`,
 `overloaded`, `forwarder task stalled`, `config`, `hosted zones`, `service failed`,
 `older copy` and `no keys`. `reboot pending`, `config on trial` and `service restarting` are
 listed but don't make a node degraded.
 
-**LED patterns** (single-colour, or colour on RGB): a short blip every 5 seconds when
+LED patterns (single-colour, or colour on RGB): a short blip every 5 seconds when
 healthy, two blinks when degraded, a slow blink with no network, solid for a fault, a fast
 flicker to identify. A board without a usable LED can name an add-on LED on a spare pin in
 its node config.
 
 ## Observability
 
-- **`GET /metrics`**: Prometheus text. Query counts, answer times, per-forwarder figures,
+- `GET /metrics`: Prometheus text. Query counts, answer times, per-forwarder figures,
   cache and blocking counters, zone state, memory per service, health.
-- **`GET /querylog?cursor=N&limit=M`**: the optional query log, a ring of recent queries in
+- `GET /querylog?cursor=N&limit=M`: the optional query log, a ring of recent queries in
   memory (160 bytes each). `querylog.client` in the node config keeps each client's address
   `full`, as its `/24` (`subnet`), or not at all (`hidden`).
-- **The controller's Query log page** polls each node every 10 seconds and keeps one hour of
+- The controller's **Query log** page polls each node every 10 seconds and keeps one hour of
   history and the newest 20,000 log entries, in memory only.
 
 `/health` and `/metrics` are open to anyone who can reach the node, so your own monitoring
@@ -338,7 +336,7 @@ can watch nodes with the controller off. Who can read `/status` and `/querylog`:
 
 ## Signed releases and pins
 
-Every change to a node is a **signed release**: firmware, config, hosted zones, blocklist,
+Every change to a node is a signed release: firmware, config, hosted zones, blocklist,
 overrides, and control commands (pause, identify, flush cache, reboot, revert). Think of a
 carrier pigeon with a sealed letter: the node checks the seal before it reads a word. The
 format is in `firmware/main/release.h`:
@@ -353,18 +351,18 @@ format is in `firmware/main/release.h`:
 | Payload length and SHA-256 | Checked while the payload streams in |
 | Signature | ECDSA P-256 over the 128-byte manifest |
 
-- **Keys live in the keys partition, not the firmware.** A node trusts two public keys, the
+- Keys live in the keys partition, not the firmware. A node trusts two public keys, the
   release key and the recovery key. Install over USB writes them.
-- **No keys, no changes.** A node with no keys (or a damaged keys record) is in **setup
-  mode**: it answers DNS on its board's defaults, reports `no keys`, and refuses every
+- No keys, no changes. A node with no keys (or a damaged keys record) is in setup mode:
+  it answers DNS on its board's defaults, reports `no keys`, and refuses every
   release until keys are written over USB.
-- **Key rotation** is a KEYS release signed with the recovery key only, for one node by ID
+- Key rotation is a KEYS release signed with the recovery key only, for one node by ID
   ([security.md](security.md#key-rotation)).
-- **Sequence numbers** are milliseconds since 1970 (or one more than the last), kept per
+- Sequence numbers are milliseconds since 1970 (or one more than the last), kept per
   kind in NVS, so replays and downgrades are refused, even after a reboot. To roll back, the
   controller signs the older payload again with a new number. Neither side accepts a number
   more than 24 hours past its own clock.
-- **Pins.** Anything answering on a node's address could claim to be it, so the controller
+- Pins. Anything answering on a node's address could claim to be it, so the controller
   keeps its own record (`pins/<node-id>.json` in the data directory): each node's ID, pinned
   to its address at adoption, and the last sequence number signed per kind. It signs only
   for the pinned ID, and nothing for an unpinned address except an *identify* during
@@ -374,13 +372,13 @@ format is in `firmware/main/release.h`:
   docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data -host <address> -node <node ID>
   ```
 
-**Firmware updates are safe to fail.** A new image boots on trial: it must get its address,
+Firmware updates are safe to fail. A new image boots on trial: it must get its address,
 open its listeners and answer within its limits, or the bootloader rolls back.
 
-**Reboot pending.** A node never reboots itself to apply a release. One that can only apply
-at boot is stored and checked, and the node reports `reboot pending` with the reason (for
-example `config: address`, `blocklist: size`, `firmware`). The controller picks when each
-node reboots, so it never takes two down at once.
+A node never reboots itself to apply a release. One that can only apply at boot is stored
+and checked, and the node reports `reboot pending` with the reason (for example
+`config: address`, `blocklist: size`, `firmware`). The controller picks when each node
+reboots, so it never takes two down at once.
 
 | Kind | Where it lives | Applied |
 |---|---|---|
@@ -395,24 +393,24 @@ node reboots, so it never takes two down at once.
 
 Every push, from the web UI or the CLI, goes through one rolling push:
 
-1. **Check first.** Before touching any node: services, the memory plan for a config, zone
+1. Check first. Before touching any node: services, the memory plan for a config, zone
    conflicts for hosted zones.
-2. **One node at a time.** Before each change, and again just before a reboot, another node
+2. One node at a time. Before each change, and again just before a reboot, another node
    (or a DNS peer) must be answering, and for a change that may reboot, every other one must
    be healthy. `-force` goes ahead with just one other node answering.
-3. **Wait for it.** The node must come back on the new build or sequence number, healthy and
+3. Wait for it. The node must come back on the new build or sequence number, healthy and
    passing DNS checks, before the next starts.
-4. **Canary and soak for blocklists.** A new list goes to one node first, gets real test
+4. Canary and soak for blocklists. A new list goes to one node first, gets real test
    queries, is watched for the soak time (one minute by default) and checked again before the
    next node.
-5. **Revert on failure.** If a node fails a new list, every node that took it goes back,
+5. Revert on failure. If a node fails a new list, every node that took it goes back,
    the failed node first. Nodes not yet changed aren't touched.
 
-**DNS peers.** If clients also use another resolver, list it in `settings.json`
+If clients also use another resolver, list it as a DNS peer in `settings.json`
 (`"dns_peers"`). While it passes its DNS checks it counts as one healthy node, so a single
 espDNS node can be rebooted safely.
 
-**One change at a time.** Every change takes the fleet lock (`fleet.lock` in the data
+Every change takes the fleet lock (`fleet.lock` in the data
 directory). A second change fails at once and names who holds it.
 
 ## The controller
@@ -425,33 +423,33 @@ doesn't compile firmware. Start it with one `docker run`
 The dashboard is at http://127.0.0.1:8480. The controller listens on localhost only and
 uses host networking to find nodes over mDNS and reach them.
 
-- **Node list.** Nodes in `settings.json`, ones found over mDNS, and any you look up by
+- Node list. Nodes in `settings.json`, ones found over mDNS, and any you look up by
   address, each polled every 10 seconds. An mDNS answer is only a hint: it never renames or
   moves a known node.
-- **Jobs and pending changes.** Edits collect as pending changes and go out in one apply
+- Jobs and pending changes. Edits collect as pending changes and go out in one apply
   job. Jobs run one at a time with live progress, and every change goes in the action log.
-- **Zone primaries.** The controller keeps only the primary's address, the networks it allows
+- Zone primaries. The controller keeps only the primary's address, the networks it allows
   and the zones to copy. It never changes the primary and holds no token for it.
-- **CLI.** The same operations as the web UI, from the same image:
+- CLI. The same operations as the web UI, from the same image:
 
   ```sh
   docker compose run --rm --entrypoint /espdns espdns-controller status -all -data /data
   ```
 
-**Rebuilding it.** `espdns backup` writes one encrypted file (age format, to a passphrase or
-an age key); `espdns restore` puts it back into an empty data directory with the controller
-stopped. Without a backup, `espdns recover` reads the nodes' `/status` (with the release key
-imported) and rebuilds `settings.json` and the pins. Nodes don't return their configs or zone
-contents; those come from your own copies.
+You can rebuild the controller. `espdns backup` writes one encrypted file (age format, to a
+passphrase or an age key); `espdns restore` puts it back into an empty data directory with
+the controller stopped. Without a backup, `espdns recover` reads the nodes' `/status` (with
+the release key imported) and rebuilds `settings.json` and the pins. Nodes don't return
+their configs or zone contents; those come from your own copies.
 
-**The keys.** The release key is `keys/release.pem` in the data directory. The recovery
-key's private half never reaches the controller: the first run makes it in your browser and
-downloads it. Which keys a node trusts changes only with a rotation you sign offline with
-the recovery key. Details: [security.md](security.md).
+The release key is `keys/release.pem` in the data directory. The recovery key's private
+half never reaches the controller: the first run makes it in your browser and downloads it.
+Which keys a node trusts changes only with a rotation you sign offline with the recovery
+key. Details: [security.md](security.md).
 
-**Firmware it takes.** Chip images come in only as a signed release, the project's or your
-own, and their provenance is checked again before every update. The controller then signs
-the update with your release key; the project's key signs nothing a node takes
+Chip images come in only as a signed release, the project's or your own, and their
+provenance is checked again before every update. The controller then signs the update with
+your release key; the project's key signs nothing a node takes
 ([Releasing](releasing.md#using-a-release)).
 
 ## The data directory

@@ -134,10 +134,13 @@ type Imported struct {
 // anything else is refused, and so is a release with any file not as signed. Nothing is
 // imported unless the whole release checks. Each image keeps its provenance.
 func Import(dir string, s Signers, images string) (Imported, error) {
-	return importFrom(dir, s, images, "", false)
+	return importFrom(dir, s, images, "", nil)
 }
 
-func importFrom(dir string, s Signers, images, from string, chipsOnly bool) (Imported, error) {
+// importFrom is Import; from is where the release came from (Signer.From), and need is
+// verify's: nil, the whole release must be there; else only the files it names (a fetch's
+// chip images), and only those chip images are imported.
+func importFrom(dir string, s Signers, images, from string, need map[string]bool) (Imported, error) {
 	var out Imported
 	cands := s.candidates()
 	if len(cands) == 0 {
@@ -147,7 +150,7 @@ func importFrom(dir string, s Signers, images, from string, chipsOnly bool) (Imp
 	var c Checked
 	var pub []byte
 	for _, k := range cands {
-		got, err := verify(dir, k, chipsOnly)
+		got, err := verify(dir, k, need)
 		if errors.Is(err, ErrSignature) {
 			continue
 		}

@@ -365,7 +365,7 @@ test("Install over USB: a Wi-Fi board's install says it asks for the Wi-Fi netwo
     await expect(u.locator("#usb-install")).toContainText("with your keys (release a1b2c3d4e5f60718, recovery 0f1e2d3c4b5a6978)");
     await expect(u.locator("#usb-addr")).toHaveValue("192.0.2.52/24");
     if (wifi) {
-      await expect(u.locator("#usb-wifi")).toHaveText("After it installs, it asks for your Wi-Fi network and password, which go straight to the board over USB, not through the controller.");
+      await expect(u.locator("#usb-wifi")).toHaveText("After it installs, it asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.");
     } else {
       await expect(u.locator("#usb-wifi")).toHaveCount(0);
     }

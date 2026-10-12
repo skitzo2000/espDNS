@@ -67,17 +67,17 @@ function renderHead() {
     sub.textContent = "Every node is out of service: return one to service from its page.";
   } else if (!ns.length) {
     sentence.textContent = "No node yet";
-    sub.textContent = "Add a node to start answering DNS on your network.";
+    sub.textContent = "Add a node to answer DNS on your network.";
   } else if (!up.length) {
     sentence.textContent = "DNS is not answering on your espDNS nodes";
     sub.textContent = `Check power and network cables on ${andList(names(ns))}.`;
   } else if (attention.length) {
     const [n, s] = attention[0];
     sentence.textContent = `DNS is answering · ${andList(attention.map(([x]) => nodeText(x)))} need${attention.length === 1 ? "s" : ""} attention`;
-    sub.textContent = `${nodeText(n)}: ${s.why || s.word}. Clients still get answers from ${up.length === ns.length ? both(ns) : andList(names(up))}.`;
+    sub.textContent = `${nodeText(n)}: ${s.why || s.word}. Devices still get answers from ${up.length === ns.length ? both(ns) : andList(names(up))}.`;
   } else if (ns.length === 1) {
     sentence.textContent = `DNS is answering on ${nodeText(ns[0])}`;
-    sub.textContent = "With one node, DNS stops while it restarts: add a second node to keep it answering.";
+    sub.textContent = "With one node, DNS stops while it restarts. Add a second to keep it answering.";
   } else {
     sentence.textContent = `DNS is answering on ${both(ns)}`;
     sub.textContent = "Every node is healthy.";
@@ -88,7 +88,7 @@ $("copy-dns").addEventListener("click", async () => {
   const ips = serving().map(n => hostOnly(n.addr));
   if (!ips.length) return;
   const t = ips.join(", ");
-  toast(await copyText(t) ? `Copied ${t}: give ${ips.length === 2 ? "both" : ips.length === 1 ? "it" : "them all"} to your router as its DNS servers`
+  toast(await copyText(t) ? `Copied ${t}: set ${ips.length === 2 ? "both" : ips.length === 1 ? "it" : "them all"} as your router's DNS servers`
     : `Couldn't copy: your DNS servers are ${t}`);
 });
 
@@ -218,7 +218,7 @@ function renderRows() {
   if (data.nodes === null) rows.push(h("div", { class: "empty" }, h("p", {}, "Reading the nodes…")));
   else if (!rows.length) rows.push(h("div", { class: "empty with-mascot" },
     h("img", { class: "mascot", src: "img/artie.webp", width: 56, height: 96, alt: "", title: "Artie A. Record" }),
-    h("p", {}, "No node yet. + Add node finds the ones on your network, or installs a new board over USB.")));
+    h("p", {}, "No node yet. + Add node finds nodes on your network, or installs a new board over USB.")));
   head.hidden = !ns.length && !arr(data.found).length;
   box.replaceChildren(head, ...rows);
 }
@@ -270,7 +270,7 @@ function openFound() {
   const f = arr(data.found).find(x => hostOnly(x.host) === k || str(x.host) === k || str(x.id).toLowerCase() === k);
   history.replaceState(null, "", location.pathname + location.search);
   if (f) adder.setup(f);
-  else toast("That node isn't found on the network now");
+  else toast("That node isn't on the network now");
 }
 window.addEventListener("hashchange", openFound);
 async function readKey() {

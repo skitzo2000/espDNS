@@ -1,0 +1,16 @@
+{
+  "name": "lilygo-t-eth-elite",
+  "title": "LilyGO T-ETH-ELite",
+  "image": "esp32s3-eth",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [
+    { "host": 2, "sclk": 48, "mosi": 21, "miso": 47 },
+    { "host": 3, "sclk": 10, "mosi": 11, "miso": 9 }
+  ],
+  "ethernet": { "kind": "w5500", "spi_host": 2, "cs": 45, "int": 14, "mhz": 20 },
+  "sd": { "kind": "spi", "spi_host": 3, "cs": 12 },
+  "led": { "kind": "gpio", "pin": 38, "active_low": false },
+  "notes": "ESP32-S3-WROOM-1 N16R8 (16 MB flash, 8 MB octal PSRAM). Soldered W5500: SCLK 48, MOSI 21, MISO 47, CS 45, INT 14; its reset line isn't wired (software reset only). TF slot on the shield SPI bus: SCLK 10, MOSI 11, MISO 9, CS 12, shared with a LoRa/LTE shield's radio (CS 40). Green LED on GPIO38. PoE (802.3af) built in; keep the OTG switch off on PoE unless the USB-C port must power something. CS GPIO45 is a strapping pin. Pins: T-ETH-ELite schematic (2024-05), LilyGO utilities.h; LilyGO's ESP-IDF gateway firmware runs Ethernet on it."
+}

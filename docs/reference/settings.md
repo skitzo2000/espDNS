@@ -15,7 +15,7 @@ Path: `<data>/settings.json` (`/data/settings.json` in the container). Edit it o
 dashboard's Settings page (which writes it whole) or by hand.
 
 - Every field is optional. A missing file means "no settings" (all fields empty).
-- Unknown fields are refused: a misspelt field is an error, never a silent default.
+- Unknown fields are refused, so a misspelt field shows up as an error.
 - The file must hold exactly one JSON object.
 - The controller rereads it every 10 seconds, so a change applies without a restart. A file
   that no longer parses leaves the node list as it was.
@@ -74,7 +74,8 @@ copied zone).
 | `allows` | The networks the primary allows zone transfers from, as you set it up. When a node's address is in none of them, adoption says once what to allow there; it never stops on it. The Zones page names the nodes outside them. | Each an IPv4 network with its prefix length, as its network address (`192.0.2.0/24`). No duplicates. |
 | `zones` | The zones to copy from the primary. A new node's config starts with them; the node configs say what each node copies. | Each a zone name in lower case, without the final dot. No duplicates. |
 
-All three are optional. Edit them on the Zones page (Zone primary) or in the first run.
+All three are optional. Edit them on the Zones page (Zone primary); a zone copied from a
+primary with + Add zone, there or in the setup, fills in its address and the zone.
 
 An older controller's `settings.json` may have `"kind"`, `"url"` and `"cert_sha256"` here,
 from when it drove a primary's API. They're accepted and ignored: the controller logs once at

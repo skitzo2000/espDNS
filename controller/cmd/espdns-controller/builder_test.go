@@ -36,6 +36,63 @@ func TestBuildNeedsAddress(t *testing.T) {
 	}
 }
 
+// The library is served from memory with an ETag: the same list again is a 304; a board
+// saved is in the next list (a new ETag), and the build finds it by name.
+func TestBoardsListETag(t *testing.T) {
+	b := newBuilder("../../../boards", t.TempDir(), t.TempDir())
+	mux := http.NewServeMux()
+	b.routes(mux)
+	get := func(etag string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/api/boards", nil)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := get("")
+	etag := rec.Header().Get("ETag")
+	var list []boardView
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != http.StatusOK || err != nil || etag == "" || len(list) < 20 {
+		t.Fatalf("%d %q %v: %d boards", rec.Code, etag, err, len(list))
+	}
+	if list[0].Board.Title < list[len(list)-1].Board.Title {
+		// ordered by maker then title: Adafruit before Waveshare
+	} else {
+		t.Fatalf("order: %s … %s", list[0].Board.Title, list[len(list)-1].Board.Title)
+	}
+	if rec = get(etag); rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+		t.Fatalf("with the ETag: %d %s", rec.Code, rec.Body)
+	}
+	if rec = get(`"other"`); rec.Code != http.StatusOK {
+		t.Fatalf("with another ETag: %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/boards", strings.NewReader(
+		`{"name":"mine","title":"Acme Board","image":"esp32s3-octal","flash_mb":8,"psram_mb":8}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	rec = get(etag)
+	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == etag || !strings.Contains(rec.Body.String(), `"name":"mine"`) {
+		t.Fatalf("after a save: %d, etag %q", rec.Code, rec.Header().Get("ETag"))
+	}
+	// Saving over a shipped board is refused; the build finds the saved one by name.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/boards", strings.NewReader(`{"name":"ws-s3-eth","image":"esp32s3-octal"}`)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "catalog board") {
+		t.Fatalf("save over a catalog board: %d %s", rec.Code, rec.Body)
+	}
+	b.keys = func() ([]byte, []byte, error) { return newPub(t), newPub(t), nil }
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/build", strings.NewReader(`{"name":"mine","network":{"address":"192.0.2.60/24","gateway":"192.0.2.1"}}`)))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "isn't imported") {
+		t.Fatalf("build of the saved board: %d %s", rec.Code, rec.Body)
+	}
+}
+
 // A build's manifest: for a board that may run on Wi-Fi, no Improv wait of 0, so ESP Web
 // Tools asks for the Wi-Fi network over Improv after installing (the image erases NVS); for
 // a wired board, a wait of 0, so it only installs.

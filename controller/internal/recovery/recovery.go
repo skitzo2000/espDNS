@@ -145,7 +145,7 @@ func Run(ctx context.Context, c *fleet.Client, o Options) (Report, error) {
 	}
 	k, err := o.Key.Key()
 	if err != nil {
-		return r, fmt.Errorf("the release key: %w: recovery finds the nodes that trust it, so import it first (espdns key import: docs/getting-started.md, step 7)", err)
+		return r, fmt.Errorf("the release key: %w: recovery finds the nodes that trust it, so import it first (espdns key import: docs/developer.md)", err)
 	}
 	r.Fingerprint = keys.Fingerprint(k)
 	spath := settings.Path(o.DataDir)

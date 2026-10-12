@@ -1,0 +1,12 @@
+{
+  "name": "ws-p4-86-panel-eth-2ro",
+  "title": "Waveshare ESP32-P4-86-Panel-ETH-2RO",
+  "image": "esp32p4-rev1",
+  "flash_mb": 32,
+  "psram_mb": 32,
+  "tier": "community",
+  "ethernet": { "kind": "emac", "phy": "ip101", "addr": 1, "reset": 51 },
+  "sd": { "kind": "sdmmc", "slot": 0, "width": 4, "ldo": 4 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-P4-WIFI6-Touch-LCD-4B display module (ESP32-P4NRW32, 32 MB flash, 32 MB PSRAM; its ESP32-C6 unused) on the 86 Panel bottom board with the RJ45, two relays (GPIO32, 46) and RS485 (47, 48). Only this ETH-2RO version has Ethernet. IP101GRI with IDF's P4 defaults (MDC 31, MDIO 52, REF_CLK in on GPIO50), reset GPIO51, address 1. Pins: Waveshare wiki (ethernetbasic demo), Touch-LCD-4B and bottom board schematics. microSD on SDMMC slot 0 (CLK 43, CMD 44, D0-D3 39-42) on LDO channel 4; supply switch on GPIO45 on by default. The LCD isn't driven. Power LED only."
+}

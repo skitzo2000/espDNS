@@ -184,7 +184,7 @@ test("Blocking: its state, the check of the last site blocked, the rules and the
   await expect(gw.locator("a.dev")).toHaveAttribute("href", `querylog.html?client=${GATEWAY}`);
   await expect(gw).toContainText("14 times · 2 min ago · through dns2 and dns3");
   await expect(gw.locator(".tag")).toHaveText("your gateway");
-  await expect(gw).toContainText("It asks for the devices behind it, so the device itself isn't shown. To see each device, have that network's DHCP hand out your nodes as DNS servers (Copy DNS servers on Nodes).");
+  await expect(gw).toContainText("It asks for the devices behind it, so they aren't shown. To see each one, have that network's DHCP hand out your nodes as DNS servers (Copy DNS servers on Nodes).");
   await expect(gw.getByRole("link", { name: "Copy DNS servers" })).toHaveAttribute("href", "./");
   await expect(kid.locator("a.dev")).toHaveText("kids-tablet.home.example");
   await expect(kid.locator("a.dev")).toHaveAttribute("href", `querylog.html?client=${CLIENT}`);

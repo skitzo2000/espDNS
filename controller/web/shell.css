@@ -287,6 +287,14 @@ details.ex > .exb { padding: 16px 18px; display: grid; gap: 14px; box-shadow: in
 .zpanel .found { display: grid; gap: 4px }
 .zpanel .found b { font-size: 15px }
 .zpanel .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
+/* + Add zone (addzone.js: Zones and the first run): what the lookup found, and setting it up by hand */
+.zpanel .manual { border-top: 1px solid var(--line); padding-top: 10px }
+.zpanel .manual summary { cursor: pointer; font-size: 13.5px; color: var(--muted) }
+.zpanel .mopts { display: grid; gap: 8px; margin-top: 10px }
+.zpanel .mopt { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; font-size: 14px }
+.zpanel .mopt input[type=radio] { margin-top: 3px; accent-color: var(--orange) }
+.zpanel .mopt .t { width: 150px; padding: 4px 8px; margin-left: 4px }
+.zpanel .tried { margin: 0; padding-left: 18px }
 @media (max-width: 760px) { .combo { width: 100% } .head > .row { width: 100% } }
 
 /* The search in the top bar (shell.js, searchBox): the box, its results by type under it,

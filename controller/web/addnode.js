@@ -50,16 +50,16 @@ const netText = p => `${dotted(p.net)}/${p.bits}`;
 export function netCheck(address, gateway) {
   const p = STATIC.test(str(address)) ? prefix(address) : null;
   if (!p) return { field: "address", why: STATICHINT };
-  if (p.bits < 8 || p.bits > 30) return { field: "address", why: "Its prefix length is between 8 and 30, like /24." };
-  if (p.addr === p.net || p.addr === p.last) return { field: "address", why: `${dotted(p.addr)} is the network's own or broadcast address: choose another.` };
+  if (p.bits < 8 || p.bits > 30) return { field: "address", why: "The prefix length is 8 to 30, like /24." };
+  if (p.addr === p.net || p.addr === p.last) return { field: "address", why: `${dotted(p.addr)} is the network or broadcast address: pick another.` };
   const own = `the node's own network, ${netText(p)}`;
   if (!str(gateway)) return { field: "gateway", why: `Give its gateway: an address in ${own}.` };
   const g = ip4(gateway);
-  if (g === null) return { field: "gateway", why: "Its gateway is an IPv4 address, like 192.0.2.1." };
+  if (g === null) return { field: "gateway", why: "The gateway is an IPv4 address, like 192.0.2.1." };
   if (!inNet(g, p)) {
-    return { field: "gateway", why: `${gateway} isn't in ${own}. The gateway is its next hop: an address in its own network, whatever routes lie beyond it.` };
+    return { field: "gateway", why: `${gateway} isn't in ${own}. The gateway has to be in that network.` };
   }
-  if (g === p.addr) return { field: "gateway", why: "The gateway is another address than the node's own." };
+  if (g === p.addr) return { field: "gateway", why: "The gateway can't be the node's own address." };
   return null;
 }
 
@@ -157,7 +157,7 @@ export function addNode(box, opts) {
     const q = st.q;
     if (!q || known(q)) { render(); return; }
     if (!IPV4.test(q)) {
-      if (now) { st.look = { addr: q, error: "Type its IPv4 address: four numbers with dots between them." }; render(); }
+      if (now) { st.look = { addr: q, error: "Type an IPv4 address, like 192.0.2.10." }; render(); }
       return;
     }
     const my = ++seq;
@@ -251,7 +251,7 @@ export function addNode(box, opts) {
 
   function body() {
     if (!st.sess.logged_in) {
-      return [h("p", { class: "hint" }, st.sess.password_set ? "Log in to add a node." : "Read-only: set a password, then log in, to add a node.")];
+      return [h("p", { class: "hint" }, st.sess.password_set ? "Log in to add a node." : "Set a password and log in to add a node.")];
     }
     if (st.sel) return chosen(st.sel);
     if (st.q) {
@@ -261,7 +261,7 @@ export function addNode(box, opts) {
           h("div", { class: "actions" }, h("a", { class: "btn small", href: `node.html#${encodeURIComponent(opts.nodeKey(k))}` }, "Open it"))];
       }
       const l = st.look;
-      if (!l) return [h("p", { class: "hint" }, "Type the node's whole address, like 192.0.2.10; Enter looks it up.")];
+      if (!l) return [h("p", { class: "hint" }, "Type the node's whole address, like 192.0.2.10, then Enter.")];
       if (l.busy) return [h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Looking for a node at ", h("span", { class: "mono" }, l.addr), "…")];
       if (l.error) return [h("div", { class: "found" }, h("b", { class: "mono" }, l.addr), h("span", { class: "small bad" }, l.error))];
       const r = obj(l.reply);
@@ -271,7 +271,7 @@ export function addNode(box, opts) {
       if (r.found && r.node) return chosen(r.node);
       return [h("div", { class: "found" }, h("b", { class: "mono" }, l.addr),
         h("span", { class: "small" }, r.answered ? "Something answers there, but it isn't an espDNS node."
-          : "No espDNS node answers there. A board that has never run espDNS needs installing over USB first.")),
+          : "No espDNS node answers there. A new board needs installing over USB first.")),
       h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => { close(); openUSB(); } }, "Install a board over USB"))];
     }
     const found = arr(opts.found());
@@ -290,7 +290,7 @@ export function addNode(box, opts) {
       item(() => { close(); openUSB(); }, "A new board over USB: start",
         h("div", {}, h("b", {}, "A new board over USB"), h("div", { class: "tagline" }, "Plug it into this computer and install espDNS")),
         h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB(); } }, "Start"))),
-    h("span", { class: "hint" }, "Or type the address of a node that isn't listed.")];
+    h("span", { class: "hint" }, "Or type the address of a node not listed here.")];
   }
 
   // item is one choice in the list: a click anywhere on it (its own buttons and links do
@@ -327,12 +327,12 @@ export function addNode(box, opts) {
         h("div", { class: "actions" }, usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), close), back())];
     }
     if (refusals.length || !f.next) {
-      return [intro(f), h("p", { class: "small bad" }, `It can't be added yet: ${refusals.join("; ") || "it is one of your nodes already"}.`),
+      return [intro(f), h("p", { class: "small bad" }, `Can't be added yet: ${refusals.join("; ") || "it's one of your nodes already"}.`),
         h("div", { class: "actions" }, back())];
     }
     if (f.next === "settings-add") {
       const go = h("button", { class: "btn primary", type: "button", onclick: () => settingsAdd(f) }, "Add node");
-      return [intro(f), h("p", { class: "small" }, `It runs its own config already${f.name ? `, as ${f.name}` : ""}. Adding it makes it one of your nodes: changes and updates go to it too.`),
+      return [intro(f), h("p", { class: "small" }, `It already runs its own config${f.name ? `, as ${f.name}` : ""}. Add it and it gets your changes and updates too.`),
         h("div", { class: "actions" }, go, back())];
     }
     if (!st.form) return [intro(f), h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Reading the configs…")];
@@ -364,7 +364,7 @@ export function addNode(box, opts) {
       h("input", { type: "radio", name: "nnhow", id: `nnhow-${v}`, value: v, checked: fm.how === v,
         onchange: () => { fm.how = v; fixed.hidden = v !== "fixed"; dhcpNote.hidden = v !== "dhcp"; ok(); } }), h("span", {}, label));
     const dhcpNote = h("p", { class: "hint", hidden: fm.how !== "dhcp" },
-      `Reserve ${hostOnly(f.host)} for its MAC (copy it above) in your router first: it keeps that address.`);
+      `Reserve ${hostOnly(f.host)} for its MAC (copy it above) in your router first.`);
     const ip = h("input", { class: "t mono", id: "nnip", type: "text", autocomplete: "off", spellcheck: "false", "aria-describedby": "nnip-hint" });
     ip.value = fm.address;
     const hint = h("span", { class: "hint", id: "nnip-hint" }, STATICHINT);
@@ -403,7 +403,7 @@ export function addNode(box, opts) {
       const p = prefix(fm.address);
       const gwBad = bad && bad.field === "gateway" && (fm.gateway || !addrBad);
       gwHint.textContent = gwBad ? bad.why : p && STATIC.test(fm.address)
-        ? `Its next hop: an address in ${netText(p)}, its own network.` : "Its next hop: an address in the node's own network.";
+        ? `An address in ${netText(p)}, the node's own network.` : "An address in the node's own network.";
       gwHint.classList.toggle("bad", !!gwBad && !!fm.gateway);
     };
     nn.addEventListener("input", () => { fm.newName = nn.value.trim(); ok(); });
@@ -423,7 +423,7 @@ export function addNode(box, opts) {
       h("div", { class: "grid2" }, h("label", { class: "f" }, h("span", {}, "Name"), sel), nnField),
       del ? h("div", { class: "row" }, del) : null,
       how, fileLine,
-      h("p", { class: "small" }, `espDNS saves this to ${fm.config === NEW ? `${fm.newName || "its"}.json` : fm.config || "its config"}, gives it this name and address, lets it copy your zones, then it starts serving like the others.`)].filter(Boolean);
+      h("p", { class: "small" }, `Saved to ${fm.config === NEW ? `${fm.newName || "its"}.json` : fm.config || "its config"}. The node gets this name and address, copies your zones, then serves like the others.`)].filter(Boolean);
     if (fm.confirmDelete && file && file.hash) {
       out.push(h("div", { class: "alert-box", id: "nndelask" },
         h("p", { class: "small" }, `Delete ${file.name}? No node runs it. It is kept in its history.`),
@@ -431,7 +431,7 @@ export function addNode(box, opts) {
           h("button", { class: "btn primary", type: "button", onclick: () => deleteConfig(f, file) }, `Delete ${file.name}`),
           h("button", { class: "btn small link", type: "button", onclick: () => { fm.confirmDelete = false; render(); } }, "Cancel"))));
     }
-    if (f.net === "wifi") out.push(h("span", { class: "hint" }, "A Wi-Fi board: fine as an extra node; your wired nodes keep DNS steady."));
+    if (f.net === "wifi") out.push(h("span", { class: "hint" }, "A Wi-Fi board is fine as an extra node; wired ones keep DNS steady."));
     if (!st.src.key) out.push(h("p", { class: "hint bad" }, `No release key to sign its config with${st.src.key_error ? `: ${st.src.key_error}` : ""}.`));
     out.push(h("div", { class: "actions" }, go, back()));
     return out;
@@ -502,7 +502,7 @@ export function addNode(box, opts) {
 
   async function adopt(f) {
     const p = params(f);
-    const flow = st.flow = { busy: true, what: "Checking its address and its config…", progress: null, error: "", hints: [] };
+    const flow = st.flow = { busy: true, what: "Checking its address and config…", progress: null, error: "", hints: [] };
     const show = () => { if (st.flow === flow && st.sel === f) render(); };
     const fail = (msg, hints) => { flow.busy = false; flow.error = msg; flow.hints = arr(hints); show(); };
     show();
@@ -517,7 +517,7 @@ export function addNode(box, opts) {
     const ck = obj(pv.check);
     if (pv.refusal) { fail(pv.refusal); return; }
     if (!ck.ok) { fail(str(ck.error) || str(obj(ck.node).refusal) || "Its config doesn't pass the check."); return; }
-    flow.what = "Trying it first: nothing changes yet.";
+    flow.what = "A dry run first: nothing changes yet.";
     show();
     let dry;
     try { dry = await post("api/jobs", { kind: "adopt", params: { ...p, dry_run: true } }); } catch (e) { fail(e.message); return; }
@@ -526,7 +526,7 @@ export function addNode(box, opts) {
     if (dry.state !== "done") { fail(str(dp.outcome) || str(dry.error) || `The check ${dry.state}.`, dp.hints); return; }
     // What to allow on the zone primary, once, if the node's network isn't one it allows.
     flow.advice = str(obj(dp.primary).advice) || str(pv.advice);
-    flow.what = `Adding it: ${pv.how === "new" ? "it moves to its new address with a restart" : "no restart"}.`;
+    flow.what = `Adding it${pv.how === "new" ? ": it restarts on its new address" : ", no restart"}.`;
     flow.progress = null;
     show();
     let job;
@@ -537,7 +537,7 @@ export function addNode(box, opts) {
     if (job.state !== "done") { fail(str(ap.outcome) || str(job.error) || `The adoption ${job.state}.`, ap.hints); return; }
     flow.busy = false;
     const name = (st.form.config === NEW ? st.form.newName : str(obj(config()).config_name)) || hostOnly(f.host);
-    toast(flow.advice ? `${name} is added. ${flow.advice}` : `${name} is added: it serves like the others`);
+    toast(flow.advice ? `${name} is added. ${flow.advice}` : `${name} is added and serving`);
     st.flow = null;
     close();
     opts.done();
@@ -551,7 +551,7 @@ export function addNode(box, opts) {
       j = await follow(j, () => {});
       if (j.state !== "done") throw new Error(str(j.error) || `It ${j.state}.`);
       flow.busy = false;
-      toast(`${f.name || hostOnly(f.host)} is one of your nodes now`);
+      toast(`${f.name || hostOnly(f.host)} is added`);
       st.flow = null;
       close();
       opts.done();
@@ -583,7 +583,7 @@ export function addNode(box, opts) {
 
   // usbWhy is why a node is updated over USB first, and what that does.
   function usbWhy(f) {
-    if (f.install === "keys") return "It has no keys (setup mode), so it takes nothing over the network. Writing your keys to it over USB keeps its firmware and settings.";
+    if (f.install === "keys") return "It has no keys (setup mode), so it takes nothing over the network. Writing your keys over USB keeps its firmware and settings.";
     const v = f.image ? str(opts.imageVersion(f.image)) : "";
     return `Its firmware is older than 0.0.1; installing ${v || "the current firmware"} over USB erases it.`;
   }
@@ -602,15 +602,15 @@ export function addNode(box, opts) {
       f.board || f.image ? fact("Board", [opts.boardName(f.board), f.image && `chip image ${f.image}`].filter(Boolean).join(" · ")) : null);
     const usb = viaUSB(f), keys = f.install === "keys";
     const addNow = !!f.next;
-    const other = !usb && !addNow ? (arr(f.refusals).join("; ") || "it is one of your nodes already") : "";
+    const other = !usb && !addNow ? (arr(f.refusals).join("; ") || "it's one of your nodes already") : "";
     const step = (cls, title, detail, action) => h("li", { class: cls }, h("span", { class: "m" }),
       h("div", {}, h("b", {}, title), detail ? h("div", { class: "hint" }, detail) : null, action ? h("div", { class: "actions" }, action) : null));
     const steps = h("ol", { class: "steps" },
-      usb ? step("next", keys ? "Write its keys over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer; its board is chosen for you.`,
+      usb ? step("next", keys ? "Write its keys over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer.`,
         usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname)))
         : step("done", "Firmware takes node configs", f.version ? `It runs ${f.version}.` : ""),
       step(addNow ? "next" : "", "Add it to your nodes",
-        addNow ? "Give it a name and an address; it copies your zones, then serves like the others."
+        addNow ? "Give it a name and an address; it copies your zones and starts serving."
           : usb ? (keys ? "Once it has its keys, it shows here again, ready to add." : "Once it runs 0.0.1 or later, it shows here again, ready to add.") : `Not yet: ${other}.`,
         addNow ? h("button", { class: "btn primary", type: "button", onclick: () => { p.close(); open(f); } }, "Add node") : null));
     p.body.append(facts, steps);
@@ -625,6 +625,6 @@ export function addNode(box, opts) {
 export function blocker(f) {
   if (f.install === "keys") return "No keys (setup mode): write them over USB first";
   if (f.install === "usb") return "Firmware older than 0.0.1: update it over USB first";
-  return `Can't be added yet: ${arr(f.refusals).join("; ") || "it is one of your nodes already"}`;
+  return `Can't be added yet: ${arr(f.refusals).join("; ") || "it's one of your nodes already"}`;
 }
 

@@ -1,14 +1,14 @@
 # Releasing espDNS
 
 A release is one version of the firmware and the controller together. They share the
-repository's [`VERSION`](../VERSION). Every step here is a docker or git command: Docker and
-git are all you need.
+repository's [`VERSION`](../VERSION). Every step here is a docker or git command, so Docker
+and git are all you need.
 
 ## What a release holds
 
 Push a version tag and CI builds the files
 ([`.github/workflows/release.yml`](../.github/workflows/release.yml)), then puts them on
-GitHub as a **draft** release that only the repository's writers can see:
+GitHub as a draft release that only the repository's writers can see:
 
 | File | What it is |
 | --- | --- |
@@ -17,10 +17,10 @@ GitHub as a **draft** release that only the repository's writers can see:
 | `SHA256SUMS` | The SHA-256 of every file above, as `sha256sum` writes it |
 | `SHA256SUMS.sig` | The project's release key's signature over `SHA256SUMS`, added by a person (below) |
 
-The images are **generic and key-neutral**: no board, no address, no site defaults and
-**no keys**. Install over USB adds those (a board partition and a keys partition with your
-two public keys). Every catalog board's chip image is in every release. There are **no
-factory images** (whole-flash images): a release can't know your keys or addresses.
+The images are generic and key-neutral: no board, no address, no site defaults and no keys.
+Install over USB adds those (a board partition and a keys partition with your two public
+keys). Every catalog board's chip image is in every release. There are no factory images
+(whole-flash images): a release can't know your keys or addresses.
 
 The signature is ECDSA P-256 over the SHA-256 of `SHA256SUMS`, 64 bytes (`r || s`), made
 with the project's release key. Its public half is [`keys/project.pub`](../keys/project.pub)
@@ -42,7 +42,7 @@ what it writes. The repository needs:
 
 ## Making a release
 
-1. **The version.** From the repository's top, on a branch from `main`, with the changes
+1. Bump the version. From the repository's top, on a branch from `main`, with the changes
    written under `## [Unreleased]` in [`CHANGELOG.md`](../CHANGELOG.md):
 
    ```sh
@@ -54,7 +54,7 @@ what it writes. The repository needs:
    It writes `VERSION` and turns Unreleased into the new version, dated today. Commit it and
    merge it to `main` like any change.
 
-2. **The tag.** On `main`, at that merge:
+2. Tag it on `main`, at that merge:
 
    ```sh
    git tag -a v0.0.2 -m "espDNS 0.0.2" && git push origin v0.0.2
@@ -68,8 +68,8 @@ what it writes. The repository needs:
    changelog as its notes. To rerun a tag, delete the draft first: an existing release is
    never changed.
 
-3. **The controller's image to sign with,** built from the tag you checked out, so the
-   public key it checks with comes from your copy of the source (`keys/project.pub`):
+3. Build the controller's image to sign with from the tag you checked out, so the public
+   key it checks with comes from your copy of the source (`keys/project.pub`):
 
    ```sh
    git checkout v0.0.2
@@ -77,7 +77,7 @@ what it writes. The repository needs:
      --build-context boards=boards --build-context version=. --build-context keys=keys controller
    ```
 
-4. **Sign.** Download the draft's `SHA256SUMS` into an empty directory, `sign/`, and sign it
+4. Download the draft's `SHA256SUMS` into an empty directory, `sign/`, and sign it
    with the release key on standard input, from its file or piped from your password
    manager. Never pass it as an argument or an environment variable.
 
@@ -89,9 +89,9 @@ what it writes. The repository needs:
 
    It writes `sign/SHA256SUMS.sig`, and refuses any key that isn't the project's (`-pub`).
 
-5. **Publish.** Add `SHA256SUMS.sig` to the draft and publish it.
+5. Add `SHA256SUMS.sig` to the draft and publish it.
 
-6. **Check it** the way anyone will ([Checking a release](#checking-a-release)), from the
+6. Check it the way anyone will ([Checking a release](#checking-a-release)), from the
    published release.
 
 ## Checking a release
@@ -126,7 +126,7 @@ the update with your release key. If the chain doesn't check, nothing is sent.
 The pages label each firmware **project release v0.0.2**, **your build v0.0.2** (a release
 you signed yourself) or **your build** (no release behind it).
 
-- **The controller.** Its image is `ghcr.io/skitzo2000/espdns-controller:<version>`, and
+- The controller's image is `ghcr.io/skitzo2000/espdns-controller:<version>`, and
   `espdns-<version>-controller-image.txt` names it by digest. In `controller/`, put it in
   `.env` as `ESPDNS_IMAGE=<that line>` and start it without building, as
   [Docker Compose](developer.md#docker-compose) does:
@@ -139,11 +139,14 @@ you signed yourself) or **your build** (no release behind it).
   Or build it from the source at the tag: `docker compose up -d --build` with no
   `ESPDNS_IMAGE`.
 
-- **The chip images,** for Install over USB and firmware updates: **Get firmware**, in
+- The chip images for Install over USB and firmware updates come from **Get firmware**, in
   Install over USB (for a board whose chip image isn't there yet) or in the account panel
-  (Firmware). It downloads the newest published release's chip images, `SHA256SUMS` and
-  `SHA256SUMS.sig` from GitHub, checks the signature before downloading anything else,
-  checks each file, and imports them. The same from `controller/`, for one version:
+  (Firmware). It downloads the newest published release's `SHA256SUMS` and
+  `SHA256SUMS.sig` from GitHub, checks the signature before downloading anything else, then
+  downloads only the chip images needed, checks each, and imports them. In Install over USB
+  it needs that board's chip image; in the account panel, what your nodes need. Other
+  imported chip images stay as they are. To do the same from `controller/` for one version
+  (`-image esp32s3-eth` names a chip image):
 
   ```sh
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version v0.0.2
@@ -161,20 +164,20 @@ you signed yourself) or **your build** (no release behind it).
 
   Both take the fleet lock, so they're refused while a rollout or job runs.
 
-- **A new node:** Install over USB, from the imported chip image. It writes the board's
-  definition, the node's address and your two public keys
-  ([Getting started](getting-started.md#run-the-setup)).
+- A new node is set up with Install over USB, from the imported chip image. It writes the
+  board's definition, the node's address and your two public keys ([Getting
+  started](getting-started.md#run-the-setup)).
 
 ### Your own builds
 
-- **A release of your own:** chip images built from the source, packaged with `release
-  build`, `SHA256SUMS` signed with **your** release key (`release sign -pub` your
-  `release.pub`, the key from the controller's data directory on standard input), then
+- For a release of your own, build the chip images from the source, package them with
+  `release build`, sign `SHA256SUMS` with your own release key (`release sign -pub` your
+  `release.pub`, the key from the controller's data directory on standard input), then run
   `release import` with no `-pub`. It's labelled "your build v0.0.2" and checked before
   every update like a project release. The commands are in
   [Build your own firmware](developer.md#build-your-own-firmware); the build itself is
   [Building a release by hand](#building-a-release-by-hand).
-- **Builds with no release behind them** (in `firmware/builds/<board>/` in the data
+- Builds with no release behind them (in `firmware/builds/<board>/` in the data
   directory, or chip images you copied in yourself) have nothing to check, so they're sent
   as they are (labelled "your build"). They still pass every update's keys checks:
   - the image must read the keys partition (its `espdns:keys=partition-v1` marker; a build
@@ -185,10 +188,10 @@ you signed yourself) or **your build** (no release behind it).
 
 ## Building a release by hand
 
-The workflow's steps as docker commands, for testing a change to them or releasing without
-CI. Build in a clean worktree of the tag (or your committed branch), never in the checkout
-holding your keys, data directory or site files: the firmware container mounts the whole
-checkout, with network.
+These are the workflow's steps as docker commands, for testing a change to them or releasing
+without CI. Build in a clean worktree of the tag (or your committed branch), never in the
+checkout holding your keys, data directory or site files: the firmware container mounts the
+whole checkout, with network.
 
 ```sh
 git worktree add ../espdns-release v0.0.2

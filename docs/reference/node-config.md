@@ -12,10 +12,10 @@ Back to the [reference index](README.md).
 
 A node takes each setting from the first layer that has it:
 
-1. **The node config** (this page).
-2. **The board definition**, written to the node when it was flashed: its address, its Wi-Fi
+1. The node config (this page).
+2. The board definition, written to the node when it was flashed: its address, its Wi-Fi
    transmit power cap, its CPU clock scaling, and its memory sizes.
-3. **The firmware default.**
+3. The firmware default.
 
 A key you leave out keeps the layer below. A list you give replaces the lower list whole:
 `"forward_zones": []` means no forward zones at all.
@@ -23,7 +23,7 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
 ## Rules for the whole file
 
 - Every key is optional. `{}` is a valid config.
-- Unknown keys are refused, so a typo is an error, not a setting that silently does nothing.
+- Unknown keys are refused, so a typo shows up as an error.
 - The file holds one JSON object and nothing after it.
 - The node receives it as compact JSON, at most 16,192 bytes. A node whose flash has no
   config partition yet keeps configs in NVS, which holds at most 4,000 bytes.
@@ -50,8 +50,8 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
 
 ## Keys
 
-"Applies" says when a change takes effect on a running node: **live** (at once) or at the
-next **reboot**. A node with a change waiting for a reboot reports it in `/status`
+"Applies" says when a change takes effect on a running node: live (at once) or at the
+next reboot. A node with a change waiting for a reboot reports it in `/status`
 `reboot.reasons` (see [node-endpoints.md](node-endpoints.md#status)), and the controller
 reboots nodes one at a time.
 

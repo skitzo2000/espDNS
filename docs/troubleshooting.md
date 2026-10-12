@@ -6,10 +6,10 @@ from your clone's `controller/` directory ([Operations](operations.md#before-you
 
 ## First look
 
-**The web page.** Open `http://127.0.0.1:8480`. **Nodes** shows each node's state, LED
+In the web page at `http://127.0.0.1:8480`, **Nodes** shows each node's state, LED
 pattern and reasons; click a node for the details and its raw `/status`.
 
-**The command line.** Every node in `settings.json`:
+On the command line, every node in `settings.json`:
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller status -all -mdns 0 -data /data
@@ -28,13 +28,13 @@ one is waiting. To find nodes, adopted or not:
 docker compose run --rm --entrypoint /espdns espdns-controller discover -data /data
 ```
 
-**The controller's log:**
+The controller's log:
 
 ```sh
 docker compose logs -f
 ```
 
-**The action log**, `log/actions.jsonl` in the data directory, has a `start` and an `end`
+The action log, `log/actions.jsonl` in the data directory, has a `start` and an `end`
 line per change. A `start` with no `end` is a change that died part way.
 
 ## Health states
@@ -57,8 +57,8 @@ a reason.
 
 ## Health reasons
 
-A node lists every reason that holds. Most make it `degraded`, two make it `fault`, some
-are just for your information.
+A node lists every reason that holds. Most make it `degraded` and two make it `fault`;
+the rest are just for your information.
 
 ### Fault reasons
 
@@ -175,7 +175,7 @@ Fix: see ["this node has no keys"](#this-node-has-no-keys).
 
 ### For your information
 
-Not degraded.
+These don't make a node degraded.
 
 **`config on trial`.** A config with a new address or Wi-Fi network. It reverts unless a
 DNS query reaches it within 90 seconds; the rollout or adoption that sent it confirms it.
@@ -221,17 +221,17 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 
 ### A node is not answering
 
-1. **Look at its LED.** Solid red, slow red or fast blue means no DNS: see
+1. Look at its LED. Solid red, slow red or fast blue means no DNS: see
    [LED patterns](#led-patterns).
-2. **Read it:** `status -host <address>` ([First look](#first-look)). If that can't reach
-   it at all, check the power, the cable, and that the controller's host can reach the
-   node's network. The controller uses host networking, so it reaches what the host
+2. Read its status with `status -host <address>` ([First look](#first-look)). If that
+   can't reach it at all, check the power, the cable, and that the controller's host can
+   reach the node's network. The controller uses host networking, so it reaches what the host
    reaches.
-3. **Answers `/status` but not DNS?** Look up its state and reasons in
+3. Answers `/status` but not DNS? Look up its state and reasons in
    [Health reasons](#health-reasons).
 4. A silent node shows its last status as stale, with when it was last seen, and offline
    after 30 seconds.
-5. **Found over mDNS but not on the Nodes page?** It isn't in `settings.json`. Add it
+5. Found over mDNS but not on the Nodes page? It isn't in `settings.json`. Add it
    (adopt it first if it's new).
 
 ### The controller does not start
@@ -265,19 +265,19 @@ already done are skipped).
 
 + Add node and `espdns adopt` say why. The common reasons:
 
-- **The address is in use** (by a node, a web server, a DNS server, or any host that
+- The address is in use (by a node, a web server, a DNS server, or any host that
   refuses connections or answers ARP). Choose a free address.
-- **The address is a node's or DNS peer's in `settings.json`.** Choose another.
-- **DHCP on a network with no DHCP server.** The network is in `settings.json`'s
+- The address is a node's or DNS peer's in `settings.json`. Choose another.
+- DHCP on a network with no DHCP server: the network is in `settings.json`'s
   `"no_dhcp"`. Give the node a static address.
-- **A config on DHCP without a reservation.** Reserve the node's address for its MAC in
+- A config on DHCP without a reservation. Reserve the node's address for its MAC in
   your DHCP server, then adopt with the reservation ticked (`-reserved` on the CLI).
-- **The dry run is too old, or something changed.** Adoption needs a passing dry run of the
+- The dry run is too old, or something changed. Adoption needs a passing dry run of the
   same request within 15 minutes. Run it again.
-- **The config fails its checks** for this node (say, its memory plan doesn't fit the
+- The config fails its checks for this node (say, its memory plan doesn't fit the
   board). Fix it on **Configs**.
-- **Its firmware takes no node configs.** Update its firmware first.
-- **The node was adopted before** (it took a config, or one was pushed to its ID): the web
+- Its firmware takes no node configs. Update its firmware first.
+- The node was adopted before (it took a config, or one was pushed to its ID): the web
   page won't adopt it. If you know which node it is (say, it was wiped), use the CLI, dry
   run first:
 
@@ -289,12 +289,12 @@ already done are skipped).
 
   Then run it again without `-dry-run`, with `-add-to-settings`. `node3.json` is a file in
   the data directory's `configs/`.
-- **Another node has the same ID,** or **another node is pinned to that address**: see
+- Another node has the same ID, or another node is pinned to that address: see
   [Pinned to another node](#pinned-to-another-node).
 
 ### "Your zone primary must allow zone transfers from ..."
 
-Not an error: the node is adopted, but its address is outside the networks you said your
+The adoption worked, but the node's address is outside the networks you said your
 primary allows transfers from (**Zones**, **Zone primary**), so it can't copy secondary
 zones yet.
 Fix: allow transfers from that network on the primary, then add it under **Networks it
@@ -316,13 +316,13 @@ A push was refused with `this node has no keys: install it with the controller's
 over USB (or write keys over USB)`. The node is in setup mode (health reason `no keys`).
 `status -host <node>` shows why on its `keys_source` and `keys_error`:
 
-- **`none`**: the keys partition holds no keys record, and the firmware has none built in
+- `none`: the keys partition holds no keys record, and the firmware has none built in
   (a key-neutral image on a node that never had keys written).
-- **`corrupt`**: the keys partition holds a damaged keys record. It's never written over
+- `corrupt`: the keys partition holds a damaged keys record. It's never written over
   from the network, whatever the firmware.
 
-Nothing over the network gives a node keys, on purpose: otherwise anyone could give it
-theirs. (A push alone never leaves a node here: firmware that comes up keyless after an
+Nothing over the network gives a node keys. That's on purpose: otherwise anyone could give
+it theirs. (A push alone never leaves a node here: firmware that comes up keyless after an
 update rolls back by itself.)
 
 Fix: connect it over USB and reinstall it from Install over USB, or use **Write keys only
@@ -336,15 +336,15 @@ A node takes only a sequence number (*seq*) above the last it applied for that k
 release. The controller uses the current time in milliseconds, or one above the last seq it
 signed for that node if higher. So the node has a higher seq than the controller expects:
 
-- **Another controller, with its own data directory, signed for this node.** Run one
+- Another controller, with its own data directory, signed for this node. Run one
   controller per fleet.
-- **The controller's clock is behind.** The node took a seq from a time the controller
+- The controller's clock is behind. The node took a seq from a time the controller
   hasn't reached yet. Set the host's clock right (use NTP).
 
 Compare the `seq:` line of `status -host <node>` (milliseconds since 1970) with the current
 time.
 
-**`seq too far ahead of this node's clock`**: the controller's clock is over 24 hours ahead
+`seq too far ahead of this node's clock` means the controller's clock is over 24 hours ahead
 of the node's. The controller also won't sign when its last recorded seq is over 24 hours
 past its own clock. Either way, set the host's clock right.
 
@@ -356,7 +356,7 @@ A node marked stale on the Nodes page is unrelated: see
 The controller signs releases only for the node ID pinned to an address
 ([Pinned nodes](operations.md#pinned-nodes)). These refusals come from that rule:
 
-- **`<address> answers as node "<id>", but node <other id> is pinned there: not signed`.**
+- `<address> answers as node "<id>", but node <other id> is pinned there: not signed`.
   Something else answers there. Compare `discover`'s `NODE` column with `pin -data /data`
   (the pins).
   - Replaced the node's board? Pin the new board to the address. It must answer there:
@@ -368,10 +368,10 @@ The controller signs releases only for the node ID pinned to an address
 
   - Not your node? Don't pin it. Take the device off that address.
 
-- **`<address> is not pinned to a node`.** Nothing is pinned there. Adopt the node or, for
+- `<address> is not pinned to a node`. Nothing is pinned there. Adopt the node or, for
   a node already in service, pin it by hand as above.
 
-- **`node <id> is pinned to <address>: releases for it are signed there alone`.** That node
+- `node <id> is pinned to <address>: releases for it are signed there alone`. That node
   now answers somewhere else. If you moved it on purpose, pin it at its new address. The
   pin moves, and its seqs move with it.
 

@@ -16,16 +16,16 @@ Back to the [reference index](README.md).
 
 Rules for every request:
 
-- **Host check.** The `Host` header must name the node: its IPv4 address, its mDNS name
+- The `Host` header must name the node: its IPv4 address, its mDNS name
   (`<hostname>.local`), or the `name` from its node config, with or without a port. Anything
   else, an IPv6 literal, or no `Host` gets `421 Misdirected Request`, which stops DNS
   rebinding from a web page.
-- **No body on a GET.** A GET with a body gets `400`.
-- **Deadlines.** Each request has one deadline for its headers and reply; a slow client is
+- A GET with a body gets `400`.
+- Each request has one deadline for its headers and reply; a slow client is
   cut off.
-- **Private addresses.** `/querylog`, `/ota` and `/release` answer `403` unless the client's
+- `/querylog`, `/ota` and `/release` answer `403` unless the client's
   address is in a private IPv4 range (RFC 1918) or the shared address space (RFC 6598).
-- **Signed releases.** `/ota` and `/release` take only releases signed with a key the node
+- `/ota` and `/release` take only releases signed with a key the node
   trusts, bound to the node's ID. Send them with the controller or the [espdns CLI](cli.md),
   never by hand. How they're signed and checked:
   [Architecture](../architecture.md#signed-releases-and-pins). A node with no keys (setup
@@ -42,9 +42,9 @@ Rules for every request:
 | 4 | blocklist | `/release` | release key | this node, or any node |
 | 5 | overrides | `/release` | release key | this node, or any node |
 | 6 | control | `/release` | release key | this node, or any node |
-| 7 | keys | `/release` | **recovery key only** | this node only |
+| 7 | keys | `/release` | recovery key only | this node only |
 
-A **KEYS release** (kind 7) rewrites the keys the node trusts ([Security, Key
+A KEYS release (kind 7) rewrites the keys the node trusts ([Security, Key
 rotation](../security.md#key-rotation)).
 
 - Refused `403`: one signed with the release key, addressed to any node, or with a seq not
@@ -81,7 +81,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller querylog -host 19
 
 ## /health
 
-Small and cheap, for load balancers and monitoring. It holds no names.
+A small, cheap check for load balancers and monitoring. It holds no names.
 
 Status code: `200` while the node answers DNS (state `healthy`, `degraded` or `updating`),
 `503` otherwise. `Cache-Control: no-store`.

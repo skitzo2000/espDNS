@@ -10,8 +10,8 @@
 // both are set up (the first run's Make your keys) nothing is prepared. Write keys only (POST
 // /api/build/keys) writes the keys partition alone with the vendored esptool-js, not ESP Web
 // Tools, for a node in setup mode, and keeps the rest. A board whose chip image isn't in the
-// controller yet offers Get firmware (firmware.js: the project's release, fetched, checked
-// and imported); each board says which firmware it gets ("project release v0.0.3", "your
+// controller yet offers Get firmware (firmware.js: that chip image from the project's
+// release, fetched, checked and imported); each board says which firmware it gets ("project release v0.0.3", "your
 // build"). The page that opens it needs
 // websec.USBCSP: the flasher's "no port picked" dialog has two style attributes, and its
 // Wi-Fi form three it sets first, allowed by hash there only.
@@ -194,13 +194,13 @@ function keysWriteError(e, step) {
   const m = String((e && e.message) || e);
   if (e && e.name === "NotFoundError") return "No port was chosen: nothing was written.";
   if (e && (e.name === "InvalidStateError" || e.name === "NetworkError") || /open/i.test(m) && /port/i.test(m)) {
-    return "The board's port is busy: close any other tab or program using it (a serial monitor, another install), then try again.";
+    return "The board's port is busy: close the other tab or program using it (a serial monitor, another install) and try again.";
   }
   if (e && e.name === "SecurityError") return "The browser didn't allow the serial port: open this page on the controller's machine (localhost) in Chrome or Edge.";
   switch (step) {
-    case "connect": return `Couldn't talk to the board's bootloader (${m}). Unplug it, hold its BOOT button while you plug it in again, and try again.`;
-    case "write": return `Writing the keys failed (${m}). Nothing else was touched: try again; the board keeps what it had until a write completes.`;
-    case "verify": return `The keys read back from the board aren't the ones written (${m}). Try again.`;
+    case "connect": return `Couldn't reach the board's bootloader (${m}). Unplug it, hold BOOT while you plug it back in, and try again.`;
+    case "write": return `Writing the keys failed (${m}). Nothing else was touched; try again.`;
+    case "verify": return `The keys read back don't match what was written (${m}). Try again.`;
     case "reset": return `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`;
   }
   return m;
@@ -244,14 +244,14 @@ function keysOnly(o, keysReady) {
         reportProgress: (_, written, total) => { bar.value = total ? Math.round(written / total * 100) : 100; },
       });
       step = "verify";
-      say("Checking what was written…");
+      say("Reading it back…");
       const back = await loader.readFlash(KEYS_OFFSET, KEYS_SIZE);
       if (back.length < KEYS_SIZE || keys.some((x, i) => back[i] !== x)) throw new Error("they differ");
       step = "reset";
       say("Restarting the board…");
       await loader.after("hard_reset");
       bar.value = 100;
-      say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}) and restarts with its firmware and settings as they were. It shows on Nodes again in a moment.`, "small ok");
+      say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}). Its firmware and settings are as they were; it shows on Nodes again in a moment.`, "small ok");
     } catch (e) {
       say(keysWriteError(e, step), "small bad");
     } finally {
@@ -263,8 +263,8 @@ function keysOnly(o, keysReady) {
     h("summary", { class: "small" }, "Write keys only (keeps settings)"),
     h("div", { class: "stack" },
       h("p", { class: "small" }, o.keys
-        ? "This board has no keys, so it takes nothing over the network. Write your keys to it: only its keys partition is written; its firmware and settings stay."
-        : "For a board that runs espDNS but has no keys (it says so under + Add node): writes your keys and nothing else. Nothing is erased."),
+        ? "This board has no keys, so it takes nothing over the network. This writes your keys and nothing else; its firmware and settings stay."
+        : "For a board that runs espDNS but has no keys (+ Add node says so): writes your keys and nothing else."),
       h("div", { class: "row" }, go), bar, status));
 }
 
@@ -274,10 +274,10 @@ export async function openUSB(o = {}) {
   p.aside.classList.add("usb");
   const supported = "serial" in navigator;
   p.body.append(h("p", { class: "small" }, o.keys
-    ? "Plug the board into this computer by USB. Writing the keys keeps everything else on it; installing espDNS afresh (below) erases it."
+    ? "Plug the board into this computer by USB. Writing the keys keeps everything else; a fresh install (below) erases the board."
     : o.update
-      ? "Plug the board into this computer by USB. Installing writes espDNS afresh: what the board holds is erased, then it starts with the address below."
-      : "Plug the board into this computer by USB. Installing erases the board, then it starts espDNS with the address below and shows up under + Add node."),
+      ? "Plug the board into this computer by USB. Installing erases the board, then it starts espDNS with the address below."
+      : "Plug the board into this computer by USB. Installing erases the board, then it starts espDNS with the address below and shows under + Add node."),
   ...(supported ? [] : [h("p", { class: "hint bad", id: "usb-unsupported" }, "This browser can't reach USB devices: use Chrome or Edge on this computer.")]));
   const loading = h("p", { class: "hint" }, "Reading the boards…");
   p.body.append(loading);
@@ -302,20 +302,52 @@ export async function openUSB(o = {}) {
   // halves, in its keys partition): none, and nothing is prepared.
   const keysReady = !!key.present && !!obj(key.recovery).present;
   if (!keysReady) {
-    p.body.append(h("p", { class: "hint bad", id: "usb-nokeys" }, "Set up your keys first: a board is installed with them, and without them it takes nothing over the network. ",
+    p.body.append(h("p", { class: "hint bad", id: "usb-nokeys" }, "Set up your keys first: the board is installed with them. ",
       h("a", { href: "setup.html#next" }, "Make your keys")));
   }
   const writeKeys = keysOnly(o, keysReady);
   if (o.keys) p.body.append(writeKeys);
 
   // The board: a list to pick from, the board's facts, or the custom form.
+  // The library is long, so a search box filters it as you type (maker, model, catalog
+  // name, chip image, w5500, poe…), and the list is grouped by maker (the title's first
+  // word), your own boards first, each group in title order. Each option says what the
+  // board has: flash, PSRAM, wired or Wi-Fi, and its tier unless tested.
+  const q = h("input", { class: "t", id: "usb-q", type: "search", placeholder: "Search: maker, model, chip, w5500, poe", "aria-label": "Search boards", autocomplete: "off", spellcheck: "false" });
   const pick = h("select", { class: "t", id: "usb-board" });
+  const titleOf = e => str(e.board.title) || e.board.name;
+  const makerOf = e => e.source === "custom" ? "Your boards" : titleOf(e).split(/\s+/)[0];
+  const netWord = b => { const n = obj(b.ethernet); return !n.kind || n.kind === "none" ? "Wi-Fi" : n.optional ? "Wi-Fi or wired" : "wired"; };
+  const option = (e, chosen) => {
+    const b = e.board, mem = [b.flash_mb && `${b.flash_mb} MB flash`, b.psram_mb && `${b.psram_mb} MB PSRAM`].filter(Boolean).join(", ");
+    return h("option", { value: b.name, selected: chosen === b.name },
+      `${titleOf(e)}${e.source === "custom" ? " (yours)" : ""}${mem ? ` · ${mem}` : ""} · ${netWord(b)}${b.tier && b.tier !== "tested" ? ` · ${b.tier}` : ""}`);
+  };
+  const haystack = e => {
+    const b = e.board, n = obj(b.ethernet);
+    return `${titleOf(e)} ${b.name} ${makerOf(e)} ${str(b.image)} ${str(n.kind)} ${str(n.phy)} ${netWord(b)} ${e.source === "custom" ? "yours mine" : ""}`.toLowerCase();
+  };
   const fill = chosen => {
-    pick.replaceChildren(h("option", { value: "" }, "Choose…"),
-      ...entries.map(e => h("option", { value: e.board.name, selected: chosen === e.board.name },
-        `${str(e.board.title) || e.board.name}${e.source === "custom" ? " (yours)" : ""}${e.board.tier && e.board.tier !== "tested" ? ` · ${e.board.tier}` : ""}`)),
+    const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const groups = new Map();
+    let matched = 0;
+    for (const e of entries) {
+      // What matches every word typed; the board chosen stays, so the list keeps its value.
+      const hay = haystack(e);
+      const hit = words.every(w => hay.includes(w));
+      if (hit) matched++;
+      if (!hit && e.board.name !== chosen) continue;
+      const m = makerOf(e);
+      if (!groups.has(m)) groups.set(m, []);
+      groups.get(m).push(e);
+    }
+    const makers = [...groups.keys()].sort((a, b) => a === "Your boards" ? -1 : b === "Your boards" ? 1 : a.localeCompare(b));
+    pick.replaceChildren(h("option", { value: "" }, words.length && !matched ? "No board matches" : "Choose…"),
+      ...makers.map(m => h("optgroup", { label: m },
+        ...groups.get(m).sort((a, b) => titleOf(a).localeCompare(titleOf(b))).map(e => option(e, chosen)))),
       h("option", { value: "+", selected: chosen === "+" }, "Describe your own board…"));
   };
+  q.addEventListener("input", () => fill(pick.value));
   const facts = h("div", { class: "stack", id: "usb-facts" });
 
   // The node's address, which goes into its board partition (it never asks DHCP on its own).
@@ -324,12 +356,12 @@ export async function openUSB(o = {}) {
   const txIn = h("input", { class: "t", id: "usb-tx", type: "number", min: 2, max: 20, placeholder: "board default" });
   const network = () => {
     const a = addrIn.value.trim();
-    if (!a) throw new Error("Give the node an address: it never asks DHCP for one on its own.");
+    if (!a) throw new Error("Give the node an address, like 192.0.2.52/24.");
     return a === "dhcp" ? { address: a } : { address: a, gateway: gwIn.value.trim() };
   };
   const addrBox = h("div", { class: "stack" },
     h("div", { class: "grid2" },
-      h("label", { class: "f" }, h("span", {}, "Its address, with its network size"), addrIn, h("span", { class: "hint" }, "Like 192.0.2.52/24; dhcp only where a DHCP server answers.")),
+      h("label", { class: "f" }, h("span", {}, "Address"), addrIn, h("span", { class: "hint" }, "With its prefix length, like 192.0.2.52/24; dhcp only where a DHCP server answers.")),
       h("label", { class: "f" }, h("span", {}, "Gateway"), gwIn)),
     h("label", { class: "f", id: "usb-tx-f" }, h("span", {}, "Wi-Fi transmit cap, dBm (optional)"), txIn));
 
@@ -352,16 +384,17 @@ export async function openUSB(o = {}) {
     ];
     facts.replaceChildren(
       h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
-      b.image && !e.image_ready ? h("div", { class: "stack", id: "usb-noimage" },
-        h("p", { class: "hint bad" }, `Chip image ${str(b.image)} isn't in the controller yet: get the project's release here, or import a build of your own (espdns release import).`),
-        firmwareBox({ id: "usb-fw", done: async () => {
+      // (replaceChildren would write a null as the text "null": the box or nothing.)
+      ...(b.image && !e.image_ready ? [h("div", { class: "stack", id: "usb-noimage" },
+        h("p", { class: "hint bad" }, `Chip image ${str(b.image)} isn't in the controller yet.`),
+        firmwareBox({ id: "usb-fw", images: [str(b.image)], done: async () => {
           await readLabels();
           entries = arr(await read("api/boards"));
           fill(b.name);
           choose(b.name);
-        } })) : null,
+        } }))] : []),
       h("div", { class: "row" }, h("button", { class: "btn small link", type: "button", id: "usb-copy",
-        onclick: () => showForm(copyOf(b)) }, "Change it: describe a board from this one")));
+        onclick: () => showForm(copyOf(b)) }, "Describe a board from this one")));
     problems(probs, e.errors, e.warnings);
     txIn.placeholder = b.wifi && b.wifi.tx_power_dbm ? `${b.wifi.tx_power_dbm} (board default)` : "20 (chip default)";
     prep.disabled = !keysReady || arr(e.errors).length > 0 || !e.image_ready;
@@ -398,7 +431,7 @@ export async function openUSB(o = {}) {
     };
     form.addEventListener("input", check);
     form.addEventListener("change", check);
-    facts.replaceChildren(h("p", { class: "hint" }, "Any ESP32, S3, C3, C6 or P4 board, from its pinout. Save it to find it in the list next time."), form);
+    facts.replaceChildren(h("p", { class: "hint" }, "Any ESP32, S3, C3, C6 or P4 board, from its pinout. Save it and it's in the list next time."), form);
     addrBox.querySelector("#usb-tx-f").hidden = true; // the form has its own
     save.hidden = false;
     prep.disabled = !keysReady;
@@ -461,9 +494,9 @@ export async function openUSB(o = {}) {
       out.replaceChildren(h("p", { class: "small" }, `Ready: ${str(obj(build.board).title) || str(obj(build.board).name)}, ${str(c.image)} ${str(c.version)}, with your keys (release `,
         h("span", { class: "mono" }, str(k.release)), ", recovery ", h("span", { class: "mono" }, str(k.recovery)), ")."), btn,
         ...(onWiFi(obj(build.board)) ? [h("p", { class: "hint", id: "usb-wifi" },
-          "After it installs, it asks for your Wi-Fi network and password, which go straight to the board over USB, not through the controller.")] : []),
+          "After it installs, it asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.")] : []),
         h("p", { class: "hint mono" }, `built ${str(c.built)} · ${str(c.elf_sha256).slice(0, 12)} · image ${str(build.id)}`),
-        h("p", { class: "hint" }, o.update ? "Once it restarts, it shows on Nodes again, ready to add." : "Once it restarts, it shows under + Add node, found on your network."));
+        h("p", { class: "hint" }, o.update ? "Once it restarts, it shows on Nodes again, ready to add." : "Once it restarts, it shows under + Add node."));
     } catch (e) {
       out.replaceChildren(h("p", { class: "hint bad" }, e.message));
     }
@@ -471,6 +504,7 @@ export async function openUSB(o = {}) {
   });
 
   p.body.append(
+    h("label", { class: "f" }, h("span", {}, "Find the board"), q),
     h("label", { class: "f" }, h("span", {}, "The board"), pick), facts, probs,
     h("h3", { class: "small" }, "For this node"), addrBox,
     h("div", { class: "row" }, prep, save), out);

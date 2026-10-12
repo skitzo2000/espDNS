@@ -64,7 +64,9 @@ func keysTable(what string) []byte {
 func chipImages(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for img, chip := range map[string]string{"esp32p4-rev1": "esp32p4", "esp32s3-eth": "esp32s3", "esp32s3-octal": "esp32s3"} {
+	// Every chip image a catalog board runs (release build refuses a catalog board whose image is missing).
+	for img, chip := range map[string]string{"esp32p4-rev1": "esp32p4", "esp32s3-eth": "esp32s3", "esp32s3-octal": "esp32s3",
+		"esp32s3-quad": "esp32s3", "esp32": "esp32"} {
 		d := filepath.Join(dir, img)
 		os.MkdirAll(d, 0o755)
 		boot := make([]byte, 32)
@@ -122,13 +124,13 @@ func TestReleaseCommands(t *testing.T) {
 		}
 	}
 	got, err = runRelease(t, "", "verify", "-dir", out, "-pub", pub)
-	if err != nil || !strings.Contains(got, "espdns-0.0.4-image-esp32s3-eth.tar.gz: OK") || !strings.Contains(got, "3 files as signed") ||
+	if err != nil || !strings.Contains(got, "espdns-0.0.4-image-esp32s3-eth.tar.gz: OK") || !strings.Contains(got, "5 files as signed") ||
 		strings.Contains(got, "factory") {
 		t.Fatalf("verify: %v\n%s", err, got)
 	}
 	data := t.TempDir()
 	got, err = runRelease(t, "", "import", "-dir", out, "-pub", pub, "-data", data)
-	if err != nil || !strings.Contains(got, "esp32p4-rev1, esp32s3-eth, esp32s3-octal") {
+	if err != nil || !strings.Contains(got, "esp32, esp32p4-rev1, esp32s3-eth, esp32s3-octal, esp32s3-quad") {
 		t.Fatalf("import: %v %s", err, got)
 	}
 	if _, err := os.Stat(filepath.Join(data, "firmware", "images", "esp32s3-octal", "image.json")); err != nil {

@@ -4,7 +4,7 @@ The controller serves its dashboard and a JSON API on `http://127.0.0.1:8480` (s
 `ESPDNS_LISTEN`, loopback only). The dashboard uses this API, and so can you, from the same
 machine.
 
-These are every route in 0.0.x (alpha). The API may change in any 0.0.x release; there is no
+Every route in 0.0.x (alpha) is here. The API may change in any 0.0.x release; there is no
 versioned path.
 
 Back to the [reference index](README.md).
@@ -25,9 +25,9 @@ Back to the [reference index](README.md).
 A session has two halves. Send both on every request under `/api/`, and on every non-GET,
 non-HEAD request:
 
-1. **A cookie** named `espdns_session_<port>` (for example `espdns_session_8480`). It is
+1. A cookie named `espdns_session_<port>` (for example `espdns_session_8480`). It is
    `HttpOnly` and `SameSite=Strict`. `POST /api/login` sets it.
-2. **A header** `X-Session-Token: <token>`, with the `token` from the login reply.
+2. A header `X-Session-Token: <token>`, with the `token` from the login reply.
 
 To log in:
 
@@ -53,10 +53,10 @@ to be counted as the same client.
 
 | Level | Meaning |
 |-------|---------|
-| **public** | No session needed. |
-| **open** | A GET that anyone on this machine may call while no password is set. Once a password is set, it needs a session. |
-| **login** | Always needs a session. While no password is set, it answers `403` ("read-only"). |
-| **login + password** | Needs a session and a fresh password grant (see below). |
+| public | No session needed. |
+| open | A GET that anyone on this machine may call while no password is set. Once a password is set, it needs a session. |
+| login | Always needs a session. While no password is set, it answers `403` ("read-only"). |
+| login + password | Needs a session and a fresh password grant (see below). |
 
 Any request other than GET or HEAD needs a session; while no password is set it gets `403`
 ("read-only"). Set the first password with
@@ -140,8 +140,8 @@ covers one request. Without one, the request gets `403` with `{"reauth": true}`.
 
 | Method | Path | Level | Body | Reply |
 |--------|------|-------|------|-------|
-| GET | `/api/setup` | open | — | What is set up: the password, `settings.json`, the keys (`release_key`, `recovery_key`, `keys_saved`), the zone primary (`primary`: its address), the nodes. `first_run` while there is neither a password nor `settings.json`. The first run's steps (`password`, `keys`, `primary`, `first_node`, `second_node`, `router`, `blocking`), and `done` once every one is; `blocklists`, the lists defined. `keys` is done with both keys there and `keys` marked. |
-| POST | `/api/setup/step` | login | `{"step"}`: `keys`, `primary`, `router` or `blocking` | Marks a first-run step done that the controller can't see done (recovery.pem saved offline: only once both keys are there; the router told) or that was skipped (the zone primary, blocking). Kept in `setup.json` in the data directory. `400` with `field` for another step. The setup again. |
+| GET | `/api/setup` | open | — | What is set up: the password, `settings.json`, the keys (`release_key`, `recovery_key`, `keys_saved`), the zone primary (`primary`: its address), the nodes, and `zones`, the zones of your own as the Zones page counts them (hosted zone files and hosted zones waiting as pending changes, and the secondary and forward zones the node configs hold as the pending changes make them; the firmware's default zones, in no config, don't count). `first_run` while there is neither a password nor `settings.json`. The first run's steps (`password`, `keys`, `first_node`, `second_node`, `zones`, `router`, `blocking`), and `done` once every one is; `blocklists`, the lists defined. `keys` is done with both keys there and `keys` marked; `zones` with a zone of your own or `zones` marked. |
+| POST | `/api/setup/step` | login | `{"step"}`: `keys`, `zones`, `router` or `blocking` | Marks a first-run step done that the controller can't see done (recovery.pem saved offline: only once both keys are there; the router told) or that was skipped (zones, blocking). Kept in `setup.json` in the data directory. `400` with `field` for another step (`primary`, a step in 0.0.2 and before, among them; an older `setup.json` with it marked is read fine and the mark ignored). The setup again. |
 | GET | `/api/settings` | open | — | `settings.json` as the form edits it (every field, empty ones too), its `version`, and `primary`: the zone primary's `address`, `allows` and `zones`, `set`, and `uncovered`, the nodes in `settings.json` whose address is in none of the networks it allows. |
 | POST | `/api/settings` | login | `{"settings": {...}, "version"}` | Replaces `settings.json` whole if it is still `version` (`""` while there is no file; `409` otherwise). Returns the form again. A refused field: `{"error", "field"}`. See [settings.md](settings.md#settingsjson). |
 
@@ -320,7 +320,7 @@ others.
 | `config-push` | `{"node", "config", "dry_run": true}`, then `{"node", "config", "after": "<dry run job ID>"}` | Sends one config file to one node in `settings.json`. The push must name a dry run of the same node and file that passed in the last 15 minutes, with the file unchanged. |
 | `rollout` | A [rollout request](#rollout-request) with `"dry_run": true`, then the same with `"after": "<dry run job ID>"` | The rolling push, one node at a time. The push must name a passing dry run of the same request with the same file contents, from the last 15 minutes. Each dry run serves one push. |
 | `apply` | `{"canary": "<node>", "soak_s": 60, "accept_change": ["<list>"]}`, all optional | Sends every pending change as one safe rolling change (below). |
-| `fetch-release` | `{"version": "v0.0.2"}`, optional (default: the newest published) | Get firmware: downloads a published release's chip images, `SHA256SUMS` and its signature from `settings.json`'s `release_url` (else the controller's `-release-url`, GitHub), checks them with the project's key (`/keys/project.pub`), and imports them, as `espdns release fetch`. Not queued without the project's key. Result: `{"version", "images", "label", "fingerprint", "from"}`. |
+| `fetch-release` | `{"version": "v0.0.2", "images": ["esp32s3-eth"]}`, both optional (`version` default: the newest published; `images` default: the chip images the nodes in `settings.json` need, from their boards; if one has no status yet, the chip images already imported too, which the job log says) | Get firmware: downloads a published release's `SHA256SUMS` and its signature from `settings.json`'s `release_url` (else the controller's `-release-url`, GitHub), checks the signature with the project's key (`/keys/project.pub`), then downloads only the chip images asked for, checks each, and imports them, as `espdns release fetch`. Other imported chip images stay as they are. A chip image the release doesn't have fails the job, naming the ones it has. Not queued without the project's key, with an `images` name that isn't a chip image's, or when nothing is needed ("Nothing to get yet…"). Install over USB sends the chosen board's image; the account menu sends none. Result: `{"version", "images", "label", "fingerprint", "from"}`. |
 | `key-rotate` | `{"id": "<rotation>", "nodes": ["<address>"]}` (`nodes` optional: only those this time) | Pushes a signed key rotation, as `espdns key rotate push`: one node at a time, its KEYS release, then its stored config, hosted zones, overrides and blocklist signed again with the new key, then its health; stops at the first failure (run it again to go on); swaps the controller's keys when every listed node has the new ones. Not queued unless every node still to take its release has it signed. Progress and result: the rotation. |
 | `refresh` | `{"lists": ["<name>"], "accept_change": false}` | Sends downloaded lists whose sources changed, as an apply of them alone ([below](#the-refresh)). The schedule starts it (by `""`, the controller); `accept_change` takes a size change over the limit once. |
 
@@ -391,11 +391,11 @@ Only a node that says it isn't adopted, under an ID no other known node has, can
 
 An `apply` job sends every pending change in five steps:
 
-1. **check**: the changes against the files and each other; every node in `settings.json` read.
-2. **write**: the files written (each replaced version kept in its history).
-3. **compile**: the blocklists the changes touch compiled again.
-4. **dry run**: every rollout checked against every node it goes to, before any node is touched.
-5. **push**: the rollouts one after another (configs, hosted zones, overrides, blocklists,
+1. check: the changes against the files and each other; every node in `settings.json` read.
+2. write: the files written (each replaced version kept in its history).
+3. compile: the blocklists the changes touch compiled again.
+4. dry run: every rollout checked against every node it goes to, before any node is touched.
+5. push: the rollouts one after another (configs, hosted zones, overrides, blocklists,
    firmware), each one node at a time, canary first.
 
 Params, all optional: `canary` (one of `settings.json`'s nodes; default its `canary`),
@@ -415,10 +415,10 @@ checks each list with a URL source, outside any job: a conditional GET (`If-None
 `If-Modified-Since`) of each URL source, the body otherwise only hashed and compared with the
 version the nodes run (kept in `blocking/refresh.json`).
 
-- **Unchanged**: marked checked; nothing in the action log.
-- **Changed**: starts a `refresh` job: the apply's **check**, **compile**, **dry run** and
-  **push** steps for that list alone, with no pending change and no file written.
-- **Size change over the limit**: the job ends `failed` (`refused by the size-change check:
+- Unchanged: marked checked; nothing in the action log.
+- Changed: starts a `refresh` job: the apply's check, compile, dry run and push
+  steps for that list alone, with no pending change and no file written.
+- Size change over the limit: the job ends `failed` (`refused by the size-change check:
   ...`), nothing pushed, and the schedule doesn't try that version again.
-- **A list a pending change edits** (its definition, or a file it reads) is left to that
+- A list a pending change edits (its definition, or a file it reads) is left to that
   change's apply.

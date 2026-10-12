@@ -1,0 +1,12 @@
+{
+  "name": "m5stack-atoms3r-poe",
+  "title": "M5Stack AtomS3R + Atomic PoE Base",
+  "image": "esp32s3-octal",
+  "flash_mb": 8,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [{ "host": 2, "sclk": 5, "mosi": 8, "miso": 7 }],
+  "ethernet": { "kind": "w5500", "optional": true, "spi_host": 2, "cs": 6, "mhz": 20 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-S3-PICO-1 N8R8, 8 MB flash, 8 MB octal PSRAM. W5500 on the Atomic PoE Base (A091), 802.3af PoE. Pins: M5Stack's Arduino tutorial for the Atomic PoE Base on the AtomS3R (SCK 5, MISO 7, MOSI 8, CS 6). INT and RST aren't wired on the base, so the W5500 is polled. The RGB LED sits behind an I2C driver, not a GPIO. Wi-Fi without the base. No SD slot: zones and blocking live in RAM only."
+}

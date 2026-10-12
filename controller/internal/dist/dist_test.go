@@ -89,7 +89,7 @@ func appImage(version, addr, text string) []byte {
 }
 
 // The catalog's chip images, and one more no board runs (it is released all the same)
-var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32c6"}
+var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad", "esp32", "esp32c6"}
 
 func catalogBoards(t *testing.T) []boards.Entry {
 	t.Helper()
@@ -188,7 +188,7 @@ func TestBuildRefused(t *testing.T) {
 	}{
 		{Options{Version: "0.0.5", Images: good, Catalog: catalog}, `is version "0.0.4", not 0.0.5`},
 		{Options{Version: "v0.0.4", Images: good, Catalog: catalog}, "not MAJOR.MINOR.PATCH"},
-		{Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", "esp32s3-octal"), Catalog: catalog}, "runs chip image esp32p4-rev1, which isn't in"},
+		{Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", "esp32s3-octal"), Catalog: catalog}, "which isn't in"},
 		{Options{Version: "0.0.4", Images: t.TempDir(), Catalog: catalog}, "no chip images"},
 		{Options{Version: "0.0.4", Images: good, Catalog: t.TempDir()}, "no boards"},
 		{Options{Version: "0.0.4", Images: good, Catalog: catalog, Out: full}, "isn't empty"},

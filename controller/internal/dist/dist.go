@@ -338,8 +338,8 @@ func Sign(dir string, k *ecdsa.PrivateKey) error {
 type Checked struct {
 	Files    []string
 	Unlisted []string
-	// Missing are the listed files not there that may be (Verify for an import of a fetched
-	// release's chip images: its other files); always none from Verify.
+	// Missing are the listed files not there that may be (verify for an import of the chip
+	// images a fetch asked for: the release's other files); always none from Verify.
 	Missing []string
 	sums    map[string]string // each listed file's SHA-256, as signed
 	// The SHA256SUMS and signature as read and checked, kept with an import (provenance)
@@ -352,11 +352,12 @@ var ErrSignature = errors.New(SigFile + " is not this key's signature over " + S
 // Verify checks a release in dir: SHA256SUMS.sig is pub's signature over SHA256SUMS (pub a
 // raw P-256 public key, 65 bytes, as keys/project.pub), then every file SHA256SUMS lists is
 // there with its SHA-256. Any of them missing or different is an error naming each.
-func Verify(dir string, pub []byte) (Checked, error) { return verify(dir, pub, false) }
+func Verify(dir string, pub []byte) (Checked, error) { return verify(dir, pub, nil) }
 
-// verify is Verify; chipsOnly lets the listed files but the chip images' tarballs be missing
-// (Checked.Missing): a release fetched for its chip images only (Fetch).
-func verify(dir string, pub []byte, chipsOnly bool) (Checked, error) {
+// verify is Verify; need, if not nil, names the listed files that must be there, and lets
+// the others be missing (Checked.Missing): a release fetched for some of its chip images
+// only (Fetch). Every listed file that is there is checked, needed or not.
+func verify(dir string, pub []byte, need map[string]bool) (Checked, error) {
 	var c Checked
 	if len(pub) != 65 || pub[0] != 4 {
 		return c, fmt.Errorf("the public key is %d bytes: not a raw P-256 key (65, as keys/project.pub)", len(pub))
@@ -387,9 +388,8 @@ func verify(dir string, pub []byte, chipsOnly bool) (Checked, error) {
 		listed[s.Name] = true
 		c.sums[s.Name] = s.SHA256
 		got, err := fileSum(filepath.Join(dir, s.Name))
-		_, _, chip := chipOf(s.Name)
 		switch {
-		case errors.Is(err, fs.ErrNotExist) && chipsOnly && !chip:
+		case errors.Is(err, fs.ErrNotExist) && need != nil && !need[s.Name]:
 			c.Missing = append(c.Missing, s.Name)
 		case errors.Is(err, fs.ErrNotExist):
 			bad = append(bad, s.Name+": missing")
@@ -531,6 +531,13 @@ func readMax(path string, max int64) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// imageName is a chip image's name, as a tarball's name carries it (chipOf).
+var imageName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// ImageName says whether s looks like a chip image's name (esp32s3-eth): what a fetch may
+// ask for.
+func ImageName(s string) bool { return imageName.MatchString(s) }
 
 // chipOf reads a chip image tarball's name: its version and image.
 func chipOf(name string) (v, img string, ok bool) {

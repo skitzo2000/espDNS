@@ -42,7 +42,7 @@ const offered = n => { const u = updateOf(n); return u && u.state === "available
 // one for a node not in settings.json.
 function actionWhy(n, identify) {
   if (!data.sess.logged_in) return data.sess.password_set ? "Log in to act on this node." : "No password is set: the controller is read-only.";
-  if (data.key && !data.key.present) return data.key.missing ? "No release key, so no actions: import or create one from the account menu." : `The release key can't be used: ${str(data.key.error)}`;
+  if (data.key && !data.key.present) return data.key.missing ? "No release key: import or create one from the account menu." : `The release key can't be used: ${str(data.key.error)}`;
   if (!n.online && n.out_of_service) return "It isn't answering: return it to service once it does, or remove it.";
   if (!n.online) return n.source === "settings" ? "It isn't answering: it can still be taken out of service, or removed." : "It isn't answering: no actions until it does.";
   if (!identify && n.source !== "settings") return "It isn't one of your nodes yet: add it from Nodes first.";
@@ -55,7 +55,7 @@ function actionWhy(n, identify) {
 function serviceWhy(n, back) {
   if (!data.sess.logged_in) return data.sess.password_set ? "Log in to act on this node." : "No password is set: the controller is read-only.";
   if (n.source !== "settings") return "It isn't one of your nodes yet: add it from Nodes first.";
-  if (back && data.key && !data.key.present) return data.key.missing ? "No release key, so no actions: import or create one from the account menu." : `The release key can't be used: ${str(data.key.error)}`;
+  if (back && data.key && !data.key.present) return data.key.missing ? "No release key: import or create one from the account menu." : `The release key can't be used: ${str(data.key.error)}`;
   return "";
 }
 
@@ -90,9 +90,9 @@ function openRestart(n) {
   const p = panel(`Restart ${name}?`);
   const say = h("p", {}, others.length
     ? `${name} stops answering for a few seconds while it restarts; ${andList(others.map(nameOf))} keep${others.length === 1 ? "s" : ""} answering meanwhile.`
-    : `No other node is answering: the controller restarts ${name} only while one of your other DNS servers answers, so DNS never stops.`);
+    : `No other node is answering: the controller restarts ${name} only while another of your DNS servers answers.`);
   const waits = rb.pending === true ? h("p", { class: "small" }, `A change waits for this restart (${arr(rb.reasons).filter(x => typeof x === "string").join(", ") || "a change it took"}).`) : null;
-  const how = h("p", { class: "hint" }, "The controller checks it answers again before it says it's done.");
+  const how = h("p", { class: "hint" }, "The controller waits until it answers again.");
   const line = h("p", { class: "hint", role: "status" });
   const msg = h("p", { class: "hint bad", role: "status" });
   p.body.append(...[say, waits, how, line, msg].filter(Boolean));
@@ -173,8 +173,8 @@ function openOut(n) {
   const name = nameOf(n);
   const others = listedNodes().filter(x => x.addr !== n.addr && !x.out_of_service);
   confirmJob(`Take ${name} out of service?`, [
-    h("p", {}, `${name} stays on your list, with its last status, but the controller sends it no changes and doesn't count it while ${others.length ? andList(others.map(nameOf)) : "your other nodes"} change. Use it for a node that's off, broken or away.`),
-    h("p", { class: "hint" }, "If it's up, it still answers DNS. Return it to service when it's back: it's brought up to date first."),
+    h("p", {}, `${name} stays on your list but gets no changes, and isn't counted while ${others.length ? andList(others.map(nameOf)) : "your other nodes"} change${others.length === 1 ? "s" : ""}. For a node that's off, broken or away.`),
+    h("p", { class: "hint" }, "If it's up, it still answers DNS. When it's back, return it to service: it's brought up to date first."),
   ], "Take out of service", "node-out", n, {
     working: `Taking ${name} out of service`,
     done: (j, p, line) => { p.title(`${name} is out of service`); line.textContent = "Changes go to your other nodes; this one is skipped."; toast(`${name} is out of service`); readUpdates(); },
@@ -184,20 +184,20 @@ function openOut(n) {
 function openIn(n) {
   const name = nameOf(n);
   confirmJob(`Return ${name} to service?`, [
-    h("p", {}, `The controller checks ${name} answers and trusts its release key, then sends it, on its own, what it missed: its settings, the hosted zones, the allowed and blocked sites, its blocklist, and newer firmware if it's behind. Each is checked first, as an apply is.`),
-    h("p", { class: "hint" }, "A firmware update restarts it; your other nodes keep answering. Once it's up to date, it counts again."),
+    h("p", {}, `The controller checks ${name} answers and trusts your release key, then sends it what it missed: settings, hosted zones, allowed and blocked sites, its blocklist, and newer firmware if it's behind. Each is checked first, like an apply.`),
+    h("p", { class: "hint" }, "A firmware update restarts it; the other nodes keep answering. Once it's up to date, it counts again."),
   ], "Return to service", "node-in", n, {
     working: `Bringing ${name} up to date`,
-    done: (j, p, line) => { p.title(`${name} is back in service`); line.textContent = `${name} is up to date, and gets every change from now on.`; toast(`${name} is back in service`); readUpdates(); },
+    done: (j, p, line) => { p.title(`${name} is back in service`); line.textContent = `${name} is up to date and gets every change from now on.`; toast(`${name} is back in service`); readUpdates(); },
   });
 }
 
 function openRemove(n) {
   const name = nameOf(n);
   confirmJob(`Remove ${name} from the group?`, [
-    h("p", {}, `${name} comes off your list of nodes. Its settings file is kept, and the node itself isn't touched.`),
+    h("p", {}, `${name} comes off your list. Its settings file is kept and the node itself isn't touched.`),
     h("p", { class: "small" }, `If it's up, it keeps answering DNS: take ${ip(n)} off your router's DNS servers.`),
-    h("p", { class: "hint" }, "While it's on your network it shows up under New device found, and can be added back the usual way."),
+    h("p", { class: "hint" }, "While it's on your network it shows under New device found, and can be added back."),
   ], "Remove", "node-remove", n, {
     danger: true,
     working: `Removing ${name}`,
@@ -211,8 +211,8 @@ function openRevert(n, list) {
   const name = nameOf(n), what = LISTS[list];
   const p = panel(`Go back to the older ${what}?`);
   const msg = h("p", { class: "hint bad", role: "status" });
-  p.body.append(h("p", {}, `${name} goes back to the copy of its ${what} it kept from before the last change, and keeps to it until a newer one is applied.`),
-    h("p", { class: "hint" }, list === "zones" ? "It applies live." : "It applies live, unless both copies don't fit its memory: then at its next restart."), msg);
+  p.body.append(h("p", {}, `${name} goes back to the copy of its ${what} from before the last change, and keeps it until a newer one is applied.`),
+    h("p", { class: "hint" }, list === "zones" ? "Applies live." : "Applies live, unless both copies don't fit its memory: then at its next restart."), msg);
   const go = h("button", { class: "btn primary", type: "button" }, "Go back");
   go.addEventListener("click", async () => {
     go.disabled = true;
@@ -307,16 +307,16 @@ function renderAttention() {
   if (n.out_of_service) {
     // Out of service: said plainly, never an alert.
     out.push(h("b", {}, `${name} is out of service.`),
-      h("p", {}, "The controller sends it no changes, and doesn't count it while your other nodes change."),
+      h("p", {}, "It gets no changes and isn't counted while your other nodes change."),
       h("p", { class: "hint" }, n.online ? "It still answers DNS." : n.status ? `It isn't answering: no reply for ${sinceWords(n.last_seen)}.` : "It hasn't answered since the controller started."),
       h("p", {}, "Return it to service when it's ready: it's brought up to date first."));
   } else if (!n.online && n.source !== "settings") {
-    out.push(h("b", {}, `${name} isn't one of your nodes, and isn't answering.`), h("p", {}, "It was found on your network; once it answers again, it can be set up from Nodes."),
+    out.push(h("b", {}, `${name} isn't one of your nodes, and isn't answering.`), h("p", {}, "It was found on your network. Once it answers again, set it up from Nodes."),
       h("div", { class: "row" }, h("a", { class: "btn", href: "./" }, "Nodes")));
   } else if (!n.online) {
     cls += " alert";
     out.push(h("b", {}, n.status ? `${name} isn't answering: no reply for ${sinceWords(n.last_seen)}.` : `${name} hasn't answered since the controller started.`),
-      h("p", {}, "Check its power and its network cable (or its Wi-Fi). What this page shows is from its last reply."),
+      h("p", {}, "Check its power and its cable or Wi-Fi. This page shows its last reply."),
       n.error ? h("p", { class: "hint" }, `The controller's last try: ${str(n.error)}`) : null);
   } else {
     const reasons = arr(hh.reasons).filter(r => typeof r === "string");
@@ -324,7 +324,8 @@ function renderAttention() {
     if (st.tint || bad.length) {
       cls += " alert";
       out.push(h("b", {}, `${name} is ${st.word.toLowerCase()}${bad.length ? `: ${bad.join(", ")}` : ""}.`));
-      for (const r of bad) out.push(h("p", {}, h("b", {}, `${sentenceCase(r)}. `), reason(r)[1]));
+      // One reason: the heading named it already.
+      for (const r of bad) out.push(h("p", {}, bad.length > 1 ? h("b", {}, `${sentenceCase(r)}. `) : null, reason(r)[1]));
       // A zone's trouble is fixed on Zones (its primary, its copy lists): a click away.
       if (bad.some(r => /zone/i.test(r))) out.push(h("div", { class: "row" }, h("a", { class: "btn", href: "zones.html" }, "Open Zones")));
       if (st.tint === "warn" && hh.answering !== false) out.push(h("p", { class: "hint" }, `${name} still answers DNS queries meanwhile.`));
@@ -341,13 +342,13 @@ function renderAttention() {
     // away, or why there is none.
     if (!hh.state && n.source === "settings") {
       const u = offered(n);
-      out.push(h("p", {}, h("b", {}, "Old firmware. "), "It doesn't report its health in detail, nor follow espDNS's light patterns."),
+      out.push(h("p", {}, h("b", {}, "Old firmware. "), "It doesn't report its health in detail or follow espDNS's light patterns."),
         u ? h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", disabled: !data.sess.logged_in,
           onclick: () => openUpdate({ updates: data.updates, listed: listedNodes(), canWrite: !!data.sess.logged_in, only: n.addr, done: readUpdates }) }, "Update firmware"))
-          : h("p", { class: "hint" }, str(obj(updateOf(n)).why) || "No newer firmware for it is in the controller yet: espdns release import loads a release's (docs/operations.md)."));
+          : h("p", { class: "hint" }, str(obj(updateOf(n)).why) || "No newer firmware for it here yet: Get firmware from the account menu, or import a build of your own (espdns release import)."));
     }
     if (n.source !== "settings") {
-      out.push(h("b", {}, `${name} isn't one of your nodes yet.`), h("p", {}, "It was found on your network. Add it to change its settings and send it changes."),
+      out.push(h("b", {}, `${name} isn't one of your nodes yet.`), h("p", {}, "Found on your network. Add it to change its settings and send it changes."),
         h("div", { class: "row" }, h("a", { class: "btn primary", href: `./#found=${encodeURIComponent(ip(n))}` }, "Set it up")));
     }
   }
@@ -360,7 +361,7 @@ function renderAttention() {
 
 const QL = [["full", "Its address"], ["subnet", "Its network only (/24)"], ["hidden", "Nothing"]];
 const qlWords = q => (!q.enabled ? "Off" : q.client === "subnet" ? "Keeps client networks" : q.client === "hidden" ? "Keeps no client" : "Keeps client addresses");
-const appliesHint = a => (a === "restart" ? "Changing it restarts this node, while another node answers." : "Applies live: DNS keeps answering.");
+const appliesHint = a => (a === "restart" ? "Changing it restarts this node while another answers." : "Applies live.");
 
 async function readSettings() {
   const n = theNode();
@@ -402,7 +403,7 @@ function writeConfig(n, w) {
   const save = h("button", { class: "btn primary", type: "button", disabled: true }, "Save");
   const box = h("div", { class: "stack" },
     h("p", { class: "small" }, w.draft
-      ? "It starts with what the node reports: its name and address. Add what else its config sets (Wi-Fi, upstream DNS, zones), as the node runs it. Saving changes nothing on the node; the changes you make here afterwards keep what it sets."
+      ? "It starts from what the node reports: its name and address. Add what else its config sets (Wi-Fi, upstream DNS, zones), as the node runs it. Saving changes nothing on the node."
       : `${file} as saved. Saving changes nothing on the node.`),
     area, h("div", { class: "row" }, save, msg));
   let hash = "";
@@ -438,8 +439,8 @@ function moveNode(n, edit, version, to) {
   const line = h("p", { class: "hint", role: "status" });
   const msg = h("p", { class: "hint bad", role: "status" });
   p.body.append(
-    h("p", {}, `${name} restarts onto ${to}${others.length ? `, while ${andList(others.map(nameOf))} keep${others.length === 1 ? "s" : ""} answering` : ""}, and is confirmed there. If it isn't reached there within a minute and a half, it goes back to ${ip(n)}.`),
-    h("p", { class: "small" }, `Give your router ${to} as a DNS server in place of ${ip(n)}: devices still asking ${ip(n)} get no answer from it.`),
+    h("p", {}, `${name} restarts on ${to}${others.length ? `, while ${andList(others.map(nameOf))} keep${others.length === 1 ? "s" : ""} answering` : ""}. If it isn't reached there within a minute and a half, it goes back to ${ip(n)}.`),
+    h("p", { class: "small" }, `In your router, replace ${ip(n)} with ${to} as a DNS server: devices still asking ${ip(n)} get no answer.`),
     line, msg);
   const go = h("button", { class: "btn primary", type: "button" }, "Move it");
   const cancel = h("button", { class: "btn", type: "button", onclick: p.close }, "Cancel");
@@ -471,7 +472,7 @@ function moveNode(n, edit, version, to) {
       msg.textContent = err;
     } else {
       p.title(`${name} moved`);
-      line.textContent = `${name} answers on ${to} now, and is listed there.`;
+      line.textContent = `${name} now answers on ${to}, and is listed there.`;
       toast(`${name} moved to ${to}`);
     }
     cancel.remove();
@@ -563,18 +564,18 @@ function renderSettings() {
 
   const rows = [
     row("name", "Name", str(nm.value) || "–",
-      h("label", { class: "f" }, h("span", {}, "Name"), nameIn, h("span", { class: "hint" }, `How this node is shown everywhere. ${appliesHint(nm.applies)}`))),
+      h("label", { class: "f" }, h("span", {}, "Name"), nameIn, h("span", { class: "hint" }, `Its name on every page. ${appliesHint(nm.applies)}`))),
     row("network", "Network", netVal,
       h("label", { class: "check" }, dhcpIn, h("span", {}, "Get its address from DHCP")), fixed,
       h("p", { class: "hint" }, "Changing the address restarts this node. Give your router the new address too.")),
     row("forwarders", "Upstream DNS", fwVal,
       h("label", { class: "f" }, h("span", {}, "Servers, in order"), fwIn,
-        h("span", { class: "hint" }, `Where this node sends names it can't answer itself, separated by commas. ${appliesHint(fw.applies)}`))),
+        h("span", { class: "hint" }, `Where it sends names it can't answer itself, comma-separated. ${appliesHint(fw.applies)}`))),
     row("tz", "Time zone", tzVal,
-      h("label", { class: "f" }, h("span", {}, "Time zone"), tzSel, h("span", { class: "hint" }, "Used for the times in its logs. The clock itself comes from the network."))),
+      h("label", { class: "f" }, h("span", {}, "Time zone"), tzSel, h("span", { class: "hint" }, "For the times in its logs; the clock itself comes from the network."))),
     row("blocking", "Blocking", bl.value === false ? "Off on this node" : "On",
       h("label", { class: "f" }, h("span", {}, "Blocking on this node"), blSel,
-        h("span", { class: "hint" }, bl.value === false ? `Off: ${nameOf(n)} answers everything, and its memory goes to the cache.` : "On: uses what is set up on the Blocking page."))),
+        h("span", { class: "hint" }, bl.value === false ? `Off: ${nameOf(n)} blocks nothing, and its memory goes to the cache.` : "On: as set up on the Blocking page."))),
     row("querylog", "Query log", qlWords({ enabled: qv.enabled !== false, client: qv.client }),
       h("label", { class: "f" }, h("span", {}, "What to keep about each device"), qlSel, h("span", { class: "hint" }, appliesHint(ql.applies)))),
   ];
@@ -602,7 +603,7 @@ function renderSettings() {
     if ((blSel.value === "on") !== (bl.value !== false)) edit.blocking = blSel.value === "on";
     const qlNow = qv.enabled === false ? "off" : str(qv.client) || "full";
     if (qlSel.value !== qlNow) edit.querylog = qlSel.value === "off" ? { enabled: false } : { enabled: true, client: qlSel.value };
-    if (!Object.keys(edit).length) { msg.textContent = "Nothing changed: open a row and change it first."; return; }
+    if (!Object.keys(edit).length) { msg.textContent = "Nothing changed: open a row first."; return; }
     save.disabled = true;
     try {
       data.form = await post(`api/nodes/${encodeURIComponent(n.id)}/settings`, { settings: edit, version: str(r.version) });
@@ -619,7 +620,7 @@ function renderSettings() {
         const p = errs.get("network");
         const only = { network: edit.network };
         const rest = Object.keys(edit).filter(k => k !== "network");
-        p.replaceChildren(m, ". ", rest.length ? "Save the other changes apart. " : "",
+        p.replaceChildren(m, ". ", rest.length ? "Save the other changes separately. " : "",
           h("button", { class: "btn small", type: "button", onclick: () => moveNode(n, only, str(r.version), str(e.body.move)) }, `Move it to ${str(e.body.move)}`));
         p.className = "hint";
         p.hidden = false;
@@ -671,7 +672,7 @@ function renderServes() {
   const zoneLine = [parts.join(" · ") || "None", " · ", h("a", { href: "zones.html" }, "Zones ›")];
   if (stale.length) {
     zoneLine.push(h("div", { class: "bad-text small" }, `Out of date: ${stale.map(z => `${str(z.name)}${z.expired ? " (expired)" : " (copies failing)"}`).join(", ")}.`),
-      h("div", { class: "hint" }, `Check that your primary allows ${ip(n)} to copy ${stale.length === 1 ? "this zone" : "these zones"}: its transfer list must include this node's address.`));
+      h("div", { class: "hint" }, `Check that your primary allows ${ip(n)} to copy ${stale.length === 1 ? "this zone" : "these zones"}: it must be on the transfer list.`));
   }
   pair("Zones", ...zoneLine);
   // Blocking
@@ -687,7 +688,7 @@ function renderServes() {
   // Memory: the plan's pools.
   const mem = obj(s.memory), inn = obj(mem.internal), ps = obj(mem.psram);
   const pool = (label, p) => (typeof p.capacity === "number" && p.capacity > 0
-    ? h("div", { class: "pool" }, meter(p.planned, p.capacity), h("span", { class: "hint" }, `${label}: ${Math.round((p.planned / p.capacity) * 100)}% of it planned`)) : null);
+    ? h("div", { class: "pool" }, meter(p.planned, p.capacity), h("span", { class: "hint" }, `${label}: ${Math.round((p.planned / p.capacity) * 100)}% planned`)) : null);
   const pools = [pool("Internal memory", inn), pool("PSRAM", ps)].filter(Boolean);
   if (pools.length) pair("Memory", ...pools);
   else if (typeof s.heap_free === "number") pair("Memory", `${Math.round(s.heap_free / 1024)} KB internal free`);
@@ -732,7 +733,7 @@ function renderRecent() {
   const rows = mine.slice(0, 6).map(e => h("div", { class: "change" },
     h("span", {}, ACTWORDS[str(e.action)] || sentenceCase(str(e.action).replace(/^job /, ""))),
     h("span", { class: e.result === "ok" || !e.error ? "hint" : "hint bad" }, [when(e.time), str(e.who), e.error ? `failed: ${str(e.error)}` : ""].filter(Boolean).join(" · "))));
-  $("recent-list").replaceChildren(...(rows.length ? rows : [h("p", { class: "hint" }, "Nothing recorded for this node yet.")]));
+  $("recent-list").replaceChildren(...(rows.length ? rows : [h("p", { class: "hint" }, "Nothing for this node yet.")]));
   $("recent-val").textContent = mine.length ? `${ACTWORDS[str(mine[0].action)] || str(mine[0].action)} ${when(mine[0].time)}` : "None yet";
   box.hidden = false;
 }
@@ -755,7 +756,7 @@ function renderDetails() {
     pair("Firmware", h("span", {}, str(s.version), " ", /^0\./.test(str(s.version)) ? h("span", { class: "tag" }, "alpha") : null, " ",
       has(s.elf_sha256) ? h("span", { class: "mono muted" }, `build ${str(s.elf_sha256).slice(0, 8)}`) : null));
   }
-  if (has(s.ota_state) && s.ota_state !== "valid") pair("Firmware state", `${str(s.ota_state)} (it confirms itself once it runs well)`);
+  if (has(s.ota_state) && s.ota_state !== "valid") pair("Firmware state", `${str(s.ota_state)} (confirms itself once it runs well)`);
   pair("Started in", has(s.boot_ms) ? secs(s.boot_ms) : "");
   pair("Last restart", str(s.reset));
   pair("Settings", has(cfg.source) ? (cfg.source === "node" ? `sent by the controller (seq ${cfg.seq})${cfg.trial ? ", on trial" : ""}` : "its board's defaults") : "");
@@ -767,7 +768,7 @@ function renderDetails() {
   const listedOK = !actionWhy(n, false);
   const fl = h("button", { class: "btn small", type: "button", disabled: !listedOK });
   fl.textContent = "Flush its cache";
-  fl.title = "Drop every answer it has cached";
+  fl.title = "Drops every cached answer";
   fl.addEventListener("click", () => flush(n, fl));
   const reverts = Object.keys(LISTS).map(k => h("button", { class: "btn small", type: "button", disabled: !listedOK, onclick: () => openRevert(n, k) }, `Older ${LISTS[k]}`));
   const runs = data.form ? str(obj(obj(data.form.config).runs).text) : "";
@@ -779,7 +780,7 @@ function renderDetails() {
       runsBox: null, cli: h("p", { class: "hint" }) };
     detailsBuilt.runsBox = h("details", { class: "sub-raw" }, h("summary", {}, "Its settings, as it runs them"), detailsBuilt.runs);
     $("details-body").append(detailsBuilt.kv, h("div", { class: "stack nogap-s" }, h("span", { class: "small" }, h("b", {}, "Quick fixes")), detailsBuilt.acts,
-      h("span", { class: "hint" }, "Older …: go back to the copy it kept from before the last change.")),
+      h("span", { class: "hint" }, "Older …: back to the copy from before the last change.")),
     detailsBuilt.runsBox, h("details", { class: "sub-raw" }, h("summary", {}, "Its last status, as it reported it"), detailsBuilt.status), detailsBuilt.cli);
   }
   detailsBuilt.kv.replaceChildren(...kv);

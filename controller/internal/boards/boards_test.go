@@ -31,6 +31,13 @@ func TestCatalog(t *testing.T) {
 		if len(e.Errors) > 0 {
 			t.Errorf("%s: %v", e.Board.Name, e.Errors)
 		}
+		// The library only lists boards espDNS runs on: 8 MB of PSRAM or more, stated.
+		if e.Board.PSRAMMB == nil || *e.Board.PSRAMMB < 8 {
+			t.Errorf("%s: a catalog board states psram_mb, at least 8", e.Board.Name)
+		}
+		if e.Board.Tier == "" || e.Board.Title == "" || e.Board.FlashMB == 0 {
+			t.Errorf("%s: a catalog board has a title, flash_mb and a tier", e.Board.Name)
+		}
 	}
 }
 
@@ -70,7 +77,10 @@ func TestChecks(t *testing.T) {
 			b.Network = &nodecfg.Network{Address: "192.0.2.252", Gateway: "192.0.2.1"}
 		}, "prefix length", ""},
 		{"memory out of range", func(b *Board) { b.Memory = &Memory{CacheEntries: p(4)} }, "cache_entries", ""},
-		{"psram out of range", func(b *Board) { b.PSRAMMB = p(100) }, "psram_mb", ""},
+		{"psram out of range", func(b *Board) { b.PSRAMMB = p(100) }, "psram_mb: 8-64", ""},
+		{"no psram", func(b *Board) { b.PSRAMMB = p(0) }, "psram_mb: espDNS needs at least 8 MB of PSRAM", ""},
+		{"too little psram", func(b *Board) { b.PSRAMMB = p(4) }, "at least 8 MB of PSRAM", ""},
+		{"psram left out", func(b *Board) { b.PSRAMMB = nil }, "", ""},
 		{"index share of 0", func(b *Board) { b.PSRAMMB = p(8); b.Memory = &Memory{BlocklistIndexKB: p(0)} }, "", ""},
 		{"no query log", func(b *Board) { b.PSRAMMB = p(8); b.Memory = &Memory{QueryLogKB: p(0)} }, "", ""},
 		{"query log out of range", func(b *Board) { b.Memory = &Memory{QueryLogKB: p(70000)} }, "querylog_kb", ""},

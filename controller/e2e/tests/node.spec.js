@@ -357,7 +357,7 @@ test("out of service: taken out while offline, muted, returned to service, remov
   await expect(page.locator("#attention")).toHaveClass(/\balert\b/);
   await page.getByRole("button", { name: "Take out of service" }).click();
   const d = page.getByRole("dialog", { name: "Take dns3 out of service?" });
-  await expect(d).toContainText("the controller sends it no changes and doesn't count it while dns2 change");
+  await expect(d).toContainText("gets no changes, and isn't counted while dns2 changes");
   await d.getByRole("button", { name: "Take out of service" }).click();
   await expect(page.getByRole("dialog", { name: "dns3 is out of service" })).toBeVisible();
   expect(jobs()).toEqual([{ kind: "node-out", params: { node: DNS3 } }]);

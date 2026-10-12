@@ -446,7 +446,6 @@ test("A copied zone: its records read-only; one the nodes can't copy, with the f
   // An expired one: what to check on the primary; nothing is changed there from here.
   await page.goto("zones.html#zone=stale.example");
   await expect(page.locator("#problem")).toContainText("Your nodes can't copy this zone from your primary.");
-  await expect(page.locator("#problem")).toContainText("Usually your primary doesn't allow zone transfers from their network.");
   await expect(page.locator("#problem")).toContainText("check that stale.example allows zone transfers from your nodes' networks (192.0.2.0/24)");
   await expect(page.locator(".recs")).toHaveCount(0);
   // Its records refused too: the nodes have no good copy, so it isn't said they do.

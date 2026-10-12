@@ -1,4 +1,4 @@
-// The zone primary as Zones and the first run edit it (settings.json's "primary",
+// The zone primary as Zones edits it (settings.json's "primary",
 // internal/primary): its address, the networks it allows zone transfers from, and the zones
 // to copy from it. The nodes copy each zone by zone transfer and poll it for changes, so
 // any standards-compliant primary works: it is set up once to allow zone transfers from
@@ -73,30 +73,30 @@ export function primaryFields(cur, nodes, zones) {
   const say = () => {
     const out = uncovered(nodes(), nets.items());
     note.className = out.length ? "hint bad" : "hint";
-    note.textContent = !nodes().length ? "Once you add nodes, this says if any is outside these networks."
+    note.textContent = !nodes().length ? "Once you add nodes, this says if any is outside them."
       : out.length ? `Not in these networks: ${out.join(", ")}. Allow ${out.length === 1 ? "its" : "their"} network on your primary (e.g. ${[...new Set(out.map(net24))].join(", ")}), then add it here.`
         : "Every node's address is in these networks.";
   };
   const nets = listEditor({ id: "pn", items: arr(cur.allows).map(str), placeholder: "192.0.2.0/24", label: "Networks it allows zone transfers from",
     empty: "None yet.", onChange: say,
-    check: v => { const n = network(v); return n ? { value: n } : { err: `${str(v).trim() || "Nothing"} isn't a network: give it with its prefix length, as 192.0.2.0/24.` }; } });
+    check: v => { const n = network(v); return n ? { value: n } : { err: `${str(v).trim() || "Nothing"} isn't a network, like 192.0.2.0/24.` }; } });
   const zs = listEditor({ id: "pz", items: zones.map(canon), placeholder: "home.example", label: "Zones to copy",
     empty: "None yet.", onChange: () => {},
     check: v => { const z = canon(v); return ZONE.test(z) ? { value: z } : { err: `${str(v).trim() || "Nothing"} isn't a zone name, like home.example.` }; } });
   say();
   const field = (label, ctl, hint) => h("div", { class: "f" }, h("span", {}, label), ctl, hint ? h("span", { class: "hint" }, hint) : null);
   const el = h("div", { class: "stack" },
-    field("Address", addr, "Its IPv4 address: your nodes copy each zone from it by zone transfer, and check it for changes."),
+    field("Address", addr, "Its IPv4 address."),
     field("Networks it allows zone transfers from", nets.el, null), note,
-    h("p", { class: "hint" }, "On your primary, allow zone transfers (and, if you like, NOTIFY) from these networks, once. Adding a node then changes nothing there."),
-    field("Zones to copy", zs.el, "Each is copied whole and kept up to date; you keep editing it on your primary. Zones hosted on espDNS are separate: + Add zone."));
+    h("p", { class: "hint" }, "Allow zone transfers (and NOTIFY, if you like) from these networks on your primary."),
+    field("Zones to copy", zs.el, "You keep editing them on your primary. To host a zone here, use + Add zone."));
   // value is the "primary" to save, or an error to show (a box typed in but not added).
   const value = () => {
     const a = addr.value.trim();
     if (a && !IPV4.test(a)) return { err: `${a} isn't an IPv4 address, like 192.0.2.254.`, focus: addr };
     if (nets.pending()) return { err: "Add the network typed, or clear it.", focus: el.querySelector("#pn") };
     if (zs.pending()) return { err: "Add the zone typed, or clear it.", focus: el.querySelector("#pz") };
-    if (!a && zs.items().length) return { err: "Give your primary's address: the nodes copy the zones from it.", focus: addr };
+    if (!a && zs.items().length) return { err: "Type your primary's address: the nodes copy the zones from it.", focus: addr };
     const p = { address: a, allows: nets.items(), zones: zs.items() };
     return { primary: a || p.allows.length || p.zones.length ? p : null };
   };

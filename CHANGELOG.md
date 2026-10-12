@@ -9,6 +9,41 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Added
+
+- A board library: 18 boards from 6 makers added to the catalog (Adafruit, Espressif,
+  LilyGO, M5Stack, Seeed, Waveshare), 22 boards in all, each from the maker's pinout,
+  arduino-esp32 or ESPHome, with its sources in `notes`: the wired ESP32-S3 and ESP32-P4
+  boards with 8 MB of PSRAM or more and solid pin documentation, and a few Wi-Fi boards
+  with an SD slot. Install over USB groups the list by maker and gets a search box (maker,
+  model, catalog name, chip image, w5500, poe…); each option says its flash, PSRAM and
+  wired or Wi-Fi. The controller loads the catalog once at startup and serves
+  `GET /api/boards` from memory with an ETag (304 to `If-None-Match`); your own boards are
+  read again when `data/boards` changes or one is saved. espDNS boards have 8 MB of PSRAM
+  or more, the sizes tested: a board with less is refused (`psram_mb: espDNS needs at
+  least 8 MB of PSRAM`). The library tables are in
+  [docs/hardware.md](docs/hardware.md#untested-boards).
+
+### Changed
+
+- The setup's zone step is about your own zones. "Add your zone", after the second node:
+  type a name for your network, like home.example, and host it on espDNS (it starts with
+  the records every zone needs); the + Add zone box is the Zones page's. Already run a DNS
+  server with your zones? Copying from it is an option there, under "Set it up myself", not
+  the step itself as the old "Set up your zone primary" step was. The step is done with a
+  zone of your own (hosted here, copied or forwarded, a pending change included) or
+  skipped. `GET /api/setup` lists `zones` among the steps, in place of `primary`, and
+  counts your zones in `zones`; `POST /api/setup/step` marks `zones` skipped and refuses
+  `primary` as it does any other unknown step. An older `setup.json` with `primary` marked
+  done loads fine; the mark is ignored.
+- Get firmware and `espdns release fetch` download only the chip images needed, not every
+  one in the release. Install over USB gets the chosen board's. The account menu and the
+  CLI get what your nodes need, from each node's board. If a node hasn't reported yet, they
+  also get the chip images the controller already has, and say so. With nothing needed,
+  they say so and fetch nothing. The
+  signature is still checked first, and other imported chip images stay as they are. The
+  `fetch-release` job takes `"images"`, and `release fetch` takes `-image`.
+
 ## [0.0.2] - 2026-10-11
 
 ### Added

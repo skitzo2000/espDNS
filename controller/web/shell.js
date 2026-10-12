@@ -246,7 +246,7 @@ function rolloutRow() {
   say();
   return h("details", { class: "ex" }, h("summary", {}, h("b", {}, "How it rolls out"), val),
     h("div", { class: "exb" },
-      h("p", { class: "small" }, "One node at a time: each is checked and watched before the next. If a node fails its checks, the apply stops there and the changes keep waiting."),
+      h("p", { class: "small" }, "One node at a time, each checked and watched before the next. If one fails its checks, the apply stops there and the changes keep waiting."),
       h("div", { class: "grid2" },
         ns.length ? h("label", { class: "f" }, h("span", {}, "Start with"), first) : null,
         h("label", { class: "f" }, h("span", {}, "Watch each node for"), watch))));
@@ -270,7 +270,7 @@ function openReview() {
     const rs = pending.restarts.map(x => nodeText(x));
     note.textContent = rs.length
       ? `${rs.join(", ")} restart${rs.length === 1 ? "s" : ""} for a few seconds, one at a time; the other nodes keep answering.`
-      : "No restart needed: DNS keeps answering throughout.";
+      : "No restart needed.";
     go.textContent = `Apply ${plural(pending.changes.length, "change", "changes")}`;
     go.disabled = discardAll.disabled = !canWrite;
   };
@@ -335,7 +335,7 @@ function followApply(j) {
   es.addEventListener("gone", () => {
     if (follow.es === es) follow.es = null;
     if (follow.id !== j.id) return;
-    follow.job = { ...follow.job, state: "failed", error: "The controller no longer has this apply: it may have restarted. The changes not sent are still waiting." };
+    follow.job = { ...follow.job, state: "failed", error: "The controller no longer has this apply: it may have restarted. Changes not sent are still waiting." };
     upd();
     refreshChanges();
   });
@@ -394,8 +394,8 @@ function openApply() {
     // The nodes out of service: skipped, said so.
     const skipped = arr(fleetNodes).filter(n => n.source === "settings" && n.out_of_service);
     if (skipped.length) out.push(h("p", { class: "hint" }, `Skipped: ${skipped.map(n => nodeText(n)).join(", ")} (out of service).`));
-    if (run) out.push(h("p", { class: "hint" }, "You can close this; progress stays at the top of every page."));
-    else if (j.state === "done") out.push(h("p", {}, skipped.length ? "Every node in service is answering with the new changes." : "Every node is answering with the new changes."));
+    if (run) out.push(h("p", { class: "hint" }, "You can close this; progress shows at the top of every page."));
+    else if (j.state === "done") out.push(h("p", {}, skipped.length ? "Every node in service has the changes and is answering." : "Every node has the changes and is answering."));
     else if (pr.outcome || j.error) out.push(h("p", {}, str(pr.outcome) || str(j.error)));
     if (!run && arr(pr.hints).length) out.push(h("ul", { class: "hint" }, arr(pr.hints).map(x => h("li", {}, str(x)))));
     after.replaceChildren(...out);
@@ -528,7 +528,7 @@ function searchBox() {
     const rs = arr(a.results), matched = obj(a.matched), out = [];
     opts = [];
     active = -1;
-    if (!rs.length) out.push(h("div", { class: "search-note", role: "status" }, `Nothing matches "${q}": no node, zone, record, device, site, list or change to apply.`));
+    if (!rs.length) out.push(h("div", { class: "search-note", role: "status" }, `Nothing matches "${q}".`));
     // By type, the type of the best result first.
     const by = new Map();
     for (const r of rs) {
@@ -558,7 +558,7 @@ function searchBox() {
         items));
     }
     const foot = [];
-    if (a.more) foot.push("Only the best matches are shown: type more to narrow it down.");
+    if (a.more) foot.push("Only the best matches are shown: type more to narrow it.");
     if (a.partial) foot.push("The search ran out of time: not every place was searched.");
     for (const p of arr(a.problems)) foot.push(h("div", { class: "bad" }, `Couldn't search ${str(p)}`));
     if (foot.length) out.push(h("div", { class: "search-foot" }, foot.map(x => (typeof x === "string" ? h("div", {}, x) : x))));
@@ -579,7 +579,7 @@ function searchBox() {
       else render(q, j);
     } catch (err) {
       if (mine !== seq || (err && err.name === "AbortError")) return;
-      note("The controller isn't answering, so nothing was searched.", "bad");
+      note("The controller isn't answering.", "bad");
     }
   }
 
@@ -656,7 +656,7 @@ export function shell(current) {
       // The setup page sets the password itself: no band there.
       if (current !== "setup.html") {
         sessBand = h("div", { class: "band warn" }, h("div", { class: "band-in" }, h("strong", {}, "Read-only."),
-          h("span", {}, "No password is set, so the controller takes no actions. ", h("a", { href: "setup.html" }, "Set one"), ", or use ", h("code", {}, "espdns passwd"), " (docs/developer.md).")));
+          h("span", {}, "No password is set, so the controller takes no actions. ", h("a", { href: "setup.html" }, "Set one"), ", or run ", h("code", {}, "espdns passwd"), " (docs/developer.md).")));
       }
     } else if (s.error) {
       sessBand = h("div", { class: "band bad" }, h("div", { class: "band-in" }, h("strong", {}, "The login can't be used."), h("span", {}, str(s.error))));

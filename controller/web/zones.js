@@ -3,8 +3,9 @@
 // primary, or forwarded (/api/zone-inventory). All nodes serve the same zones, so a zone
 // shows the fleet's state, never a node's. The zone primary is the first row: its address,
 // the networks it allows zone transfers from, and the zones copied from it (primary.js).
-// + Add zone is a box: a zone typed is looked up (/api/zone-lookup) and added the way it
-// lives: copied from your primary, hosted here, or forwarded. A zone opens its page
+// + Add zone (addzone.js; the first run mounts it too) is a box: a zone typed is looked up
+// (/api/zone-lookup) and added the way it lives: hosted here, copied from your primary, or
+// forwarded. A zone opens its page
 // (zones.html#zone=<name>): a hosted zone's records edited with record forms (the file under
 // Advanced, with its earlier versions), a copied zone's records read-only
 // (/api/zone-records), a forwarded zone's server. Every edit waits as a pending change
@@ -14,18 +15,14 @@
 import { shell, h, arr, obj, str, hostOnly, addr, copyText, toast, panel, refreshChanges, onChanges, getJSON, post, session } from "./shell.js";
 import { onNodes, every } from "./common.js";
 import { primaryFields, uncovered, net24 } from "./primary.js";
+import { addZone, zoneEditor, readConfigs as readCfgs, primaryIP as primaryIPOf, IPV4, canon, fileOf, said } from "./addzone.js";
 
 shell("zones.html");
 
 const view = document.getElementById("view");
 const enc = encodeURIComponent;
-const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-const canon = s => str(s).trim().toLowerCase().replace(/\.$/, "");
-const fileOf = z => `${z}.zone`;
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// said is an API's error as a sentence: its path dropped, its first letter capital.
-const said = m => { const t = str(m).replace(/^api\/\S*?: /, ""); return t.charAt(0).toUpperCase() + t.slice(1); };
 
 const data = {
   inv: null, invErr: null,     // /api/zone-inventory
@@ -43,20 +40,11 @@ async function readInventory() {
   renderSoft();
 }
 
-// readConfigs reads every node config as the pending changes make it: the secondary and
-// forward zones an apply would send, and the version a new change edits.
+// readConfigs reads every node config as the pending changes make it (addzone.js): the
+// secondary and forward zones an apply would send, and the version a new change edits.
 async function readConfigs() {
   try {
-    const list = arr((await getJSON("api/configs")).configs);
-    const out = [];
-    for (const c of list) {
-      const f = await getJSON(`api/changes/file?kind=config&name=${enc(str(c.name))}`);
-      if (!f.exists) continue;
-      let cfg = null;
-      try { cfg = JSON.parse(str(f.text)); } catch { cfg = null; }
-      out.push({ name: str(c.name), listed: arr(c.nodes).some(n => n.listed), hash: str(f.hash), cfg: f.partial ? null : obj(cfg) });
-    }
-    data.cfgs = out;
+    data.cfgs = await readCfgs();
     data.cfgErr = null;
   } catch (e) { data.cfgErr = said(e.message); }
 }
@@ -139,12 +127,7 @@ function primaryAddr() {
 
 // primaryIP is the zone primary's IPv4 address, which a node config needs: settings.json's,
 // else the address the configs copy from (one only).
-function primaryIP() {
-  const a = primaryAddr();
-  if (IPV4.test(a)) return a;
-  const ps = arr(obj(data.inv).primaries).filter(p => IPV4.test(p));
-  return ps.length === 1 ? ps[0] : "";
-}
+function primaryIP() { return primaryIPOf(data.inv); }
 
 // yours says whether a copied zone's primary is the zone primary: its address, or the
 // only primary the configs copy from.
@@ -213,22 +196,21 @@ function renderSoft() {
 
 // ---- the list ---------------------------------------------------------------------------
 
-let copyBtn = null, addBox = null;
+let copyBtn = null;
 
 function listPage() {
   shown = "";
   document.title = "espDNS zones";
   copyBtn = h("button", { class: "btn", type: "button", id: "copy-dns", onclick: copyDNS }, "Copy DNS servers");
-  addBox = h("div", { id: "add-zone" });
   adder.mount(addBox);
   view.replaceChildren(
     h("div", { class: "head" },
-      h("div", { class: "lead" }, h("h1", {}, "Zones"), h("p", { class: "muted" }, "Every domain your nodes answer for themselves, instead of asking the internet.")),
+      h("div", { class: "lead" }, h("h1", {}, "Zones"), h("p", { class: "muted" }, "The domains your nodes answer themselves instead of asking the internet.")),
       h("div", { class: "row" }, copyBtn, addBox)),
     h("div", { id: "zprimary" }),
     h("section", {}, h("div", { class: "facts", id: "facts" }),
       h("div", { class: "panel rows zones", id: "zones" })),
-    h("p", { class: "hint" }, "Copied zones are edited on your primary; the nodes pick up each change within seconds. Hosted zones are edited here."));
+    h("p", { class: "hint" }, "Copied zones are edited on your primary and picked up within seconds. Hosted zones are edited here."));
   primaryRow(document.getElementById("zprimary"));
   renderCopy();
   renderList();
@@ -247,7 +229,7 @@ async function copyDNS() {
   const ips = listedNodes().map(n => hostOnly(n.addr));
   if (!ips.length) return;
   const t = ips.join(", ");
-  toast(await copyText(t) ? `Copied ${t}: give ${ips.length === 2 ? "both" : ips.length === 1 ? "it" : "them all"} to your router as its DNS servers`
+  toast(await copyText(t) ? `Copied ${t}: set ${ips.length === 1 ? "it" : "them"} as your router's DNS servers`
     : `Couldn't copy: your DNS servers are ${t}`);
 }
 
@@ -269,10 +251,10 @@ function renderList() {
     h("span", {}, h("b", {}, String(n("forward"))), " forwarded"),
     h("span", {}, h("b", {}, String(n("hosted"))), " hosted here"),
     h("span", {}, h("b", {}, String(obj(data.inv.counts).records || 0)), " records"));
-  if (data.invErr) facts.append(h("span", { class: "bad" }, "The controller isn't answering: this may be out of date."));
+  if (data.invErr) facts.append(h("span", { class: "bad" }, "The controller isn't answering, so this may be out of date."));
   if (!rs.length) {
-    box.replaceChildren(h("div", { class: "empty" }, h("p", {}, "No zones yet. Your nodes ask the internet for every name."),
-      h("p", {}, "+ Add zone copies one from your primary, hosts one here, or forwards a domain to another server.")));
+    box.replaceChildren(h("div", { class: "empty" }, h("p", {}, "No zones yet: your nodes ask the internet for every name."),
+      h("p", {}, "+ Add zone copies one from your primary, hosts one here or forwards one to another server.")));
     return;
   }
   box.replaceChildren(head, ...rs.map(z => {
@@ -347,10 +329,10 @@ async function primaryForm(body, say) {
       const now = arr(obj(v.primary).zones), a = str(obj(v.primary).address);
       let changed = 0;
       for (const z of now.filter(z => !before.includes(z))) {
-        if (arr(data.cfgs).length) { await addZone(z, "copy", a); changed++; }
+        if (arr(data.cfgs).length) { await editor.add(z, "copy", a); changed++; }
       }
       for (const z of before.filter(z => !now.includes(z))) {
-        if (holding(z, "secondary").length) { await removeConfigZone(z, "secondary"); changed++; }
+        if (editor.holding(z, "secondary").length) { await editor.removeConfigZone(z, "secondary"); changed++; }
       }
       before.splice(0, before.length, ...now);
       await readInventory();
@@ -363,186 +345,7 @@ async function primaryForm(body, say) {
   body.replaceChildren(f.el, h("div", { class: "row" }, save, msg));
 }
 
-// ---- + Add zone -------------------------------------------------------------------------
-
-// adder is + Add zone: the button becomes a box; a zone typed is looked up where it lives,
-// with what to do about it right under it. Esc, or a click outside with nothing typed,
-// closes it.
-const adder = (() => {
-  const st = { open: false, q: "", res: null, busy: false, err: "", adding: false };
-  let box = null, input = null, list = null, timer = null, seq = 0;
-  const button = () => h("button", { class: "btn", type: "button", id: "add-zone-btn", onclick: open }, "+ Add zone");
-
-  function mount(b) { box = b; st.open = false; box.replaceChildren(button()); }
-
-  function open() {
-    st.open = true; st.q = ""; st.res = null; st.err = "";
-    input = h("input", { class: "t mono", id: "zq", type: "text", autocomplete: "off", spellcheck: "false", autocapitalize: "off",
-      placeholder: "Zone name, like home.example", "aria-label": "Zone to add", "aria-controls": "zqres" });
-    list = h("div", { class: "combo-list zpanel", id: "zqres", role: "region", "aria-label": "Add a zone", "aria-live": "polite" });
-    input.addEventListener("input", () => {
-      st.q = input.value.trim(); st.res = null; st.err = ""; seq++;
-      clearTimeout(timer);
-      if (st.q) { st.busy = true; timer = setTimeout(lookup, 450); } else st.busy = false;
-      draw();
-    });
-    input.addEventListener("keydown", e => {
-      if (e.key === "Escape") { e.preventDefault(); close(); }
-      if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); lookup(); }
-    });
-    box.replaceChildren(h("div", { class: "combo zcombo" }, input, list));
-    draw();
-    input.focus();
-  }
-
-  function close() {
-    if (st.adding) return;
-    clearTimeout(timer); seq++;
-    st.open = false;
-    if (box) box.replaceChildren(button());
-  }
-  document.addEventListener("mousedown", e => { if (st.open && !e.target.closest(".zcombo") && !st.q && !document.querySelector(".drawer")) close(); });
-
-  async function lookup() {
-    const q = st.q;
-    if (!q) return;
-    const my = ++seq;
-    st.busy = true; st.res = null; st.err = "";
-    draw();
-    try {
-      const r = await getJSON(`api/zone-lookup?name=${enc(q)}`);
-      if (my !== seq) return;
-      st.res = r;
-    } catch (e) {
-      if (my !== seq) return;
-      st.err = said(e.message);
-    }
-    st.busy = false;
-    draw();
-  }
-
-  async function add(name, kind, ip) {
-    st.adding = true;
-    draw();
-    try {
-      await addZone(name, kind, ip);
-      st.adding = false;
-      close();
-      if (kind === "host") location.hash = `#zone=${enc(name)}`;
-    } catch (e) {
-      st.adding = false;
-      st.err = said(e.message);
-      draw();
-    }
-  }
-
-  // manual is "Set it up myself": copy it from a primary, host it here, or forward it.
-  function manual(name, sel, ip) {
-    const copyIP = h("input", { class: "t mono", id: "zmcopy", type: "text", value: IPV4.test(str(ip)) ? ip : primaryIP(), "aria-label": "Primary's address" });
-    const fwdIP = h("input", { class: "t mono", id: "zmfwd", type: "text", value: "", placeholder: "192.0.2.53", "aria-label": "Server to forward to" });
-    const radio = v => h("input", { type: "radio", name: "zm", value: v, checked: v === sel });
-    const go = h("button", { class: "btn small", type: "button", id: "zmadd", disabled: !data.canWrite || st.adding }, "Add zone");
-    const err = h("span", { class: "hint bad", role: "status" });
-    go.addEventListener("click", () => {
-      const m = list.querySelector("input[name=zm]:checked");
-      const k = m ? m.value : sel;
-      const a = k === "copy" ? copyIP.value.trim() : k === "fwd" ? fwdIP.value.trim() : "";
-      if (k !== "host" && !IPV4.test(a)) { err.textContent = "Type the server's IPv4 address: four numbers with dots between them."; return; }
-      add(name, k, a);
-    });
-    return h("details", { class: "manual" }, h("summary", {}, "Set it up myself"), h("div", { class: "mopts" },
-      h("label", { class: "mopt" }, radio("copy"), h("span", {}, "Copy it from a primary at", copyIP)),
-      h("label", { class: "mopt" }, radio("host"), h("span", {}, "Host it here: espDNS is its primary")),
-      h("label", { class: "mopt" }, radio("fwd"), h("span", {}, "Forward its queries to", fwdIP)),
-      h("div", { class: "row" }, go, err)));
-  }
-
-  const found = (name, ...text) => h("div", { class: "found" }, h("b", { class: "mono" }, name), h("span", { class: "small" }, ...text));
-  const act = (label, f, primary = true) => h("button", { class: `btn small${primary ? " primary" : ""}`, type: "button", disabled: !data.canWrite || st.adding, onclick: f }, label);
-
-  function draw() {
-    if (!list) return;
-    const out = [];
-    const r = st.res;
-    if (!st.q) {
-      out.push(h("span", { class: "small muted" }, "Type a zone and espDNS finds where it lives: on your primary, already one of yours, or nowhere yet."));
-    } else if (st.busy) {
-      out.push(h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Looking for ", h("span", { class: "mono" }, st.q), "'s primary…"));
-    } else if (st.err && !r) {
-      out.push(h("p", { class: "hint bad" }, st.err));
-    } else if (r) {
-      const name = str(r.name), zone = obj(r.zone);
-      const kindWords = k => (k === "secondary" ? "copied from your primary" : k === "forward" ? "forwarded" : "hosted here");
-      switch (r.found) {
-        case "zone":
-          out.push(found(name, `Already one of your zones: ${kindWords(str(zone.kind))}.`),
-            h("div", { class: "actions" }, h("a", { class: "btn small", href: `#zone=${enc(name)}`, onclick: close }, "Open it")));
-          break;
-        case "within":
-          out.push(found(name, "A name inside ", h("span", { class: "mono" }, str(r.parent)), `, one of your zones (${kindWords(str(zone.kind))}).`,
-            str(zone.kind) === "hosted" ? " Add it there as a record." : ""),
-          h("div", { class: "actions" }, h("a", { class: "btn small", href: `#zone=${enc(str(r.parent))}`, onclick: close }, `Open ${str(r.parent)}`)));
-          break;
-        case "primary":
-          out.push(found(name, "Found on your primary at ", h("span", { class: "mono" }, str(r.primary)), r.serial ? `, version ${r.serial}` : "",
-            ". Your nodes will keep a copy; you keep editing it there."),
-          h("div", { class: "actions" }, act("Copy from your primary", () => add(name, "copy", str(r.primary)))), manual(name, "copy", str(r.primary)));
-          break;
-        case "primary_within":
-          out.push(found(name, "A name inside ", h("span", { class: "mono" }, str(r.parent)), ", which your primary at ", h("span", { class: "mono" }, str(r.primary)),
-            " has. Copy that zone, and this name comes with it."),
-          h("div", { class: "actions" }, act(`Copy ${str(r.parent)} from your primary`, () => add(str(r.parent), "copy", str(r.primary)))), manual(name, "host", str(r.primary)));
-          break;
-        default:
-          out.push(found(name, arr(r.tried).length ? "Your primary doesn't have this zone, " : "", arr(r.tried).length ? "so espDNS can be its primary. " : "No primary is set up to ask, so espDNS can be its primary. ",
-            "It starts with the records every zone needs; you add yours next."),
-          h("div", { class: "actions" }, act("Host it here", () => add(name, "host"))), manual(name, "host"));
-      }
-      if (st.err) out.push(h("p", { class: "hint bad", role: "status" }, st.err));
-      if (st.adding) out.push(h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), "Adding it to the changes to apply…"));
-      else if (r.found !== "zone" && r.found !== "within") out.push(h("p", { class: "hint" }, "It's added to \"changes to apply\"."));
-    }
-    list.replaceChildren(...out);
-  }
-
-  return { mount };
-})();
-
-// ---- changing zones ---------------------------------------------------------------------
-
-// targets are the node configs a new zone goes into: those the nodes in settings.json run
-// (every node serves the same zones), else every config.
-function targets() {
-  const cs = arr(data.cfgs);
-  const listed = cs.filter(c => c.listed);
-  return listed.length ? listed : cs;
-}
-
-// fromDefaults are the zones of a kind the nodes serve from their firmware's defaults (no
-// config lists them): a config that lists none yet starts from them, so adding one zone
-// doesn't take the others away.
-function fromDefaults(kind) {
-  return arr(obj(data.inv).zones).filter(z => z.kind === kind && !arr(z.configs).length);
-}
-
-// editConfigs adds one pending change per config f changes (f returns false: unchanged),
-// each on the config as the pending changes make it.
-async function editConfigs(cs, summary, f) {
-  if (!cs.length) throw new Error("No node config holds this yet: add a node first.");
-  const todo = [];
-  for (const c of cs) {
-    if (!c.cfg) throw new Error(`${c.name} can't be read as a node config: fix it first.`);
-    const cfg = JSON.parse(JSON.stringify(c.cfg));
-    if (f(cfg, c) === false) continue;
-    todo.push([c, cfg]);
-  }
-  for (const [c, cfg] of todo) {
-    await post("api/changes", { kind: "config", name: c.name, text: `${JSON.stringify(cfg, null, 2)}\n`, hash: c.hash,
-      summary: cs.length > 1 ? `${summary} · ${c.name.replace(/\.json$/, "")}` : summary });
-  }
-  await after();
-  return todo.length;
-}
+// ---- + Add zone, and changing zones -----------------------------------------------------
 
 // after reads what the changes made, and draws it.
 async function after() {
@@ -551,77 +354,24 @@ async function after() {
   await readInventory();
 }
 
-// addZone adds name the way it lives: copied from the primary at ip, hosted here, or
-// forwarded to ip.
-async function addZone(name, kind, ip) {
-  name = canon(name);
-  if (kind === "host") {
-    const t = await getJSON(`api/zones/${enc(fileOf(name))}/new`);
-    await post("api/changes", { kind: "zone", name: fileOf(name), text: str(t.text), hash: "", summary: `Add zone ${name}: hosted here` });
-    await after();
-    toast(`Zone ${name} is waiting to apply: add its records`);
-    return;
-  }
-  await readConfigs();
-  if (kind === "copy" && !IPV4.test(ip)) {
-    // A node copies from an IPv4 address.
-    const a = primaryIP();
-    if (!a) throw new Error(`Your nodes copy from an IPv4 address, and ${ip || "your primary"} isn't one: use "Set it up myself" and type your primary's address.`);
-    ip = a;
-  }
-  if (kind === "copy") {
-    const n = await editConfigs(targets(), `Add zone ${name}: copied from ${ip}`, cfg => {
-      const s = cfg.secondary = obj(cfg.secondary);
-      if (s.primary && s.primary !== ip) throw new Error(`Your nodes copy their zones from ${s.primary}: a node copies from one primary, so ${name} can't come from ${ip}.`);
-      if (!Array.isArray(s.zones)) s.zones = fromDefaults("secondary").map(z => z.name);
-      if (s.zones.map(canon).includes(name)) return false;
-      s.primary = ip;
-      s.zones.push(name);
-      return true;
-    });
-    await keepInSettings(name, ip, true);
-    toast(n ? `Zone ${name} is waiting to apply: your nodes copy it from ${ip}` : `Your nodes already copy ${name}`);
-    return;
-  }
-  const n = await editConfigs(targets(), `Add zone ${name}: forwarded to ${ip}`, cfg => {
-    if (!Array.isArray(cfg.forward_zones)) cfg.forward_zones = fromDefaults("forward").map(z => ({ zone: z.name, forwarder: arr(z.forwarders)[0] })).filter(z => z.forwarder);
-    if (cfg.forward_zones.some(z => canon(z.zone) === name)) return false;
-    cfg.forward_zones.push({ zone: name, forwarder: ip });
-    return true;
-  });
-  toast(n ? `Zone ${name} is waiting to apply: its queries go to ${ip}` : `Your nodes already forward ${name}`);
-}
+// editor changes the zones through pending changes (addzone.js): a zone added to or taken
+// out of every listed node's config, on the configs as the pending changes make them.
+const editor = zoneEditor({ cfgs: () => data.cfgs, inv: () => data.inv, readConfigs, after });
 
-// holding are the configs (as the pending changes make them) that hold zone name of kind.
-function holding(name, kind) {
-  return arr(data.cfgs).filter(c => kind === "secondary"
-    ? arr(obj(obj(c.cfg).secondary).zones).some(z => canon(z) === name)
-    : arr(obj(c.cfg).forward_zones).some(z => canon(obj(z).zone) === name));
-}
-
-async function removeConfigZone(name, kind) {
-  await readConfigs();
-  await editConfigs(holding(name, kind), kind === "secondary" ? `Remove zone ${name}: stop copying it` : `Remove zone ${name}: stop forwarding it`, cfg => {
-    if (kind === "secondary") cfg.secondary.zones = cfg.secondary.zones.filter(z => canon(z) !== name);
-    else cfg.forward_zones = cfg.forward_zones.filter(z => canon(z.zone) !== name);
-  });
-  if (kind === "secondary") await keepInSettings(name, "", false);
-}
-
-// keepInSettings keeps settings.json's zones to copy from the primary (a new node starts
-// with them) as the nodes have them: name added when they copy it from the primary at ip
-// (its address set to ip when none is), or taken out.
-async function keepInSettings(name, ip, add) {
-  const st = await getJSON("api/settings");
-  const p = obj(obj(st.settings).primary), zs = arr(p.zones).map(str);
-  if ((add && str(p.address) && str(p.address) !== ip) || add === zs.includes(name)) return;
-  const np = { ...p, address: str(p.address) || ip, zones: add ? [...zs, name] : zs.filter(z => z !== name) };
-  await post("api/settings", { settings: { ...obj(st.settings), primary: np }, version: str(st.version) });
-}
+// adder is + Add zone (addzone.js), in the list's head: the button becomes a box; a zone
+// typed is looked up where it lives, with what to do about it right under it. A zone hosted
+// here opens its page.
+const addBox = h("div", { id: "add-zone" });
+const adder = addZone(addBox, {
+  editor,
+  canWrite: () => data.canWrite,
+  primaryIP,
+  added: (name, kind) => { if (kind === "host") location.hash = `#zone=${enc(name)}`; },
+});
 
 async function setForwarder(name, ip) {
   await readConfigs();
-  return editConfigs(holding(name, "forward"), `Edit zone ${name}: forward to ${ip}`, cfg => {
+  return editor.editConfigs(editor.holding(name, "forward"), `Edit zone ${name}: forward to ${ip}`, cfg => {
     let changed = false;
     for (const z of cfg.forward_zones) if (canon(z.zone) === name && z.forwarder !== ip) { z.forwarder = ip; changed = true; }
     return changed;
@@ -656,9 +406,9 @@ function undoAsk(name, done) {
       yes.disabled = true;
       try { await undo(name); p.close(); done(); } catch (e) { err.textContent = said(e.message); yes.disabled = false; reject(e); }
     });
-    p.body.append(h("p", {}, `Changes made after these, to the same node configs, can't stay without them. Undo takes these too:`),
+    p.body.append(h("p", {}, `Later changes to the same node configs go with them:`),
       h("ul", { class: "lines" }, more.map(x => h("li", {}, str(x.summary)))),
-      h("p", { class: "hint" }, "To keep them, Cancel, and change the zone back instead."), err);
+      h("p", { class: "hint" }, "To keep them, Cancel and change the zone back instead."), err);
     p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Cancel"), yes);
   });
 }
@@ -729,7 +479,7 @@ function refreshZoneHead() {
     c.pend.replaceChildren(h("div", { class: "panel pad stack accent", id: "pending" },
       h("b", {}, z.pending === "add" ? "Waiting to apply: this zone is added with the next Apply." : z.pending === "remove" ? "Waiting to apply: this zone is removed with the next Apply." : "Waiting to apply"),
       h("ul", { class: "lines" }, cs.map(x => h("li", {}, str(x.summary), x.effect ? h("span", { class: "hint" }, ` · ${str(x.effect)}`) : null))),
-      h("div", { class: "row" }, b, h("span", { class: "hint" }, "Apply sends them from \"changes to apply\" at the top."), msg)));
+      h("div", { class: "row" }, b, h("span", { class: "hint" }, "Apply them from \"changes to apply\" at the top."), msg)));
   } else c.pend.replaceChildren();
 
   problemBox(z, c.problem);
@@ -750,17 +500,17 @@ function problemBox(z, box) {
   if (box.dataset.state === z.state && box.firstChild) return;
   box.dataset.state = z.state;
   const alert = (...k) => h("div", { class: "alert-box", id: "problem" }, ...k);
-  if (z.state === "error") { box.replaceChildren(alert(h("b", {}, "The zone file doesn't pass its checks."), h("p", {}, z.text), h("p", { class: "hint" }, "Fix it under Advanced: the file. The nodes keep serving the version they have."))); return; }
-  if (z.state === "no_file") { box.replaceChildren(alert(h("b", {}, "The nodes serve this zone, but there's no file for it here."), h("p", { class: "hint" }, "The next change to the hosted zones takes it off the nodes, unless a file for it is added here first."))); return; }
+  if (z.state === "error") { box.replaceChildren(alert(h("b", {}, "The zone file doesn't pass its checks."), h("p", {}, z.text), h("p", { class: "hint" }, "Fix the file under Advanced. The nodes keep the version they have."))); return; }
+  if (z.state === "no_file") { box.replaceChildren(alert(h("b", {}, "The nodes serve this zone, but there's no file for it here."), h("p", { class: "hint" }, "The next change to the hosted zones takes it off the nodes unless you add a file first."))); return; }
   if (z.kind !== "secondary") { box.replaceChildren(alert(h("b", {}, "No node serves this zone yet."), h("p", { class: "hint" }, "It goes to the nodes with the next Apply."))); return; }
   // A copied zone the nodes can't copy: usually the primary doesn't allow zone transfers
   // from their network.
   const nets = arr(obj(obj(data.inv).primary).allows).map(str);
   const out = uncovered(listedNodes().map(n => hostOnly(n.addr)), nets);
   box.replaceChildren(alert(h("b", {}, z.state === "expired" ? "Your nodes can't copy this zone from your primary." : "Your nodes haven't copied this zone yet."),
-    h("p", {}, "They keep answering from the copy they have, if any. Usually your primary doesn't allow zone transfers from their network."),
+    h("p", {}, "They keep answering from the copy they have, if any."),
     h("p", { class: "hint" }, out.length
-      ? `${out.join(", ")} ${out.length === 1 ? "is" : "are"} in none of the networks you said your primary allows: allow ${[...new Set(out.map(net24))].join(", ")} there (zone transfers, for ${z.name}), and add it under Zone primary on Zones.`
+      ? `${out.join(", ")} ${out.length === 1 ? "is" : "are"} in none of the networks your primary allows: allow zone transfers from ${[...new Set(out.map(net24))].join(", ")} there, then add it under Zone primary.`
       : `On your primary, check that ${z.name} allows zone transfers from your nodes' networks${nets.length ? ` (${nets.join(", ")})` : ""}, and that it serves the zone.`)));
 }
 
@@ -802,11 +552,11 @@ function readFailed(e, primary, copied) {
     case "timeout":
     case "unreachable":
       head = `The controller can't reach your primary DNS server (${p}): ${b.kind === "timeout" ? "it didn't answer in time" : "it didn't take the connection"}.`;
-      more = [`${missing} Check that your primary is up and that this computer can reach it, then read again.`];
+      more = [`${missing} Check that your primary is up and reachable from this computer, then read again.`];
       break;
     case "unknown":
-      head = `Your primary DNS server (${p}) doesn't serve this zone: it isn't authoritative for it, or doesn't know it.`;
-      more = ["Check the zone's name on your primary, and that it's the right primary for this zone."];
+      head = `Your primary DNS server (${p}) doesn't serve this zone.`;
+      more = ["Check the zone's name, and that this is the right primary for it."];
       break;
     case "failed":
       head = `Your primary DNS server (${p}) didn't send this zone to the controller.`;
@@ -822,12 +572,12 @@ function readFailed(e, primary, copied) {
 function secondaryBody(z) {
   const body = zoneCtx.body;
   const primary = z.primary || primaryAddr();
-  const recs = h("div", { class: "stack" }, h("p", { class: "hint" }, z.pending === "add" ? "Its records show here once your nodes copy it, after Apply." : "Reading its records from your primary…"));
+  const recs = h("div", { class: "stack" }, h("p", { class: "hint" }, z.pending === "add" ? "Its records show here after Apply, once your nodes copy it." : "Reading its records from your primary…"));
   const again = h("button", { class: "btn small", type: "button" }, "Read again");
   const stop = h("button", { class: "btn danger", type: "button", id: "remove-zone", disabled: !data.canWrite || z.pending === "remove" }, "Stop copying this zone");
   const msg = h("span", { class: "hint bad", role: "status" });
-  stop.addEventListener("click", () => confirmRemove(z, "Stop copying", `Your nodes stop answering for ${z.name} and its names, and ask the internet instead. Your primary keeps the zone.`,
-    () => removeConfigZone(z.name, "secondary"), msg));
+  stop.addEventListener("click", () => confirmRemove(z, "Stop copying", `Your nodes stop answering for ${z.name} and ask the internet instead. Your primary keeps the zone.`,
+    () => editor.removeConfigZone(z.name, "secondary"), msg));
   const load = async () => {
     if (z.pending === "add") return;
     again.disabled = true;
@@ -860,7 +610,7 @@ function confirmRemove(z, verb, text, go, msg) {
     yes.disabled = true;
     try { await go(); p.close(); toast(`${verb}: ${z.name} is waiting to apply`); } catch (e) { err.textContent = said(e.message); yes.disabled = false; if (msg) msg.textContent = said(e.message); }
   });
-  p.body.append(h("p", {}, text), h("p", { class: "hint" }, "It's added to \"changes to apply\": nothing changes on the nodes until Apply."), err);
+  p.body.append(h("p", {}, text), h("p", { class: "hint" }, "Nothing changes on the nodes until Apply."), err);
   p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Cancel"), yes);
 }
 
@@ -873,7 +623,7 @@ function forwardBody(z) {
   const msg = h("span", { class: "hint", role: "status" });
   save.addEventListener("click", async () => {
     const ip = input.value.trim();
-    if (!IPV4.test(ip)) { msg.className = "hint bad"; msg.textContent = "Type the server's IPv4 address: four numbers with dots between them."; return; }
+    if (!IPV4.test(ip)) { msg.className = "hint bad"; msg.textContent = "Type the server's IPv4 address, like 192.0.2.53."; return; }
     save.disabled = true;
     try {
       const n = await setForwarder(z.name, ip);
@@ -885,11 +635,11 @@ function forwardBody(z) {
   });
   const stop = h("button", { class: "btn danger", type: "button", id: "remove-zone", disabled: !data.canWrite || z.pending === "remove" }, "Stop forwarding");
   stop.addEventListener("click", () => confirmRemove(z, "Stop forwarding", `Your nodes stop sending ${z.name}'s queries to ${to} and ask the internet instead.`,
-    () => removeConfigZone(z.name, "forward")));
+    () => editor.removeConfigZone(z.name, "forward")));
   zoneCtx.body.replaceChildren(section("Forwarding", null,
-    h("p", {}, "Queries for ", h("span", { class: "mono" }, z.name), " and every name under it go to ", h("span", { class: "mono" }, to || "–"), ", a DNS server that knows this domain, such as a VPN's or an office's."),
+    h("p", {}, "Queries for ", h("span", { class: "mono" }, z.name), " and every name under it go to ", h("span", { class: "mono" }, to || "–"), ", a DNS server that knows this domain."),
     h("details", { class: "ex", id: "fwd-row" }, h("summary", {}, h("b", {}, "Send its queries to"), h("span", { class: "val mono" }, to)),
-      h("div", { class: "exb" }, h("label", { class: "f" }, h("span", {}, "Server's address"), input, h("span", { class: "hint" }, "Its IPv4 address. Live on the nodes after Apply, no restart.")),
+      h("div", { class: "exb" }, h("label", { class: "f" }, h("span", {}, "Server's address"), input, h("span", { class: "hint" }, "An IPv4 address. Live after Apply, no restart.")),
         h("div", { class: "row" }, save, msg)))),
   h("div", { class: "row" }, stop));
 }
@@ -925,8 +675,8 @@ async function hostedBody(z) {
     h("button", { class: "btn small", type: "button", "aria-label": `Edit ${rel(r.owner, z.name)} ${r.type}`, onclick: () => recordPanel(i) }, "Edit"),
     r.type === "SOA" ? null : h("button", { class: "btn small", type: "button", "aria-label": `Delete ${rel(r.owner, z.name)} ${r.type}`, onclick: () => deleteRecord(i) }, "Delete"),
   ] : null) : h("p", { class: "hint" }, cur.error ? `The file doesn't pass its checks: ${cur.error}` : "No records.");
-  const hint = cur.more ? `It has ${cur.more} more records than shown: edit it as a file, under Advanced.`
-    : cur.error ? "Fix the file under Advanced." : "Every node serves the same records. A change waits in \"changes to apply\"; its version is raised for you.";
+  const hint = cur.more ? `${cur.more} more records aren't shown: edit the file under Advanced.`
+    : cur.error ? "Fix the file under Advanced." : "Changes wait in \"changes to apply\"; the zone's version is raised for you.";
   body.replaceChildren(section("Records", null, recs, h("p", { class: "hint" }, hint)), advanced(z, cur));
 }
 
@@ -949,7 +699,7 @@ async function saveZone(text, summary) {
 
 const TYPES = ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV", "CAA", "PTR"];
 const VALUEHINT = {
-  A: "An IPv4 address, like 192.0.2.10.", AAAA: "An IPv6 address.", CNAME: "Another name: one without a final dot is under this zone.",
+  A: "An IPv4 address, like 192.0.2.10.", AAAA: "An IPv6 address.", CNAME: "Another name; without a final dot, it's under this zone.",
   TXT: "Text; quotes are added for you.", MX: "Its preference and mail server, like 10 mail.", NS: "A name server's name.",
   SRV: "Priority, weight, port and target, like 0 5 5060 sip.", CAA: "Flags, tag and value, like 0 issue \"letsencrypt.org\".", PTR: "The name it points to.", SOA: "The zone's SOA: its version is raised for you.",
 };
@@ -973,7 +723,7 @@ function recordPanel(i) {
   go.addEventListener("click", async () => {
     err.textContent = "";
     let owner = name.value.trim() || "@";
-    if (!/^(@|\*|[A-Za-z0-9_*-]+(\.[A-Za-z0-9_-]+)*\.?)$/.test(owner)) { err.textContent = "The name: letters, digits, '-' and '_', with dots between labels; @ for the zone itself."; return; }
+    if (!/^(@|\*|[A-Za-z0-9_*-]+(\.[A-Za-z0-9_-]+)*\.?)$/.test(owner)) { err.textContent = "Letters, digits, '-' and '_', with dots between labels; @ for the zone itself."; return; }
     let v = value.value.trim();
     if (!v) { err.textContent = "The value is empty."; return; }
     const t = type.value;
@@ -1001,11 +751,11 @@ function recordPanel(i) {
     } catch (e) { err.textContent = said(e.message); go.disabled = false; }
   });
   p.body.append(
-    h("label", { class: "f" }, h("span", {}, "Name"), name, h("span", { class: "hint" }, `A name under ${zone}, like nas for nas.${zone}; @ for ${zone} itself.`)),
+    h("label", { class: "f" }, h("span", {}, "Name"), name, h("span", { class: "hint" }, `nas for nas.${zone}; @ for the zone itself.`)),
     h("label", { class: "f" }, h("span", {}, "Type"), type),
     h("label", { class: "f" }, h("span", {}, "Value"), value, vhint),
     h("label", { class: "f" }, h("span", {}, "TTL, seconds"), ttl, h("span", { class: "hint" }, "How long others may keep the answer. Empty: the zone's default.")),
-    h("p", { class: "hint" }, "It's added to \"changes to apply\": live on every node after Apply, no restart."), err);
+    h("p", { class: "hint" }, "Live on every node after Apply, no restart."), err);
   p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Cancel"), go);
   name.focus();
 }
@@ -1024,7 +774,7 @@ function deleteRecord(i) {
     } catch (e) { err.textContent = said(e.message); yes.disabled = false; }
   });
   p.body.append(h("p", {}, h("span", { class: "mono" }, `${canon(r.owner)} ${r.type} ${str(r.data)}`)),
-    h("p", { class: "hint" }, "It's added to \"changes to apply\". The file is written plainly from its records: comments in it aren't kept (edit it under Advanced to keep them)."), err);
+    h("p", { class: "hint" }, "The file is rewritten from its records, so its comments are lost. To keep them, edit the file under Advanced."), err);
   p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Cancel"), yes);
 }
 
@@ -1051,7 +801,7 @@ function advanced(z, cur) {
     catch (e) { out.replaceChildren(h("p", { class: "hint bad" }, said(e.message))); save.disabled = false; }
   });
   const fileRow = h("details", { class: "ex", id: "zfile-row" }, h("summary", {}, h("b", {}, "The zone file"), h("span", { class: "val mono" }, cur.file)),
-    h("div", { class: "exb" }, cur.partial ? h("p", { class: "hint" }, "It's too big to show whole here: edit it in the controller's data directory.") : null, ta,
+    h("div", { class: "exb" }, cur.partial ? h("p", { class: "hint" }, "Too big to show whole: edit it in the controller's data directory.") : null, ta,
       h("div", { class: "row" }, check, save, h("span", { class: "hint" }, "Its version is raised for you.")), out));
 
   const vers = h("div", { class: "vers" }, h("p", { class: "hint" }, "Reading…"));
@@ -1085,7 +835,7 @@ function advanced(z, cur) {
       undoAsk(z.name, () => { toast(`Zone ${z.name} won't be added`); location.hash = ""; }).catch(e => toast(said(e.message)));
       return;
     }
-    confirmRemove(z, "Delete", `Your nodes stop answering for ${z.name} and its names. The file is kept in its history, so it can be put back.`,
+    confirmRemove(z, "Delete", `Your nodes stop answering for ${z.name}. The file stays in its history, so you can put it back.`,
       async () => {
         await post("api/changes", { kind: "zone", name: cur.file, delete: true, hash: cur.hash, summary: `Remove zone ${z.name}` });
         zoneCtx.key = "";

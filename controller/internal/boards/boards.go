@@ -162,38 +162,50 @@ func Parse(b []byte) (Board, error) {
 // Load reads every *.json in the catalog directory (shipped boards) and the custom directory
 // (data/boards). A custom board with a shipped board's name is left out, with an error entry.
 func Load(catalogDir, customDir string) ([]Entry, error) {
-	var out []Entry
 	seen := map[string]bool{}
-	for _, src := range []struct{ dir, name string }{{catalogDir, "catalog"}, {customDir, "custom"}} {
-		if src.dir == "" {
-			continue
-		}
-		files, err := filepath.Glob(filepath.Join(src.dir, "*.json"))
+	out, err := loadDir(catalogDir, "catalog", seen)
+	if err != nil {
+		return nil, err
+	}
+	custom, err := loadDir(customDir, "custom", seen)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, custom...), nil
+}
+
+// loadDir reads every *.json in dir (none for "") as source boards, in file name order. A
+// board whose name is in seen gets an error entry; seen takes the names read.
+func loadDir(dir, source string, seen map[string]bool) ([]Entry, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	var out []Entry
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
 		if err != nil {
 			return nil, err
 		}
-		sort.Strings(files)
-		for _, f := range files {
-			raw, err := os.ReadFile(f)
-			if err != nil {
-				return nil, err
+		e := Entry{Source: source, raw: raw}
+		bd, err := Parse(raw)
+		e.Board = bd
+		if err != nil {
+			e.Board.Name = strings.TrimSuffix(filepath.Base(f), ".json")
+			e.Errors = []string{fmt.Sprintf("%s: %v", filepath.Base(f), err)}
+			e.Warnings = []string{}
+		} else {
+			e.Errors, e.Warnings = Check(bd)
+			if seen[bd.Name] {
+				e.Errors = append(e.Errors, fmt.Sprintf("another board is already called %s", bd.Name))
 			}
-			e := Entry{Source: src.name, raw: raw}
-			bd, err := Parse(raw)
-			e.Board = bd
-			if err != nil {
-				e.Board.Name = strings.TrimSuffix(filepath.Base(f), ".json")
-				e.Errors = []string{fmt.Sprintf("%s: %v", filepath.Base(f), err)}
-				e.Warnings = []string{}
-			} else {
-				e.Errors, e.Warnings = Check(bd)
-				if seen[bd.Name] {
-					e.Errors = append(e.Errors, fmt.Sprintf("another board is already called %s", bd.Name))
-				}
-			}
-			seen[e.Board.Name] = true
-			out = append(out, e)
 		}
+		seen[e.Board.Name] = true
+		out = append(out, e)
 	}
 	return out, nil
 }

@@ -6,7 +6,7 @@ the big picture is in [Architecture](architecture.md#blocking). espDNS is alpha 
 
 ## How it works
 
-The **controller** downloads and compiles your lists into one compact file, signs it, and
+The controller downloads and compiles your lists into one compact file, signs it, and
 rolls it out one node at a time, canary first. Nodes never download lists. Each keeps the
 list it runs and the one before, and keeps blocking with the controller off.
 
@@ -25,11 +25,11 @@ need to be logged in to change lists or see the query log.
 
 For each query, a node checks, in order:
 
-1. **Its own zones.** Hosted and secondary zones are never blocked.
-2. **The overrides.** Your own short block and allow list. They apply even while paused.
-3. **Pause.** If blocking is paused, nothing else is blocked.
-4. **The blocklist.** Its block entries, then its allow entries.
-5. **Forwarding.** Names that pass go to the forwarders. CNAME targets in the answer are
+1. Its own zones: hosted and secondary zones are never blocked.
+2. The overrides: your own short block and allow list. They apply even while paused.
+3. Pause: if blocking is paused, nothing else is blocked.
+4. The blocklist: its block entries, then its allow entries.
+5. Forwarding: names that pass go to the forwarders. CNAME targets in the answer are
    checked against the blocklist too, so a tracker hiding behind a first-party name is caught.
 
 A blocked name gets `0.0.0.0` for A, `::` for AAAA, and an empty answer (NODATA) for other
@@ -50,8 +50,8 @@ A list is a named definition on the Blocklists page. It compiles into one file,
 
 ### Source formats
 
-Every source names its format first, as `kind:` before the file or URL. The controller never
-guesses.
+Every source names its format first, as `kind:` before the file or URL. The controller
+doesn't try to detect it.
 
 | Kind | What a line looks like | What it blocks |
 |---|---|---|
@@ -61,7 +61,7 @@ guesses.
 | `adblock` | `\|\|ads.example.com^` | The name and all its subdomains. `@@\|\|name^` allows them |
 | `rpz` | A Response Policy Zone, as a master file | See below |
 
-An **RPZ** is read the way BIND or Technitium publish it. `CNAME .`, `CNAME *.` and
+An RPZ is read the way BIND or Technitium publish it. `CNAME .`, `CNAME *.` and
 `CNAME rpz-drop.` block a name; `CNAME rpz-passthru.` allows it; `*.name` covers the name and
 its subdomains. What a block or allow list can't express is skipped and counted: local data
 (A, AAAA, TXT records), `rpz-tcp-only.`, and IP, client IP and name server triggers.
@@ -70,30 +70,30 @@ The compiler also:
 
 - drops public suffixes and top-level domains (such as `com` or `co.uk`);
 - removes duplicates and entries already covered by a parent entry;
-- never blocks a name on the **popular names** list by accident (a Tranco CSV with
+- never blocks a name on the popular names list by accident (a Tranco CSV with
   `rank,name` lines, or one name per line);
-- refuses a build that blocks any name on the **must resolve** list.
+- refuses a build that blocks any name on the must resolve list.
 
 ### Where a source comes from
 
-**A file** lives in the data directory under `blocking/sources/`. Create and edit them on the
-Blocklists page under **Source files** (**New source file**), or upload one with **Replace
-from a file**. Names end in `.txt`, `.zone`, `.rpz`, `.csv`, `.hosts` or `.list`. Each save
-keeps the previous version. Use files for your own lists and allow lists.
+A file source lives in the data directory under `blocking/sources/`. Create and edit them
+on the Blocklists page under **Source files** (**New source file**), or upload one with
+**Replace from a file**. Names end in `.txt`, `.zone`, `.rpz`, `.csv`, `.hosts` or
+`.list`. Each save keeps the previous version. Use files for your own lists and allow lists.
 
-**A URL** is fetched at each compile and checked for new versions on a schedule
+A URL source is fetched at each compile and checked for new versions on a schedule
 ([Keep the lists up to date](#keep-the-lists-up-to-date)):
 
-- It must be **https**. Plain http is refused, and so is a redirect from https to http.
-- It must be on a **public address**. Loopback, private, link-local, shared and reserved
+- It must be https. Plain http is refused, and so is a redirect from https to http.
+- It must be on a public address. Loopback, private, link-local, shared and reserved
   addresses are refused, checked at each connect and after every redirect, so a name that
   later points inside your network is refused too.
 - A download can be up to 512 MiB.
 
 ### Lists hosted inside your network
 
-To fetch a list from a server on your own network, put that host on the **internal
-allowlist** in `settings.json` in the data directory (`controller/data/settings.json`):
+To fetch a list from a server on your own network, put that host on the internal
+allowlist in `settings.json` in the data directory (`controller/data/settings.json`):
 
 ```json
 "internal_sources": ["192.0.2.10", "lists.home.arpa"]
@@ -129,9 +129,9 @@ command line.
 
 ### The size-change check
 
-A compile is **refused**, and nothing written, when compared with the list's previous build:
+A compile is refused, and nothing written, when compared with the list's previous build:
 
-- the blocked or allowed entries change by more than **20%** and by more than **100**
+- the blocked or allowed entries change by more than 20% and by more than 100
   entries, or
 - the file size changes by more than 20% (between builds of the same format).
 
@@ -177,14 +177,14 @@ A check is cheap: the controller sends `If-None-Match` and `If-Modified-Since`, 
 compares a download's hash with what the nodes run. A changed list shows in Recent changes
 as **Blocklists updated to their new versions**.
 
-- **Refused by the size-change check:** nothing is sent, the page says so in red with the
-  numbers, and Recent changes lists **Blocklist update refused**. A big shrink is often a
-  failed download; the schedule only tries a newer version. If the change is expected, click
-  **Send it anyway** to take it once.
-- **A check that failed** (server down, refused address): the page says why, and it's
-  retried within an hour.
-- **A change waiting to apply:** a list your pending changes edit isn't refreshed on its
-  own; applying your change downloads it. A refresh never sends your pending changes.
+- If the size-change check refuses a new version, nothing is sent, the page says so in red
+  with the numbers, and Recent changes lists **Blocklist update refused**. A big shrink is
+  often a failed download; the schedule only tries a newer version. If the change is
+  expected, click **Send it anyway** to take it once.
+- If a check fails (server down, refused address), the page says why, and it's retried
+  within an hour.
+- A list your pending changes edit isn't refreshed on its own; applying your change
+  downloads it. A refresh never sends your pending changes.
 
 Check times survive a restart (`blocking/refresh.json`), and each list gets a little jitter
 (up to a twentieth of the schedule, at most 30 minutes) so the flock doesn't all ask at once.
@@ -208,7 +208,7 @@ Each node in turn takes the list, answers real test queries (a local name, a for
 the must-block and must-resolve names), and is watched for the soak time: still on the new
 list, no reboot, no jump in failed or dropped queries. The last node is soaked too.
 
-**If any node fails**, every node that took the list goes back to its previous copy, failed
+If any node fails, every node that took the list goes back to its previous copy, failed
 node first. Nodes not yet changed aren't touched. If a node can't go back, the page names it
 and says what to do next.
 
@@ -224,8 +224,8 @@ docker compose run --rm -T --entrypoint /espdns espdns-controller \
 
 ## Overrides
 
-Your own small block and allow list, checked before the blocklist. Use them to fix a wrong
-block or add a quick one.
+Overrides are your own small block and allow list, checked before the blocklist. Use them to
+fix a wrong block or add a quick one.
 
 - `overrides.txt`: names to block.
 - `overrides-allow.txt`: names to allow, even if a list blocks them.
@@ -278,8 +278,7 @@ refused by the node, and the dry run says so.
 
 ## The query log
 
-Each node keeps recent queries in its own memory; the size comes from the board. A board
-without PSRAM has no query log.
+Each node keeps recent queries in its own memory; the size comes from the board.
 
 Each entry has the time, client, query type and name, result, response code and answer
 time. The result shows which rule decided a block: `blocked(list)`,
@@ -309,7 +308,7 @@ Open **Query log** in the dashboard. Filter by node, client, name, result and ty
 follows new queries live; **Pause** stops the updates. It needs a login, because it shows
 who asked for what.
 
-The controller keeps the newest 20,000 entries across all nodes, **in memory only**. A
+The controller keeps the newest 20,000 entries across all nodes, in memory only. A
 restart starts the buffer over.
 
 To read one node's log directly:
@@ -328,8 +327,8 @@ many were blocked, answer time (typical, and the slowest answers' line), and fai
 Above them are the most-asked sites and devices (login needed, like the log). The controller
 reads each node every 10 seconds and keeps the hour in memory.
 
-Each node also serves its counters at `http://<node>/metrics` in Prometheus text format, no
-login, so your own monitoring works with the controller on or off. For one node's summary
+Each node also serves its counters at `http://<node>/metrics` in Prometheus text format with
+no login, so your own monitoring works with the controller on or off. For one node's summary
 (`-raw` prints them as the node sends them):
 
 ```sh

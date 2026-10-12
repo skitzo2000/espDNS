@@ -293,8 +293,12 @@ func Check(b Board) (errs, warns []string) {
 		}
 	}
 
-	if b.PSRAMMB != nil && (*b.PSRAMMB < 0 || *b.PSRAMMB > 64) {
-		e("psram_mb: 0-64")
+	// PSRAM is required: without it the DNS service's buffers don't fit internal RAM, and
+	// 8 MB is the smallest size tested (docs/hardware.md, What a board needs).
+	if b.PSRAMMB != nil && *b.PSRAMMB > 64 {
+		e("psram_mb: 8-64")
+	} else if b.PSRAMMB != nil && *b.PSRAMMB < 8 {
+		e("psram_mb: espDNS needs at least 8 MB of PSRAM")
 	}
 	// The memory plan's values (internal/memplan), as the firmware checks them.
 	if m := b.Memory; m != nil {

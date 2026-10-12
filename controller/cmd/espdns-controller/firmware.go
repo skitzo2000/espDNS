@@ -14,6 +14,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/image"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
+	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -24,8 +25,10 @@ import (
 //	GET  /api/firmware   the imported chip images, each with where it came from ("project
 //	                     release v0.0.3", "your build v0.0.3", "your build"), and where a
 //	                     release is fetched from
-//	POST /api/jobs {"kind": "fetch-release", "params": {"version": "v0.0.3"}}
-//	                     the job: espdns release fetch (version optional: the newest)
+//	POST /api/jobs {"kind": "fetch-release", "params": {"version": "v0.0.3", "images": ["esp32s3-eth"]}}
+//	                     the job: espdns release fetch (version optional: the newest;
+//	                     images optional: the chip images the listed nodes need,
+//	                     rolling.NeededImages)
 //
 // The read is open like /api/images (nothing it reads is a secret); the job needs a login,
 // as every job.
@@ -88,17 +91,23 @@ func (f firmwareServer) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"images": out, "release_url": forge, "project_key": fp})
 }
 
-// fetchKind is the job "fetch-release": a published release's chip images downloaded,
-// checked with the project's key and imported, as espdns release fetch (the runner holds
-// the fleet lock, as for every job).
+// fetchKind is the job "fetch-release": the chip images needed from a published release
+// downloaded, checked with the project's key and imported, as espdns release fetch (the
+// runner holds the fleet lock, as for every job).
 type fetchKind struct {
 	dataDir string
-	forge   string       // as firmwareServer's
-	client  *http.Client // nil: dist.Fetch's
+	forge   string              // as firmwareServer's
+	catalog string              // the board catalog: the chip image each node's board runs
+	nodes   func() []nodes.Node // the nodes as last polled; nil: none
+	client  *http.Client        // nil: dist.Fetch's
 }
 
 type fetchParams struct {
 	Version string `json:"version,omitempty"`
+	// Images are the chip images to get; none: those needed (fetchKind.needed).
+	Images []string `json:"images,omitempty"`
+	// unknown: Images are those needed, and a listed node had no status (the job says so)
+	unknown bool
 }
 
 // fetchResult is what the job imported.
@@ -122,11 +131,21 @@ func (k fetchKind) kind(raw json.RawMessage) (jobs.Func, error) {
 	if v := strings.TrimPrefix(p.Version, "v"); p.Version != "" && !validVersion(v) {
 		return nil, fmt.Errorf(`params: "version" %q: v and MAJOR.MINOR.PATCH`, p.Version)
 	}
+	for _, img := range p.Images {
+		if !dist.ImageName(img) {
+			return nil, fmt.Errorf(`params: "images": %q is not a chip image's name (esp32s3-eth)`, img)
+		}
+	}
 	if _, err := k.projectKey(); err != nil {
 		return nil, err
 	}
 	if _, err := releaseFrom(k.dataDir, k.forge); err != nil {
 		return nil, err
+	}
+	if len(p.Images) == 0 {
+		if p.Images, p.unknown = k.needed(); len(p.Images) == 0 {
+			return nil, errors.New(rolling.NothingToGet)
+		}
 	}
 	return func(ctx context.Context, run *jobs.Run) (any, error) { return k.run(ctx, run, p) }, nil
 }
@@ -142,6 +161,28 @@ func validVersion(v string) bool {
 		}
 	}
 	return true
+}
+
+// needed are the chip images the controller needs (rolling.NeededImages): its listed nodes'
+// (settings.json's, by their last /status); with those already imported if one of them has
+// no status yet (unknown).
+func (k fetchKind) needed() (imgs []string, unknown bool) {
+	var sts []release.NodeStatus
+	if k.nodes != nil {
+		for _, n := range k.nodes() {
+			if n.Source != nodes.SourceSettings {
+				continue
+			}
+			if n.Status == nil {
+				unknown = true
+				continue
+			}
+			b, _ := n.Status["board"].(string)
+			i, _ := n.Status["image"].(string)
+			sts = append(sts, release.NodeStatus{Board: b, Image: i})
+		}
+	}
+	return rolling.NeededImages(k.dataDir, k.catalog, sts, unknown), unknown
 }
 
 // projectKey is the project's release public key, the only one a fetched release is taken with.
@@ -166,10 +207,13 @@ func (k fetchKind) run(ctx context.Context, run *jobs.Run, p fetchParams) (any, 
 	if err != nil {
 		return nil, err
 	}
-	run.Logf("getting %s from %s, checked with the project's release key %s", map[bool]string{true: "the newest release",
-		false: p.Version}[p.Version == ""], forge, release.Fingerprint(pub))
+	if p.unknown {
+		run.Logf("%s", rolling.UnknownNeeds)
+	}
+	run.Logf("getting %s of %s from %s, checked with the project's release key %s", strings.Join(p.Images, ", "),
+		map[bool]string{true: "the newest release", false: p.Version}[p.Version == ""], forge, release.Fingerprint(pub))
 	fw := filepath.Join(k.dataDir, "firmware")
-	imp, err := dist.Fetch(ctx, dist.FetchOptions{Forge: forge, Version: p.Version, ProjectPub: pub, Client: k.client, Logf: run.Logf},
+	imp, err := dist.Fetch(ctx, dist.FetchOptions{Forge: forge, Version: p.Version, ProjectPub: pub, Images: p.Images, Client: k.client, Logf: run.Logf},
 		fw, filepath.Join(fw, "images"))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

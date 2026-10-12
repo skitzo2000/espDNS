@@ -66,6 +66,44 @@ test("Install over USB without keys: nothing prepared, and the controller refuse
   expect(await violations()).toEqual([]);
 });
 
+// The board library's search box: typing filters the list (maker, model, catalog name, chip
+// image, w5500…) keeping the by-maker groups; the custom-board entry stays; a filtered
+// board picked fills its facts; each option says its flash, PSRAM and wired or Wi-Fi.
+test("Install over USB: the search box filters the library, and a filtered board fills its facts", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  const d = await openUSB(page);
+  const opts = d.locator("#usb-board option"), groups = d.locator("#usb-board optgroup");
+  const all = await opts.count();
+  expect(all).toBeGreaterThan(20);
+  expect(await groups.count()).toBeGreaterThan(5);
+  await expect(d.locator('#usb-board option[value="lilygo-t-eth-lite-s3"]')).toHaveText(/LilyGO T-ETH-Lite ESP32-S3 · 16 MB flash, 8 MB PSRAM · wired · community/);
+
+  await d.locator("#usb-q").fill("waveshare");
+  await expect(groups).toHaveCount(1);
+  await expect(groups).toHaveAttribute("label", "Waveshare");
+  const n = await opts.count();
+  expect(n).toBeLessThan(all);
+  for (const text of await opts.allTextContents()) expect(text).toMatch(/^Waveshare|^Choose…|^Describe your own board…/);
+
+  // Two words: both must match (chip image and maker), the board's facts fill when picked.
+  await d.locator("#usb-q").fill("lilygo esp32s3-eth");
+  await expect(groups).toHaveCount(1);
+  await d.locator("#usb-board").selectOption("lilygo-t-eth-lite-s3");
+  await expect(d.locator("#usb-facts")).toContainText("esp32s3-eth");
+  await expect(d.locator("#usb-facts")).toContainText("16 MB, 8 MB PSRAM");
+  await expect(d.locator("#usb-facts")).toContainText("Wired (W5500)");
+
+  // Nothing matches: the list says so, the chosen board stays, and the custom entry is there.
+  await d.locator("#usb-q").fill("zzzz");
+  await expect(opts.first()).toHaveText("No board matches");
+  await expect(d.locator("#usb-board")).toHaveValue("lilygo-t-eth-lite-s3");
+  await expect(d.locator('#usb-board option[value="+"]')).toBeAttached();
+  await d.locator("#usb-q").fill("");
+  await expect(opts).toHaveCount(all);
+  expect(await violations()).toEqual([]);
+});
+
 // fakeEsp is a Web Serial port with an ESP32-S3's serial bootloader behind it, as far as
 // esptool-js speaks to it: SLIP frames; SYNC answered (the ROM's non-zero value); registers
 // read as 0, but the chip-detect magic (0x9, the S3); the flasher stub's upload taken and

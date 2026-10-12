@@ -1,0 +1,16 @@
+{
+  "name": "lilygo-t-eth-lite-s3",
+  "title": "LilyGO T-ETH-Lite ESP32-S3",
+  "image": "esp32s3-eth",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [
+    { "host": 2, "sclk": 10, "mosi": 12, "miso": 11 },
+    { "host": 3, "sclk": 7, "mosi": 6, "miso": 5 }
+  ],
+  "ethernet": { "kind": "w5500", "spi_host": 2, "cs": 9, "int": 13, "rst": 14, "mhz": 20 },
+  "sd": { "kind": "spi", "spi_host": 3, "cs": 42 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-S3-WROOM-1 N16R8 (16 MB flash, 8 MB octal PSRAM). Soldered W5500: SCLK 10, MOSI 12, MISO 11, CS 9, INT 13, RST 14. TF slot on its own SPI bus: SCLK 7, MOSI 6, MISO 5, CS 42. Optional PoE shield (802.3af) on the 2x4 header. Pins: T-ETH-Lite-ESP32S3 schematic V1.0, LilyGO utilities.h, arduino-esp32 lilygo_t_eth_lite variant. The wiki quick-start's pin list (IRQ 21, SCK 12, MISO 13, MOSI 11) contradicts the schematic: the schematic's taken. No LED the firmware can drive."
+}

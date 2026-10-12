@@ -10,15 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
 	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/blocking"
+	"github.com/skitzo2000/espdns/controller/internal/changes"
+	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
+	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/secfile"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/zonefiles"
 )
 
 // The first run and the controller's settings from the browser (easy to stand up,
@@ -28,12 +33,13 @@ import (
 //
 //	GET  /api/setup      what is set up: the password, settings.json, the keys (the release
 //	                     key, the recovery public key), the zone primary's address, the
-//	                     nodes; first_run while there is neither a password nor
-//	                     settings.json; the first run's steps, and "done" once every one is
-//	POST /api/setup/step {"step": "keys" | "primary" | "router" | "blocking"}: a step the
-//	                     browser can't see done (recovery.pem saved offline, the router
-//	                     told, blocking chosen) or one skipped (the zone primary, blocking):
-//	                     marked done in setup.json. keys only once both keys are there.
+//	                     nodes, the zones of your own (hosted here, copied, forwarded);
+//	                     first_run while there is neither a password nor settings.json; the
+//	                     first run's steps, and "done" once every one is
+//	POST /api/setup/step {"step": "keys" | "zones" | "router" | "blocking"}: a step the
+//	                     browser can't see done (recovery.pem saved offline, the router told,
+//	                     blocking chosen) or one skipped (zones, blocking): marked done in
+//	                     setup.json. keys only once both keys are there.
 //	GET  /api/settings   settings.json as the form edits it (every field, empty ones too), its
 //	                     version, and the zone primary as the Zones page shows it (the nodes
 //	                     in none of the networks it allows)
@@ -50,6 +56,9 @@ type setupServer struct {
 	dataDir string
 	auth    *auth.Auth
 	key     keys.Source
+	// changes is the pending changes: a zone added in the first run waits there until Apply
+	// and counts as set up meanwhile (nil: the data directory's).
+	changes *changes.Store
 	// listed, if set, hears settings.json's nodes after a save, so they are polled at once
 	// (otherwise within the 10 s the controller reads the file again).
 	listed func([]string)
@@ -89,14 +98,17 @@ func (s setupServer) setup(w http.ResponseWriter, r *http.Request) {
 		"nodes":          len(st.Nodes),
 	}
 	defs, _, _ := blocking.Load(s.dataDir)
+	nz := s.configuredZones()
 	steps := []setupStep{
 		{Step: "password", Done: pwSet && pwErr == nil},
 		// Make your keys: the release key (made here or imported), the recovery key's public
 		// half (made in the browser), and recovery.pem saved somewhere safe offline.
 		{Step: "keys", Done: keyErr == nil && recErr == nil && marked["keys"]},
-		{Step: "primary", Done: st.Primary != nil || marked["primary"], Optional: true},
 		{Step: "first_node", Done: len(st.Nodes) >= 1},
 		{Step: "second_node", Done: len(st.Nodes) >= 2},
+		// Add your zone: one of your own (hosted here, copied from a DNS server you run, or
+		// forwarded), or skipped.
+		{Step: "zones", Done: nz > 0 || marked["zones"], Optional: true},
 		{Step: "router", Done: marked["router"]},
 		{Step: "blocking", Done: len(defs.Lists) > 0 || marked["blocking"], Optional: true},
 	}
@@ -104,7 +116,7 @@ func (s setupServer) setup(w http.ResponseWriter, r *http.Request) {
 	for _, x := range steps {
 		done = done && x.Done
 	}
-	out["steps"], out["done"], out["blocklists"] = steps, done, len(defs.Lists)
+	out["steps"], out["done"], out["blocklists"], out["zones"] = steps, done, len(defs.Lists), nz
 	if pwErr != nil {
 		out["password_error"] = pwErr.Error()
 	}
@@ -115,8 +127,68 @@ func (s setupServer) setup(w http.ResponseWriter, r *http.Request) {
 }
 
 // The steps the browser marks done (POST /api/setup/step): the ones the controller can't
-// see done itself, or that were skipped. Kept in <data>/setup.json, {"done": [...]}.
-var markable = []string{"keys", "primary", "router", "blocking"}
+// see done itself, or that were skipped. Kept in <data>/setup.json, {"done": [...]}. A step
+// no longer in the list (an older setup.json's "primary") is read over, and dropped at the
+// next write.
+var markable = []string{"keys", "zones", "router", "blocking"}
+
+// configuredZones counts the zones of your own, as the Zones page lists them with what
+// waits to apply: the hosted zones (a zone file, or one added as a pending change and not
+// applied yet; one whose deletion waits is out), and the secondary and forward zones the
+// node configs hold as the pending changes make them. The zones a node serves from its
+// firmware's defaults, listed in no config, aren't yours and aren't counted. A name in two
+// kinds counts twice, as the Zones page shows it. A file that can't be read counts for
+// nothing.
+func (s setupServer) configuredZones() int {
+	store := s.changes
+	if store == nil {
+		store = changes.New(s.dataDir)
+	}
+	seen := map[string]bool{}
+	files, _ := zonefiles.List(s.dataDir)
+	for _, f := range files {
+		seen["hosted "+f.Zone] = true
+	}
+	pending, _ := store.List()
+	for _, c := range pending {
+		if c.Kind != changes.Zone {
+			continue
+		}
+		if c.Delete {
+			delete(seen, "hosted "+zonefiles.ZoneOf(c.Name))
+		} else {
+			seen["hosted "+zonefiles.ZoneOf(c.Name)] = true
+		}
+	}
+	cfgs, _ := configs.List(s.dataDir)
+	for _, f := range cfgs {
+		text := f.Text
+		if v, err := store.Effective(changes.Config, f.Name); err == nil {
+			if !v.Exists {
+				continue
+			}
+			text = v.Text
+		}
+		var c nodecfg.Config
+		if json.Unmarshal(text, &c) != nil {
+			continue
+		}
+		if c.Secondary != nil && c.Secondary.Zones != nil {
+			for _, z := range *c.Secondary.Zones {
+				seen["secondary "+zoneKey(z)] = true
+			}
+		}
+		if c.ForwardZones != nil {
+			for _, z := range *c.ForwardZones {
+				seen["forward "+zoneKey(z.Zone)] = true
+			}
+		}
+	}
+	return len(seen)
+}
+
+// zoneKey is a zone name as one: lower case, without the final dot.
+func zoneKey(z string) string { return strings.ToLower(strings.TrimSuffix(z, ".")) }
 
 func marksPath(dataDir string) string { return filepath.Join(dataDir, "setup.json") }
 

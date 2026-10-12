@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,7 +13,9 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
 	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/blocking"
+	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/zonefiles"
 )
 
 // setupEnv is a controller with no password and no settings: a fresh install. Nothing in
@@ -152,8 +155,8 @@ func TestFirstRun(t *testing.T) {
 		t.Fatalf("node list told %v", e.listed)
 	}
 	code, out = e.do("GET /api/setup", "")
-	want := map[string]bool{"password": true, "keys": false, "primary": true, "first_node": true, "second_node": true, "router": false, "blocking": false}
-	if code != http.StatusOK || out["nodes"] != 2.0 || out["primary"] != "192.0.2.254" || !mapsEqual(steps(out), want) {
+	want := map[string]bool{"password": true, "keys": false, "first_node": true, "second_node": true, "zones": false, "router": false, "blocking": false}
+	if code != http.StatusOK || out["nodes"] != 2.0 || out["primary"] != "192.0.2.254" || out["zones"] != 0.0 || !mapsEqual(steps(out), want) {
 		t.Fatalf("set up: %d %v", code, out)
 	}
 	// The first run's password is refused from now on, and the password stays.
@@ -283,20 +286,19 @@ func TestSetupMarks(t *testing.T) {
 	}
 	e.firstPassword()
 	_, out := e.do("GET /api/setup", "")
-	if s := steps(out); s["router"] || s["blocking"] || s["primary"] || out["done"] != false {
+	if s := steps(out); s["router"] || s["blocking"] || out["done"] != false {
 		t.Fatalf("fresh: %v", out)
 	}
-	for _, bad := range []string{`{"step": "password"}`, `{"step": "second_node"}`, `{"step": ""}`, `{"step": "router", "x": 1}`, `nope`} {
+	// "primary" was a step once (the zone primary, now set up from Zones): refused as any
+	// unknown step is.
+	for _, bad := range []string{`{"step": "password"}`, `{"step": "second_node"}`, `{"step": "primary"}`, `{"step": ""}`, `{"step": "router", "x": 1}`, `nope`} {
 		if code, _ := e.do("POST /api/setup/step", bad); code != http.StatusBadRequest {
 			t.Errorf("%s: %d", bad, code)
 		}
 	}
 	code, out := e.do("POST /api/setup/step", `{"step": "router"}`)
-	if code != http.StatusOK || !steps(out)["router"] || steps(out)["primary"] {
+	if code != http.StatusOK || !steps(out)["router"] {
 		t.Fatalf("router: %d %v", code, out)
-	}
-	if code, out = e.do("POST /api/setup/step", `{"step": "primary"}`); code != http.StatusOK || !steps(out)["primary"] || !steps(out)["router"] {
-		t.Fatalf("primary skipped: %d %v", code, out)
 	}
 	if fi, err := os.Stat(marksPath(e.dir)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("setup.json: %v %v", fi, err)
@@ -312,15 +314,110 @@ func TestSetupMarks(t *testing.T) {
 	if s := steps(out); !s["blocking"] || s["second_node"] || out["done"] != false {
 		t.Fatalf("a list defined: %v", out)
 	}
-	// Every step: the key, two nodes.
+	// Every step: the key, two nodes, the zones skipped.
 	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"192.0.2.53:80", "192.0.2.54:80"}}); err != nil {
 		t.Fatal(err)
 	}
 	_, out = e.do("GET /api/setup", "")
-	if s := steps(out); !s["first_node"] || !s["second_node"] || !s["primary"] {
+	if s := steps(out); !s["first_node"] || !s["second_node"] || s["zones"] || out["done"] != false {
 		t.Fatalf("two nodes: %v", out)
 	}
+	if code, out := e.do("POST /api/setup/step", `{"step": "zones"}`); code != http.StatusOK || !steps(out)["zones"] || out["zones"] != 0.0 {
+		t.Fatalf("zones skipped: %d %v", code, out)
+	}
+	_, out = e.do("GET /api/setup", "")
 	if out["done"] != steps(out)["keys"] {
 		t.Fatalf("done %v with the keys %v", out["done"], steps(out)["keys"])
+	}
+}
+
+// Add your zone: done once there is a zone of your own, counted as the Zones page lists
+// them: a hosted zone waiting as a pending change (from the first run, before any Apply),
+// a zone file, a secondary or forward zone a node config holds (as the pending changes
+// make it). The zones a node serves from its firmware's defaults, in no config, don't count.
+func TestSetupZones(t *testing.T) {
+	e := newSetupEnv(t)
+	e.firstPassword()
+	zones := func() (bool, float64) {
+		_, out := e.do("GET /api/setup", "")
+		return steps(out)["zones"], out["zones"].(float64)
+	}
+	if done, n := zones(); done || n != 0 {
+		t.Fatalf("fresh: done %v, %v zones", done, n)
+	}
+	// A config with no zones of its own: nothing yet.
+	if err := os.MkdirAll(configs.Path(e.dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configs.Path(e.dir), "dns2.json"), []byte(`{"name": "dns2"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if done, n := zones(); done || n != 0 {
+		t.Fatalf("a config without zones: done %v, %v zones", done, n)
+	}
+	// A hosted zone from the first run: its template as a pending change, not applied.
+	code, tpl := e.do("GET /api/zones/home.example.zone/new", "")
+	if code != http.StatusOK || tpl["text"] == "" {
+		t.Fatalf("template: %d %v", code, tpl)
+	}
+	text, _ := json.Marshal(tpl["text"])
+	code, out := e.do("POST /api/changes", `{"kind": "zone", "name": "home.example.zone", "text": `+string(text)+`, "hash": "", "summary": "Add zone home.example: hosted here"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("the zone's change: %d %v", code, out)
+	}
+	if done, n := zones(); !done || n != 1 {
+		t.Fatalf("a hosted zone waiting: done %v, %v zones", done, n)
+	}
+	// Discarded: none again.
+	if code, out := e.do("POST /api/changes/"+out["id"].(string)+"/discard", ""); code != http.StatusOK {
+		t.Fatalf("discard: %d %v", code, out)
+	}
+	if done, n := zones(); done || n != 0 {
+		t.Fatalf("discarded: done %v, %v zones", done, n)
+	}
+	// A zone file (applied), and a config copying one zone and forwarding another: three.
+	if err := os.MkdirAll(zonefiles.Path(e.dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zonefiles.Save(e.dir, "home.example.zone", []byte(tpl["text"].(string)), ""); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `{"name": "dns2", "secondary": {"primary": "192.0.2.254", "zones": ["lab.example."]}, "forward_zones": [{"zone": "corp.example", "forwarder": "198.51.100.53"}]}` + "\n"
+	if err := os.WriteFile(filepath.Join(configs.Path(e.dir), "dns2.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if done, n := zones(); !done || n != 3 {
+		t.Fatalf("a file and a config's zones: done %v, %v zones", done, n)
+	}
+	// The same zones in a second config count once each.
+	if err := os.WriteFile(filepath.Join(configs.Path(e.dir), "dns3.json"), []byte(strings.Replace(cfg, "dns2", "dns3", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if done, n := zones(); !done || n != 3 {
+		t.Fatalf("two configs: done %v, %v zones", done, n)
+	}
+}
+
+// An older data directory's setup.json has "primary" marked done (the zone primary was a
+// step): read fine, the mark ignored, the step not reported, and dropped at the next write.
+func TestSetupMarksOldPrimary(t *testing.T) {
+	e := newSetupEnv(t)
+	e.firstPassword()
+	if err := os.WriteFile(marksPath(e.dir), []byte(`{"done": ["primary", "router"]}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.do("GET /api/setup", "")
+	if code != http.StatusOK || !steps(out)["router"] || out["done"] != false {
+		t.Fatalf("old marks: %d %v", code, out)
+	}
+	if _, has := steps(out)["primary"]; has {
+		t.Fatalf("primary still a step: %v", out)
+	}
+	if code, _ := e.do("POST /api/setup/step", `{"step": "blocking"}`); code != http.StatusOK {
+		t.Fatalf("blocking: %d", code)
+	}
+	b, err := os.ReadFile(marksPath(e.dir))
+	if err != nil || strings.Contains(string(b), "primary") || !strings.Contains(string(b), "router") || !strings.Contains(string(b), "blocking") {
+		t.Fatalf("setup.json after a write: %q %v", b, err)
 	}
 }

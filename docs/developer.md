@@ -19,7 +19,7 @@ This setup and the one in [Getting started](getting-started.md) share the projec
 Getting started file replaces this container, and it uses the `data` folder beside that
 file, not your data directory.
 
-The same published image, run from a release checkout. You need the `docker compose`
+This runs the same published image from a release checkout. You need the `docker compose`
 plugin v2.17 or newer (`docker compose version`) and git. From the repository you only need
 `controller/compose.yaml` and `controller/.env.example`, so clone the release's tag (nothing
 is built). Set `V` to the newest version on the
@@ -53,9 +53,6 @@ docker compose up -d --no-build
 - The project's public key in the image, `/keys/project.pub`, only checks the project's
   releases. No node trusts it.
 
-Compose names the container `espdns-controller`, like the `docker run` in Getting started,
-so run one or the other.
-
 Check it's healthy:
 
 ```sh
@@ -70,7 +67,7 @@ docker compose down             # stop it (the nodes keep answering DNS)
 docker compose up -d --no-build # start it again
 ```
 
-**Updates.** Set `ESPDNS_IMAGE` in `.env` to the new release's image, run
+To update, set `ESPDNS_IMAGE` in `.env` to the new release's image, run
 `docker compose pull` and `docker compose up -d --no-build`, press **Get firmware**, then
 update the nodes from the Nodes page ([Operations](operations.md)).
 
@@ -108,6 +105,8 @@ The browser's setup steps, from the command line:
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version "v$V"
   ```
 
+  It gets the chip images your nodes need; `-image esp32s3-eth` gets one you name.
+
   For a mirror on another forge, use `-url`, or `"release_url"` in
   `settings.json` for the pages ([Settings](reference/settings.md)). Either way, only a
   release the project's key signed is taken.
@@ -120,45 +119,44 @@ The browser's setup steps, from the command line:
 
 ## Setup in detail
 
-**The password.** One user. The dashboard is read-only until a password is set, and the
-first one can only be set from a browser on the same machine. It's stored as an argon2id
-hash.
+There's one user. The dashboard is read-only until a password is set, and the first one can
+only be set from a browser on the same machine. The password is stored as an argon2id hash.
 
-**The keys.** A node takes a change only if it's signed with the **release key** whose
-public half is in its keys partition. Every change counts: firmware, configs, zones,
-blocklists, even "flash your LED" and "reboot".
+A node takes a change only if it's signed with the release key whose public half is in its
+keys partition. Every change counts: firmware, configs, zones, blocklists, even "flash your
+LED" and "reboot".
 
 | Key | Used for | Where it lives |
 |---|---|---|
-| **Release key** (slot 0) | Signing every change | The controller's data directory (`keys/release.pem`) |
-| **Recovery key** (slot 1) | Rotating the nodes to new keys, if the release key is lost or leaked | Offline only. The controller keeps its public half |
+| Release key (slot 0) | Signing every change | The controller's data directory (`keys/release.pem`) |
+| Recovery key (slot 1) | Rotating the nodes to new keys, if the release key is lost or leaked | Offline only. The controller keeps its public half |
 
 The controller makes the release key (mode 0600). Your browser makes the recovery key and
 sends the controller only the public half. Firmware images hold no key, so the project's
 firmware works with yours. Neither button replaces an existing key.
 
-**Installing a board.** The address goes into the node's board partition, never into the
+When you install a board, the address goes into the node's board partition, never into the
 saved board. Without both keys you get "set up your keys first". The installed node boots
 on its address with your keys, but isn't added yet: it runs on board and firmware defaults,
 forwarding to public resolvers (Quad9, `9.9.9.9` and `149.112.112.112`).
 
-**Setup mode.** A node without keys (installed another way, or with a damaged keys record)
-comes up in setup mode: it answers DNS but takes nothing over the network, and
-**+ Add node** says so. **Write keys only (keeps settings)**, under Advanced in the same
-panel, writes just your keys: no erase, and the keys are read back before the board
-restarts ([Operations](operations.md#a-node-without-keys-setup-mode)).
+A node without keys (installed another way, or with a damaged keys record) comes up in setup
+mode: it answers DNS but takes nothing over the network, and **+ Add node** says so. **Write
+keys only (keeps settings)**, under Advanced in the same panel, writes just your keys
+without erasing anything, and reads them back before the board restarts
+([Operations](operations.md#a-node-without-keys-setup-mode)).
 
-**Wi-Fi boards.** A board with no Ethernet uses Wi-Fi (2.4 GHz only); the browser asks for
-the network after installing. Use it only where you can't run a cable.
+A board with no Ethernet uses Wi-Fi (2.4 GHz only); the browser asks for the network after
+installing. Use it only where you can't run a cable.
 
-**Adding a node.** Installed nodes show up on the Nodes page as **New device found** (via
-mDNS). The address is one of:
+Installed nodes show up on the Nodes page as **New device found** (via mDNS). The address is
+one of:
 
 - **A fixed address on the node**, with its **Gateway**. The gateway must be in the node's
   own network (its next hop, whatever your router routes beyond it). One that isn't is
   marked, and **Add node** waits until they fit.
 - **DHCP, reserved for it in your router**: reserve its current address for its MAC (copy
-  it from the panel) in your router first. Not offered on a network listed in
+  it from the panel) in your router first. It isn't offered on a network listed in
   `settings.json`'s `no_dhcp`.
 
 Picking an existing name fills the form from its config, and your choices are saved back
@@ -170,23 +168,29 @@ Node not listed? mDNS doesn't cross subnets: type its address in **+ Add node**.
 
 ## How Get firmware checks a release
 
-Nodes run **chip images**: one per chip, the same for everyone. **Get firmware** (in
-Install over USB, or the account menu under **Firmware**):
+Nodes run chip images: one per chip, the same for everyone. **Get firmware** gets only
+the chip images you need. In Install over USB, that is the chosen board's. In the account
+menu under **Firmware**, it is what your nodes need (from each node's board). If a node
+hasn't reported yet, it also gets the chip images the controller already has, since it
+can't tell what that node needs. With no nodes, it says there is nothing to get yet. It:
 
 1. downloads the newest published release's `SHA256SUMS` and `SHA256SUMS.sig` from GitHub,
 2. checks the signature with the project's key (`ceccd5865252c2df`, `/keys/project.pub` in
    its image) before downloading anything else,
-3. downloads each chip image and checks it against `SHA256SUMS`,
-4. imports them, each with its **provenance** (the signed files it came with).
+3. downloads the chip images it needs, each checked against `SHA256SUMS`,
+4. imports them, each with its provenance (the signed files it came with). The other
+   chip images in the controller stay as they are.
 
-If any check fails, nothing is imported. The pages call it **project release v0.0.2**.
+If any check fails, nothing is imported. A chip image the release doesn't have is an error
+that names the ones it has. The pages call it **project release v0.0.2**.
 Before each firmware update the controller rechecks the provenance, then signs the update
 with your release key. Your nodes trust only your key ([Releasing](releasing.md#using-a-release)).
 
 ## Build your own firmware
 
-Same chip images, from source, signed with **your** release key. The controller labels it
-**your build v0.0.2** and checks it before every update, like a project release.
+You can build the same chip images from source and sign them with your own release key. The
+controller labels such a build **your build v0.0.2** and checks it before every update, like
+a project release.
 
 You'll need about 15 GB of disk for the pinned ESP-IDF image. Use a clean checkout: the
 build container mounts all of it, with network access for ESP-IDF components, so keep your
@@ -201,7 +205,7 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src "$IDF
 - It builds every chip image, key-neutral and generic: no board, address, keys or site
   settings. To build only some, name them after the output directory
   (`esp32p4-rev1 esp32s3-eth esp32s3-octal` are the ones the catalog's boards run).
-- Several minutes per image. Output lands in `build/release/images/`.
+- Each image takes several minutes. Output lands in `build/release/images/`.
 - It fails on a compiler warning, a changed component lock, or an image with an address or
   keys built in.
 
@@ -230,8 +234,9 @@ docker compose run --rm -T -v "$PWD/../build/release:/release:ro" --entrypoint /
 - `release import` checks everything first and imports nothing if a check fails. It ends by
   naming the signer ("your release key") and the chip images imported.
 
-For your own controller image too: `docker compose up -d --build` from `controller/`, with
-`ESPDNS_IMAGE` left out of `.env`. [Releasing](releasing.md) explains the release's files.
+To build your own controller image too, run `docker compose up -d --build` from
+`controller/`, with `ESPDNS_IMAGE` left out of `.env`. [Releasing](releasing.md) explains
+the release's files.
 
 ## Keys made outside the browser
 

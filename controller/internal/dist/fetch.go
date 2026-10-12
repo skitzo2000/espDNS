@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,8 +34,11 @@ type FetchOptions struct {
 	// ProjectPub is the project's release public key (keys/project.pub): the only key a
 	// fetched release is taken with.
 	ProjectPub []byte
-	Client     *http.Client         // nil: one with a timeout
-	Logf       func(string, ...any) // progress; nil: none
+	// Images are the chip images to get (esp32s3-eth), at least one: only their tarballs
+	// are downloaded and imported, and the other chip images here stay as they are.
+	Images []string
+	Client *http.Client         // nil: one with a timeout
+	Logf   func(string, ...any) // progress; nil: none
 }
 
 // Forge is a repository on GitHub or another forge, from its page's URL.
@@ -75,14 +80,27 @@ func (f Forge) Download(tag, file string) string {
 }
 
 // Fetch downloads a release's SHA256SUMS and SHA256SUMS.sig, checks the signature with the
-// project's key, then downloads the chip images' tarballs it lists, each checked against
-// it as it arrives, into a new directory in work (removed after), and imports them into
-// images (Import: signer the project, with their provenance). The other files it lists (the
-// controller image's reference) are not downloaded. The caller holds the fleet lock, as for any import.
+// project's key, then downloads the tarballs of the chip images asked for (o.Images), each
+// checked against it as it arrives, into a new directory in work (removed after), and
+// imports them into images (Import: signer the project, with their provenance). A chip image
+// asked for that the release doesn't have is an error. The other files it lists (the other
+// chip images, the controller image's reference) are not downloaded, and the chip images
+// already in images that weren't asked for are left as they are. The caller holds the fleet
+// lock, as for any import.
 func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, error) {
 	var out Imported
 	if len(o.ProjectPub) != 65 || o.ProjectPub[0] != 4 {
 		return out, errors.New("no project public key (" + ProjectPub + "): a fetched release is checked with it")
+	}
+	if len(o.Images) == 0 {
+		return out, errors.New("no chip images asked for")
+	}
+	want := map[string]bool{}
+	for _, img := range o.Images {
+		if !ImageName(img) {
+			return out, fmt.Errorf("chip image %q: not a chip image's name (esp32s3-eth)", img)
+		}
+		want[img] = true
 	}
 	src := o.Forge
 	if src == "" {
@@ -160,24 +178,41 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	if err != nil {
 		return out, err
 	}
-	n := 0
+	var has []string
+	tarball := map[string]Sum{}
 	for _, s := range list {
-		cv, _, ok := chipOf(s.Name)
+		cv, img, ok := chipOf(s.Name)
 		if !ok {
 			continue
 		}
 		if cv != v {
 			return out, fmt.Errorf("%s lists %s, not version %s", SumsFile, s.Name, v)
 		}
+		has = append(has, img)
+		tarball[img] = s
+	}
+	if len(has) == 0 {
+		return out, fmt.Errorf("release %s has no chip images", tag)
+	}
+	// Every chip image asked for is in the release before any is downloaded
+	var missing []string
+	for _, img := range o.Images {
+		if _, ok := tarball[img]; !ok && !slices.Contains(missing, img) {
+			missing = append(missing, img)
+		}
+	}
+	if len(missing) > 0 {
+		return out, fmt.Errorf("release %s has no chip image %s; it has %s", tag, strings.Join(missing, ", "), strings.Join(has, ", "))
+	}
+	need := map[string]bool{}
+	for _, img := range slices.Sorted(maps.Keys(want)) {
+		s := tarball[img]
 		if err := get(s.Name, maxTarball, s.SHA256); err != nil {
 			return out, err
 		}
-		n++
+		need[s.Name] = true
 	}
-	if n == 0 {
-		return out, fmt.Errorf("release %s has no chip images", tag)
-	}
-	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, true)
+	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, need)
 }
 
 // newest is the tag of the newest published release (not a draft) named vMAJOR.MINOR.PATCH;

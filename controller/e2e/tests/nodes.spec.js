@@ -375,7 +375,7 @@ test("+ Add node: a fixed address, and the config's gateway from another subnet 
   await expect(hint).not.toHaveClass(/\bbad\b/);
   await expect(go).toBeDisabled();
   await expect(gwHint).toHaveClass(/\bbad\b/);
-  await expect(gwHint).toHaveText("192.0.2.1 isn't in the node's own network, 198.51.100.0/24. The gateway is its next hop: an address in its own network, whatever routes lie beyond it.");
+  await expect(gwHint).toHaveText("192.0.2.1 isn't in the node's own network, 198.51.100.0/24. The gateway has to be in that network.");
   await gw.fill("");
   await expect(go).toBeDisabled();
   await gw.fill("198.51.100.1");

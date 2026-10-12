@@ -201,7 +201,7 @@ func main() {
 		kinds[name] = k
 	}
 	// Get firmware (firmware.go): a published release fetched, checked and imported.
-	kinds["fetch-release"] = fetchKind{dataDir: *dataDir, forge: *releaseURL}.kind
+	kinds["fetch-release"] = fetchKind{dataDir: *dataDir, forge: *releaseURL, catalog: *catalog, nodes: reg.List}.kind
 	log.Printf("project key: %s", projectPubThere(*projectPub))
 	runner = jobs.New(*dataDir, kinds)
 	jobsDone := make(chan struct{})

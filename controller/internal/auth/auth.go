@@ -50,7 +50,7 @@ const (
 var (
 	// ErrNoPassword: no password is set; nobody can log in (the first run in the browser,
 	// or espdns passwd, sets one).
-	ErrNoPassword = errors.New("no password is set: set one in the browser (the first run) or with espdns passwd (docs/getting-started.md, step 6)")
+	ErrNoPassword = errors.New("no password is set: set one in the browser (the first run) or with espdns passwd")
 	// ErrBadLogin: the user or the password is wrong (which, isn't said).
 	ErrBadLogin = errors.New("wrong user or password")
 	// ErrBadPassword: a re-authentication's password is wrong.
