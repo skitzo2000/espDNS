@@ -29,6 +29,7 @@ static const char *TAG = "health";
 
 static TaskHandle_t s_task;
 static bool s_led;
+static volatile bool s_led_redo; /* health_led_apply: led_init again, in the monitor */
 static volatile uint32_t s_ident_until; /* ms since boot; 0: not identifying */
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -98,6 +99,11 @@ static void monitor_task(void *arg)
         if (until && !ident &&
             __atomic_compare_exchange_n(&s_ident_until, &until, 0, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             ESP_LOGI(TAG, "identify over");
+        if (s_led_redo) {
+            s_led_redo = false;
+            s_led = led_init();
+            pat = NULL;
+        }
         if (s_led) {
             const led_pattern_t *p = led_pattern(h.state, ident);
             if (p != pat) { /* a new pattern starts at its beginning */
@@ -138,6 +144,13 @@ bool health_identify(uint32_t secs)
     if (s_task)
         xTaskNotifyGive(s_task);
     return s_led;
+}
+
+void health_led_apply(void)
+{
+    s_led_redo = true;
+    if (s_task)
+        xTaskNotifyGive(s_task);
 }
 
 uint32_t health_identify_left(void)

@@ -82,7 +82,8 @@ static bool use_definition(const char *json, size_t len, char *why, size_t whyle
     int pins = SOC_GPIO_PIN_COUNT;
     const int *all[] = { &b.spi[0].sclk, &b.spi[0].mosi, &b.spi[0].miso, &b.spi[1].sclk, &b.spi[1].mosi,
                          &b.spi[1].miso, &b.eth.phy_reset, &b.eth.power_pin, &b.eth.mdc, &b.eth.mdio,
-                         &b.eth.rmii_clock_gpio, &b.eth.cs, &b.eth.irq, &b.eth.reset, &b.sd.cs, &b.led.pin };
+                         &b.eth.rmii_clock_gpio, &b.eth.cs, &b.eth.irq, &b.eth.reset, &b.sd.cs,
+                         &b.led.pin[0], &b.led.pin[1], &b.led.pin[2] };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
         if (*all[i] >= pins) {
             snprintf(why, whylen, "board %s: GPIO %d doesn't exist on this chip", b.name, *all[i]);

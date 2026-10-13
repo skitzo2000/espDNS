@@ -61,6 +61,9 @@ func TestChecks(t *testing.T) {
 		{"pin twice", func(b *Board) { b.LED = &LED{Kind: "gpio", Pin: p(21)} }, "GPIO 21 used twice", ""},
 		{"strapping", func(b *Board) { b.LED = &LED{Kind: "gpio", Pin: p(0)} }, "", "strapping"},
 		{"usb", func(b *Board) { b.LED = &LED{Kind: "gpio", Pin: p(19)} }, "", "USB port"},
+		{"rgb", func(b *Board) { b.LED = &LED{Kind: "rgb", Red: p(4), Green: p(5), Blue: p(6), CommonAnode: true} }, "", ""},
+		{"rgb pin twice", func(b *Board) { b.LED = &LED{Kind: "rgb", Red: p(4), Green: p(9), Blue: p(6)} }, "GPIO 9 used twice: SPI2 MOSI and LED green", ""},
+		{"rgb without blue", func(b *Board) { b.LED = &LED{Kind: "rgb", Red: p(4), Green: p(5)} }, "led.blue: required", ""},
 		{"undefined bus", func(b *Board) { b.SD.SPIHost = 3 }, "no such SPI bus", ""},
 		{"no int", func(b *Board) { b.Ethernet.Int = nil }, "", "polled"},
 		{"tx power", func(b *Board) { b.WiFi = &WiFi{TxPowerDBm: 25} }, "tx_power_dbm", ""},
@@ -107,6 +110,29 @@ func TestChecks(t *testing.T) {
 		}
 		if c.warn != "" && !has(warns, c.warn) {
 			t.Errorf("%s: want a warning with %q, got %v", c.name, c.warn, warns)
+		}
+	}
+}
+
+// A node config's LED in place of the board's: only its own faults, its pins against the
+// chip's and the board's others (the board's own LED pin free for it).
+func TestCheckLED(t *testing.T) {
+	b := Board{Name: "x", Image: "esp32s3-octal", SPI: []SPIBus{{Host: 2, SCLK: p(7), MOSI: p(9), MISO: p(8)}},
+		Ethernet: &Ethernet{Kind: "w5500", SPIHost: 2, CS: p(1), Int: p(2), Rst: p(3)}, LED: &LED{Kind: "ws2812", Pin: p(38)}}
+	for _, c := range []struct {
+		led  LED
+		want string
+	}{
+		{LED{Kind: "rgb", Red: p(38), Green: p(39), Blue: p(40), CommonAnode: true}, ""},
+		{LED{Kind: "none"}, ""},
+		{LED{Kind: "gpio", Pin: p(1)}, "GPIO 1 used twice: Ethernet CS and LED"},
+		{LED{Kind: "rgb", Red: p(4), Green: p(35), Blue: p(6)}, "LED green: GPIO 35 is connected to the octal PSRAM"},
+		{LED{Kind: "rgb", Red: p(4), Green: p(23), Blue: p(6)}, "LED green: GPIO 23 doesn't exist"},
+		{LED{Kind: "ws2812"}, "led.pin: required"},
+	} {
+		err := CheckLED(b, c.led)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%+v: %v, want %q", c.led, err, c.want)
 		}
 	}
 }

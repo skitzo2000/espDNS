@@ -25,6 +25,8 @@
 .exs .tag { border-color: var(--orange); color: var(--fg) }
 .pending-note { border-left: 4px solid var(--orange); margin-bottom: 12px; display: grid; gap: 4px }
 .save-row { margin-top: 14px }
+/* The status light's red, green and blue pins, side by side even on a phone */
+.pins3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px }
 #settings > .hint { margin-bottom: 10px }
 
 /* Facts: a two-column list; a meter */

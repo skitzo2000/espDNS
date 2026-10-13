@@ -224,6 +224,7 @@ The board catalog is JSON files in [`boards/`](../boards/), each marked *tested*
 *community* or *untested*. Tested on hardware today:
 
 - Guition JC-ESP32P4-M3-DEV (ESP32-P4, built-in Ethernet with an IP101 PHY, SDMMC)
+- Waveshare ESP32-P4-ETH (ESP32-P4, built-in Ethernet with an IP101 PHY, optional PoE, SDMMC)
 - Waveshare ESP32-S3-ETH (W5500 Ethernet, optional PoE, SD over SPI)
 - Seeed XIAO ESP32S3 Sense (Wi-Fi, or wired with an added W5500 module)
 
@@ -234,8 +235,8 @@ board it then sends the network name and password over USB. **Write keys only** 
 the `keys` partition, for a node with no keys.
 
 Chip images are key-neutral: no board, address or keys built in, the same for everyone.
-The controller gets them from the project's release (Get firmware) or from your own build
-signed with your release key.
+The controller gets them from the project's release (Get firmware, or when you apply an
+update) or from your own build signed with your release key.
 
 Settings come in layers. A value comes from the first of:
 
@@ -276,8 +277,9 @@ factory images: a new node is always installed from the controller.
 Adoption, from the web UI or the CLI:
 
 1. **Discovery.** Nodes advertise `_espdns._tcp` over mDNS. The controller lists unadopted
-   nodes with board, firmware, address and MAC address (with a copy button, for a DHCP
-   reservation). *Identify* blinks a node's LED so you can match it to the board in your
+   nodes on the Nodes page with their address; hover for the board, firmware and MAC
+   address. The node's setup panel has the MAC with a copy button, for a DHCP reservation.
+   *Identify* blinks a node's LED so you can match it to the board in your
    hand.
 2. **Address.** Keep the current one or give a static one; the controller first checks that
    nothing else answers there. A network in `settings.json`'s `"no_dhcp"` never gets a DHCP
@@ -426,6 +428,12 @@ uses host networking to find nodes over mDNS and reach them.
 - Node list. Nodes in `settings.json`, ones found over mDNS, and any you look up by
   address, each polled every 10 seconds. An mDNS answer is only a hint: it never renames or
   moves a known node.
+- Firmware updates. The controller asks GitHub (or your `release_url`) for the newest
+  firmware release when it starts, every 24 hours, and when a new node shows up, and keeps
+  only its version. A node on an older version is offered the update, whatever its chip;
+  the chip image is downloaded and checked when the update is applied. Each node's `/status`
+  says the protocol it speaks to the controller (`"proto": 1`), and a node on one the
+  controller doesn't speak is offered no update.
 - Jobs and pending changes. Edits collect as pending changes and go out in one apply
   job. Jobs run one at a time with live progress, and every change goes in the action log.
 - Zone primaries. The controller keeps only the primary's address, the networks it allows
@@ -471,6 +479,7 @@ files, no database. Directories are mode 0700, files 0600.
 | `lists/<name>.bin` | Compiled blocklist and overrides files |
 | `boards/` | Your own board definitions, saved from Install over USB |
 | `firmware/images/` | Imported chip images, for Install over USB and firmware updates, each with its `provenance/` (the signed `SHA256SUMS`, its signature, the tarball, who signed it) |
+| `firmware/latest` | The newest firmware release's version, as the controller last heard it |
 | `pins/<node-id>.json` | Each node's pinned ID and last signed sequence numbers |
 | `changes/` | Pending changes not yet applied |
 | `log/actions.jsonl` | The action log: every fleet change, by the CLI or the web UI |
@@ -485,8 +494,10 @@ files, no database. Directories are mode 0700, files 0600.
 
 - Signed reads: `/status` and `/querylog` protected by a request signed by the controller.
 - Encrypted transport between the controller and the nodes, and DNS over TLS to forwarders.
-- An endpoint for a node to return its config or zone contents (for recovery).
+- An endpoint for a node to return its config or hosted zones (for recovery). A secondary
+  zone's records can already be read from a node with
+  [`GET /zone`](reference/node-endpoints.md#zone).
 - Saving a secondary zone's last refresh time across reboots (today a zone's expiry timer
   starts again at each boot).
 - One shared IP for several nodes, and per-client blocking groups.
-- Wi-Fi through the ESP32-C6 companion on ESP32-P4 boards.
+- Wi-Fi through the companion Wi-Fi chip on ESP32-P4 boards.

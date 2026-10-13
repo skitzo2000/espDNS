@@ -115,6 +115,28 @@ func TestReport(t *testing.T) {
 	}
 }
 
+// A node whose protocol this controller doesn't speak is offered nothing, and says so; none
+// said (firmware from before "proto") is protocol 1.
+func TestProto(t *testing.T) {
+	ns := []Node{
+		{Host: "192.0.2.52", Listed: true, Status: status("esp32s3", "s3-board", "0.0.1", "", "", "")},
+		{Host: "192.0.2.53", Listed: true, Status: status("esp32s3", "s3-board", "0.0.1", "", "", "")},
+		{Host: "192.0.2.54", Listed: true, Status: status("esp32s3", "s3-board", "0.0.1", "", "", "")},
+	}
+	ns[1].Status.Proto = ProtoMax
+	ns[2].Status.Proto = ProtoMax + 1
+	r := For(ns, nil, "0.0.4", nil)
+	if r.Nodes[0].State != Available || r.Nodes[1].State != Available {
+		t.Errorf("%+v", r.Nodes[:2])
+	}
+	if u := r.Nodes[2]; u.State != Unknown || !strings.Contains(u.Why, "node protocol 2, which this controller (1 to 1) doesn't") {
+		t.Errorf("%+v", u)
+	}
+	if _, err := r.Plan([]string{"192.0.2.54"}); err == nil || !strings.Contains(err.Error(), "node protocol 2") {
+		t.Errorf("planned: %v", err)
+	}
+}
+
 func TestPlan(t *testing.T) {
 	ns := []Node{
 		{Host: "192.0.2.52", Listed: true, Status: status("esp32p4-rev1", "p4-board", "0.0.1", "", "", "dns2")},

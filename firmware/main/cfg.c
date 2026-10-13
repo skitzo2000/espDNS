@@ -120,6 +120,7 @@ static void defaults(cfg_t *c)
     c->cpu_dfs = -1; /* the board's, else the image's (cpuplan.h) */
     c->querylog = DNS2_QUERYLOG;
     c->querylog_client = QL_CLIENT_FULL;
+    c->led = (board_led_t){ BOARD_LED_NONE, { BOARD_NC, BOARD_NC, BOARD_NC }, false };
 }
 
 static void set_net(cfg_t *c, const board_net_t *n, cfg_addr_from_t from)
@@ -133,6 +134,8 @@ static void set_net(cfg_t *c, const board_net_t *n, cfg_addr_from_t from)
 
 static void board_layer(cfg_t *c, const board_desc_t *b)
 {
+    if (b)
+        c->led = b->led;
     if (b && b->wifi_max_tx_dbm)
         c->wifi_tx_dbm = b->wifi_max_tx_dbm;
     if (b && b->net.set)
@@ -499,6 +502,17 @@ static void parse_querylog(ctx_t *c, cfg_t *cf, const cJSON *o)
         cf->querylog_client = (uint8_t)mode;
 }
 
+/* In place of the board's LED; its pins are checked against the board's others (b). */
+static void parse_led(ctx_t *c, cfg_t *cf, const cJSON *o, const board_desc_t *b)
+{
+    static const char *const keys[] = { "kind", "pin", "active_low", "red", "green", "blue", "common_anode", NULL };
+    only(c, o, "led", keys);
+    char why[80];
+    if (!board_led_parse(o, b, &cf->led, why, sizeof(why)))
+        fail(c, "led: %s", why);
+    cf->led_config = true;
+}
+
 static void parse_time(ctx_t *c, cfg_t *cf, const cJSON *t)
 {
     static const char *const keys[] = { "ntp", "tz", NULL };
@@ -610,7 +624,7 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
     } else {
         static const char *const keys[] = { "format", "name", "network", "wifi", "forwarders", "upstream_timeout_ms",
                                              "forward_zones", "secondary", "hosted", "time", "blocking", "cpu", "querylog",
-                                             NULL };
+                                             "led", NULL };
         only(&x, root, "", keys);
         int format = CFG_FORMAT;
         integer(&x, root, "format", 1, 1000, &format);
@@ -642,6 +656,8 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
             parse_cpu(&x, c, o);
         if ((o = object(&x, root, "querylog")))
             parse_querylog(&x, c, o);
+        if ((o = object(&x, root, "led")))
+            parse_led(&x, c, o, b);
         if (!x.failed)
             check_all(&x, c);
     }
@@ -711,6 +727,8 @@ void cfg_copy_live(cfg_t *dst, const cfg_t *src)
     dst->cpu_dfs = src->cpu_dfs;
     dst->querylog = src->querylog;
     dst->querylog_client = src->querylog_client;
+    dst->led = src->led;
+    dst->led_config = src->led_config;
 }
 
 /* ---- slots ---- */

@@ -120,14 +120,12 @@ class ContainersTest(unittest.TestCase):
                 else:
                     self.assertEqual(net, "none")
 
-    def test_version_read_only_at_the_sources_parent(self):
-        # CMakeLists.txt reads the repository's VERSION as ../VERSION from /project
-        version = os.path.join(os.path.dirname(FIRMWARE), "VERSION")
+    def test_version_in_the_source(self):
+        # CMakeLists.txt reads the firmware's VERSION from /project, the source: nothing else mounted
         for name, opts, cmd in self.all_runs():
             with self.subTest(target=name, cmd=cmd):
-                self.assertEqual(mounts(opts).get("/VERSION"), ("bind", True))
-                self.assertIn(("-v", f"{FIRMWARE}/../VERSION:/VERSION:ro"), opts)
-        self.assertTrue(os.path.isfile(version))
+                self.assertNotIn("/VERSION", mounts(opts))
+        self.assertTrue(os.path.isfile(os.path.join(FIRMWARE, "VERSION")))
 
     def test_push_is_three_steps(self):
         cmds = [cmd for _, cmd in containers(TARGETS["ota"]) if "ota_push.py" in cmd]

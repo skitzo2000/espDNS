@@ -141,6 +141,7 @@ this order.
 | Field | Meaning |
 |-------|---------|
 | `project` | The firmware project name. |
+| `proto` | The protocol the node speaks to the controller, `1`. It goes up only when a change breaks what a controller expects; missing on firmware from before it, which speaks `1`. |
 | `version` | The firmware version. |
 | `elf_sha256` | The first 8 bytes of the firmware's ELF SHA-256, in hex. |
 | `built` | Build date and time. |
@@ -189,7 +190,7 @@ On Wi-Fi only: `rssi` (dBm), `ap` (the access point's BSSID), `channel`, `connec
 |-------|---------|
 | `health` | `state`, `answering` and `reasons`, as in [/health](#health). |
 | `sd` | The SD card: `state` (`none`, `mounting`, `mounted`, `failed`), `timed_out`, `timeout_ms`. |
-| `led` | `kind` (`none`, `gpio`, `ws2812`, or `failed`) and `identify_s` (seconds of identify left). |
+| `led` | The status light in effect: `kind` (`none`, `gpio`, `ws2812` or `rgb`), `failed` (it didn't start), `pins` (its GPIO, or an RGB LED's red, green and blue), `active_low` (lit by a low level; a common anode), `from` (`config` or `board`), `board` (the board's own: `kind`, `pins`, `active_low`), and `identify_s` (seconds of identify left). |
 | `reset` | Why the chip last reset: `power_on`, `pin`, `software`, `panic`, `watchdog`, `brownout`, `usb`, `jtag` or `other`. |
 | `boot_ms` | Milliseconds from start to answering DNS; `null` until then. |
 | `boot_limit_ms` | The boot time the firmware aims to stay under. |

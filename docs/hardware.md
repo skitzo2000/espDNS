@@ -10,15 +10,18 @@ release.
 
 | Board | Catalog name | Chip image | Flash | PSRAM | Network | microSD | LED |
 |---|---|---|---|---|---|---|---|
-| Guition JC-ESP32P4-M3-DEV | `p4-ip101` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one on a spare GPIO |
+| Guition JC-ESP32P4-M3-DEV | `p4-ip101` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: [add one](#a-status-light) |
+| Waveshare ESP32-P4-ETH | `ws-p4-eth` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY. Optional PoE module | SDMMC, 4-bit | None usable: [add one](#a-status-light) |
 | Waveshare ESP32-S3-ETH | `ws-s3-eth` | `esp32s3-eth` | 16 MB | 8 MB | Ethernet: W5500 over SPI. Optional PoE module (802.3af) | SPI, its own bus | WS2812 RGB on GPIO 21 |
 | Seeed XIAO ESP32S3 Sense | `xiao-s3-sense` | `esp32s3-octal` | 8 MB | 8 MB | Wi-Fi as it ships. Wired with an added W5500 module | SPI, on the Sense board | None usable: add one |
-| Waveshare ESP32-P4-ETH | `ws-p4-eth` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: add one |
 
-- The Guition ESP32-P4 is top of the pecking order: 32 MB of PSRAM keeps large blocklists
-  in RAM. It's wired only; the on-board ESP32-C6 (Wi-Fi) isn't used. The entry is for P4
-  silicon v1.x. Silicon v3 or later needs the `esp32p4` chip image: describe it as your own
-  board.
+- The two ESP32-P4 boards are top of the pecking order: 32 MB of PSRAM keeps large
+  blocklists in RAM. Both entries are for P4 silicon v1.x. Silicon v3 or later needs the
+  `esp32p4` chip image: describe it as your own board.
+- The Guition ESP32-P4 is wired only; the on-board Wi-Fi chip isn't used.
+- The Waveshare ESP32-P4-ETH has the same Ethernet as the Guition (IP101 on the chip's MAC)
+  and 32 MB of flash. With the optional PoE module one cable carries power and network, so
+  a PoE switch on a UPS keeps both up. It has only a power LED.
 - On the Waveshare ESP32-S3-ETH, the RGB LED shows health in colour. With the PoE module one
   cable carries power and network, so a PoE switch on a UPS keeps both up. The W5500 runs
   at 20 MHz; the SD card's own SPI bus is slower than the P4's SDMMC.
@@ -27,8 +30,6 @@ release.
   on D3 (GPIO 4). The user LED shares GPIO 21 with the SD card's chip select, so it's
   unusable. Wi-Fi transmit power is capped at 15 dBm (at 20 dBm it lost packets and the
   access point dropped it). PoE needs a separate splitter. The camera isn't used.
-- The Waveshare ESP32-P4-ETH has the same Ethernet as the Guition (IP101 on the chip's MAC)
-  and 32 MB of flash. It has a header for an optional PoE module and only a power LED.
 
 ## Untested boards
 
@@ -98,7 +99,61 @@ tested, and smaller boards join once they have been.
 | Flash | 4 MB or more | Two app slots, so an update can roll back. The image is about 1.1 MB |
 | Ethernet | Strongly recommended | A built-in MAC with a PHY, or a W5500 over SPI. This is what reliable nodes use |
 | microSD | Yes | Zone copies, hosted zones and blocklists live on the card |
-| LED | Optional | Shows the node's health. A plain GPIO LED or a WS2812 |
+| LED | Optional | Shows the node's health. A one-colour LED on a GPIO, a WS2812, or a plain RGB LED on three GPIOs. Set on the node page |
+
+### A status light
+
+Most wired boards have no LED the firmware can drive. Add a plain RGB LED (common anode or
+common cathode) on three free GPIOs and the node shows its health in colour, as the
+controller's dots do: green when healthy, amber when degraded, red with no network or a
+fault, blue while booting or updating, and white while you *Blink its light*. Each state
+also keeps its [blink pattern](troubleshooting.md#led-patterns), as on a one-colour LED.
+The RGB LED takes the place of the board's own LED, which stays off while it's set.
+
+Wire each colour through its own resistor, 220 to 330 Ω at 3.3 V:
+
+- **Common cathode** (the long leg to GND): GPIO → resistor → the red, green and blue legs.
+- **Common anode** (the long leg to 3.3 V): wire it the same way and tick *Common anode*, so
+  the node drives a pin low to light it.
+
+Then on the node's page, under Settings, open **Status light**, pick **RGB LED**, enter the
+red, green and blue GPIOs, and save. It goes out with the other changes to apply, and the
+light switches over live, with no restart. A one-colour LED (on when high or low) or a
+WS2812 is set the same way. The row shows what the board itself has; pick **Its board's**
+to go back to it.
+
+Use pins the board leaves free. The controller and the node refuse a pin the board uses for
+its Ethernet, SD card or SPI bus, and one the chip keeps for the flash or PSRAM. Avoid
+strapping pins (on the ESP32-S3: 0, 3, 45, 46; on the ESP32-P4: 34 to 38) and the USB pins.
+
+On the Waveshare ESP32-S3-ETH the pins by the microSD slot take a common-cathode LED, with
+its common leg on the GND between them:
+
+| Pins | GPIO |
+|------|------|
+| Red, green, blue | 1, 2, 15 (header pins 25, 26, 29; GND is pin 28) |
+| If those are taken | 16, 17, 18, 38 |
+| Leave alone | 4 to 7 (microSD), 9 to 14 (W5500), 21 (the on-board WS2812), 26 to 32 (flash), 33 to 37 (octal PSRAM), 0, 3, 45, 46 (strapping), 19 and 20 (USB), 43 and 44 (serial), 39 to 42 (JTAG) |
+
+Waveshare's pinout shows 33 to 37 as free GPIO. On this board the 8 MB octal PSRAM uses
+them, so the node refuses them.
+
+On the Waveshare ESP32-P4-ETH, three pins on the left header (USB-C end up) take a
+common-cathode LED, with its common leg on the GND between GPIO 15 and GPIO 14:
+
+| Pins | GPIO |
+|------|------|
+| Red, green, blue | 15, 16, 17 |
+| If those are taken | 2 to 6, 14, 18 to 23, 26, 27, 32, 33 |
+| Leave alone | 28 to 31, 34, 35, 49 to 52 (Ethernet), 39 to 44 (microSD), 34 to 38 (strapping; 37 and 38 are the serial console), 24 and 25 (USB), 7 to 13 and 53 (audio codec and speaker amplifier) |
+
+On the Guition JC-ESP32P4-M3-DEV, the 26-pin header takes a common-cathode LED:
+
+| Pins | GPIO |
+|------|------|
+| Red, green, blue | 20, 32, 33 (header pins 17, 19, 21; GND is pin 5 or 6) |
+| If those are taken | 1 to 5 (header pins 7, 9, 11, 13, 15) |
+| Leave alone | 28 to 31, 34, 35, 49 to 52 (Ethernet), 39 to 44 (microSD), 34 to 38 (strapping; 37 and 38 are the serial console), 24 and 25 (USB), 6, 14 to 19 and 54 (the Wi-Fi chip), 7 to 13 and 48 (audio codec, microphones and speaker amplifier), 21 to 23 (display connector), 26 and 27 (RS-485) |
 
 ### Chip images
 
@@ -169,8 +224,8 @@ Wire the nodes you rely on. Wi-Fi is best effort:
   board's definition, or per node in its config.
 - A Wi-Fi node's config holds the Wi-Fi password, so the controller treats it as a secret.
 
-The ESP32-P4 has no Wi-Fi of its own, and the P4 board above doesn't use its companion chip
-yet, so it's wired only.
+The ESP32-P4 has no Wi-Fi of its own, and espDNS doesn't use a P4 board's companion Wi-Fi
+chip yet, so P4 nodes are wired only.
 
 ## Describing your own board
 
@@ -187,7 +242,7 @@ board from this one**. The form asks for:
 - the LED, and the Wi-Fi transmit power cap.
 
 Pins are checked as you type: flash and PSRAM pins are refused, strapping pins get a
-warning, and input-only and double-used pins are caught. The firmware checks again at boot.
+warning, and double-used pins are caught. The firmware checks again at boot.
 
 Saved boards live in the `boards/` folder of the controller's data directory, and Install
 over USB lists them alongside the catalog. They're JSON, in the same format as
@@ -219,9 +274,10 @@ adding its file to `boards/`.
 
 ## Power and cost
 
-A node draws about 1 W; the P4 board measured 0.53 W, idle and at 200 queries a second
-alike. Nodes never light-sleep (it would drop the link); idle nodes lower their CPU
-clock instead, where the board allows. Power them over USB, or the Waveshare board over PoE.
+A node draws about 1 W; the Guition P4 (`p4-ip101`) measured 0.53 W, idle and at 200
+queries a second alike. Nodes never light-sleep (it would drop the link); idle nodes lower
+their CPU clock instead, where the board allows. Power them over USB, or the Waveshare
+ESP32-P4-ETH and ESP32-S3-ETH over PoE with their PoE modules.
 
 It's cheap, cheep: one board, a microSD card and a cable or power supply per node. The
 tested boards run roughly US$15 to US$40, plus a few dollars for a W5500 or PoE module

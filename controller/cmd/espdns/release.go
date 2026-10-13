@@ -23,7 +23,7 @@ import (
 // espdns release sign -dir DIR -pub release.pub          (the release key on standard input)
 // espdns release verify -dir DIR -pub release.pub
 // espdns release import -dir DIR -data /data [-pub /keys/project.pub]
-// espdns release fetch -data /data [-image esp32s3-eth ...] [-version v0.0.3] [-url https://github.com/skitzo2000/espdns] [-pub /keys/project.pub]
+// espdns release fetch -data /data [-image esp32s3-eth ...] [-version 0.0.3] [-url https://github.com/skitzo2000/espdns] [-pub /keys/project.pub]
 //
 // A release's files (internal/dist, docs/releasing.md). build makes them from the exported
 // chip images, key-neutral, with SHA256SUMS, as CI does on a version tag (no factory images:
@@ -46,7 +46,7 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 	switch sub {
 	case "build":
 		o := dist.Options{}
-		fl.StringVar(&o.Version, "version", "", "the version released, the repository's VERSION (required): every chip image must be it")
+		fl.StringVar(&o.Version, "version", "", "the version released, firmware/VERSION (required): every chip image must be it")
 		fl.StringVar(&o.Images, "images", "", "the exported chip images, <dir>/<image>/image.json (required)")
 		fl.StringVar(&o.Catalog, "catalog", "", "the board catalog (boards/; /catalog in the controller's image): every board's chip image must be in -images (required)")
 		fl.StringVar(&o.Out, "out", "", "where the release's files go, missing or empty (required)")
@@ -134,7 +134,7 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 	if sub == "import" {
 		fl.StringVar(&dir, "dir", "", "the release's files, with its SHA256SUMS and SHA256SUMS.sig (required)")
 	} else {
-		fl.StringVar(&ver, "version", "", "the release, v0.0.3 (default: the newest published)")
+		fl.StringVar(&ver, "version", "", "the firmware release, 0.0.3 or its tag firmware-v0.0.3 (default: the newest published)")
 		fl.StringVar(&forge, "url", "", "the repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
 		fl.Var(&imgs, "image", "a chip image to get, esp32s3-eth (comma-separated or repeat; default: those settings.json's nodes need)")
 		fl.StringVar(&catalog, "catalog", defaultCatalog, "the board catalog: the chip image each node's board runs")

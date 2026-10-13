@@ -23,9 +23,9 @@ IMAGE  ?= espdns-controller
 
 .PHONY: build run firmware test image data
 
-# The version (internal/version): the repository's VERSION, linked in as the Dockerfile does.
+# The version (internal/version): controller/VERSION, linked in as the Dockerfile does.
 # A build without it (go run, go test, the browser tests) says "dev".
-VERSION_LDFLAGS = -X github.com/skitzo2000/espdns/controller/internal/version.Version=$(shell cat $(CURDIR)/../VERSION)
+VERSION_LDFLAGS = -X github.com/skitzo2000/espdns/controller/internal/version.Version=$(shell cat $(CURDIR)/VERSION)
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(VERSION_LDFLAGS)' -o espdns-controller ./cmd/espdns-controller

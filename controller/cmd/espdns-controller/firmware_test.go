@@ -179,7 +179,7 @@ func TestNewRelease(t *testing.T) {
 		t.Fatalf("none known: %v %v", got, err)
 	}
 	tags = `[{"tag_name": "v0.0.9"}, {"tag_name": "v0.0.8"}]`
-	if l := check(); len(l) != 1 || l[0] != "firmware v0.0.9, a new release: nodes on an older version are offered it" || updates.Latest(dir) != "0.0.9" {
+	if l := check(); len(l) != 1 || l[0] != "firmware 0.0.9, a new release: nodes on an older version are offered it" || updates.Latest(dir) != "0.0.9" {
 		t.Fatalf("new: %q", l)
 	}
 	if _, err := os.Stat(filepath.Join(images, "esp32s3-eth")); err == nil {

@@ -309,7 +309,7 @@ func (n *Node) status() map[string]any {
 	for _, z := range n.hosted.Zones {
 		hz = append(hz, map[string]any{"name": z.Name, "serial": z.Serial, "records": z.Records})
 	}
-	st := map[string]any{"project": "espdns", "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
+	st := map[string]any{"project": "espdns", "proto": 1, "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
 		"slot": n.Slot, "ota_state": n.otaState(), "uptime_s": int64(time.Since(n.boot).Seconds()), "node_id": n.ID(),
 		"board": n.Board, "image": n.Image, "boot_ms": 2100, "ip": n.Addr,
 		"keys": n.keys(), "seq": n.seq,
@@ -354,6 +354,16 @@ func (n *Node) status() map[string]any {
 		fz = append(fz, map[string]any{"name": z.Zone, "forwarder": z.Forwarder})
 	}
 	st["forward_zones"] = fz
+	// No LED on its board; its config's in its place.
+	led := release.LEDStatus{LEDSetting: release.LEDSetting{Kind: "none", Pins: []int{}}, From: "board",
+		Board: &release.LEDSetting{Kind: "none", Pins: []int{}}}
+	if l := n.cfg.LED; l != nil {
+		led.Kind, led.ActiveLow, led.From = l.Kind, l.ActiveLow || l.CommonAnode, "config"
+		for _, p := range l.Pins() {
+			led.Pins = append(led.Pins, *p.Pin)
+		}
+	}
+	st["led"] = led
 	return st
 }
 

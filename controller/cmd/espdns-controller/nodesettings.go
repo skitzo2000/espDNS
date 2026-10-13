@@ -588,7 +588,7 @@ func (n nodeSettingsServer) writeMove(s *nodeSettings, e nodesettings.Edit, vers
 			"then move it", s.name)
 	case version != s.view.Hash:
 		return "", "", fail(http.StatusConflict, "%s's settings changed since the form was read: read them again", s.name)
-	case e.Network == nil || e.Name != nil || e.Forwarders != nil || e.TZ != nil || e.Blocking != nil || e.QueryLog != nil || len(e.Reset) > 0:
+	case e.Network == nil || e.Name != nil || e.Forwarders != nil || e.TZ != nil || e.Blocking != nil || e.QueryLog != nil || e.LED != nil || len(e.Reset) > 0:
 		return "", "", fail(http.StatusBadRequest, "a move changes only the address: save the other changes apart")
 	}
 	cfg, err := nodesettings.Apply(s.cfg, e)

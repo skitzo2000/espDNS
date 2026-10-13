@@ -30,7 +30,7 @@ const DefaultForge = "https://github.com/skitzo2000/espdns"
 // FetchOptions say which release Fetch gets, from where.
 type FetchOptions struct {
 	Forge   string // the repository's page, https://<host>/<owner>/<repo> ("": DefaultForge)
-	Version string // "0.0.3" or "v0.0.3"; "": the newest published one
+	Version string // a tag (firmware-v0.0.3, or v0.0.2 from before), or a version alone (0.0.3: the firmware release the forge lists for it); "": the newest firmware release
 	// ProjectPub is the project's release public key (keys/project.pub): the only key a
 	// fetched release is taken with.
 	ProjectPub []byte
@@ -118,19 +118,21 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	if c == nil {
 		c = &http.Client{Timeout: 10 * time.Minute}
 	}
+	// A tag as it is; a version alone, or none (the newest), the firmware release the forge
+	// lists for it
 	tag := o.Version
-	if tag == "" {
-		if tag, err = newest(ctx, c, f); err != nil {
+	v, ok := FirmwareVersion(tag)
+	if !ok {
+		if tag != "" && !version.MatchString(tag) {
+			return out, fmt.Errorf("version %q: not vMAJOR.MINOR.PATCH or firmware-vMAJOR.MINOR.PATCH", o.Version)
+		}
+		if tag, err = firmwareTag(ctx, c, f, tag); err != nil {
 			return out, err
 		}
-		logf("%s: the newest release is %s", f.Base, tag)
-	}
-	if !strings.HasPrefix(tag, "v") {
-		tag = "v" + tag
-	}
-	v := strings.TrimPrefix(tag, "v")
-	if !version.MatchString(v) {
-		return out, fmt.Errorf("version %q: not vMAJOR.MINOR.PATCH", o.Version)
+		v, _ = FirmwareVersion(tag)
+		if o.Version == "" {
+			logf("%s: the newest firmware release is %s", f.Base, tag)
+		}
 	}
 
 	if err := secfile.MkdirAll(work); err != nil {
@@ -215,7 +217,20 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, need)
 }
 
-// Latest is the tag of the newest published release (newest) on the forge ("": DefaultForge).
+// FirmwareVersion is the version a firmware release's tag names: firmware-vMAJOR.MINOR.PATCH,
+// or vMAJOR.MINOR.PATCH (the firmware and the controller released together, before each had
+// its own version). Any other tag, a controller release's (controller-v...) among them, is
+// not one.
+func FirmwareVersion(tag string) (string, bool) {
+	v, ok := strings.CutPrefix(tag, "firmware-v")
+	if !ok {
+		v, ok = strings.CutPrefix(tag, "v")
+	}
+	return v, ok && version.MatchString(v)
+}
+
+// Latest is the tag of the newest published firmware release on the forge ("":
+// DefaultForge): a controller release never makes a node out of date.
 func Latest(ctx context.Context, c *http.Client, forge string) (string, error) {
 	if forge == "" {
 		forge = DefaultForge
@@ -224,12 +239,12 @@ func Latest(ctx context.Context, c *http.Client, forge string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return newest(ctx, c, f)
+	return firmwareTag(ctx, c, f, "")
 }
 
-// newest is the tag of the newest published release (not a draft) named vMAJOR.MINOR.PATCH;
-// a pre-release counts (every 0.x release is one).
-func newest(ctx context.Context, c *http.Client, f Forge) (string, error) {
+// firmwareTag is the tag of the published firmware release (FirmwareVersion; not a draft)
+// of version v, or the newest one if v is "". A pre-release counts (every 0.x release is one).
+func firmwareTag(ctx context.Context, c *http.Client, f Forge, v string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.api(), nil)
 	if err != nil {
 		return "", err
@@ -251,9 +266,12 @@ func newest(ctx context.Context, c *http.Client, f Forge) (string, error) {
 		return "", fmt.Errorf("the releases of %s: %v", f.Base, err)
 	}
 	for _, r := range rels {
-		if !r.Draft && strings.HasPrefix(r.Tag, "v") && version.MatchString(r.Tag[1:]) {
+		if rv, ok := FirmwareVersion(r.Tag); ok && !r.Draft && (v == "" || rv == v) {
 			return r.Tag, nil
 		}
+	}
+	if v != "" {
+		return "", fmt.Errorf("%s has no published firmware release %s", f.Base, v)
 	}
 	return "", fmt.Errorf("%s has no published release yet", f.Base)
 }

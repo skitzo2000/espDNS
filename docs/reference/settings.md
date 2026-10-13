@@ -45,7 +45,7 @@ dashboard's Settings page (which writes it whole) or by hand.
 | `canary` | string | The node an apply changes first, unless you choose another. Empty: the first node changed. | Must be one of `nodes`. |
 | `no_dhcp` | list of strings | IPv4 networks with no DHCP server, each as its network address with prefix length (`192.0.2.0/24`). A node on one of these is never given a DHCP config by adoption. Empty: none. | Must parse as an IPv4 prefix. Must be the network address itself (`192.0.2.0/24`, not `192.0.2.5/24`). No duplicates. |
 | `primary` | object | The zone primary. See [primary](#primary). Absent: none set up. | See below. |
-| `release_url` | string | The repository Get firmware and `espdns release fetch` download the project's releases from: a mirror of it, `https://git.example.com/<owner>/espdns`. Empty or absent: `https://github.com/skitzo2000/espdns`. A release is taken only if the project's key signed it, wherever it comes from. See [Releasing](../releasing.md#using-a-release). | An `http` or `https` URL with a host and `/<owner>/<repo>`. |
+| `release_url` | string | The repository the controller asks for the newest firmware release, and Get firmware, firmware updates and `espdns release fetch` download the project's releases from: a mirror of it, `https://git.example.com/<owner>/espdns`. Empty or absent: `https://github.com/skitzo2000/espdns`. A release is taken only if the project's key signed it, wherever it comes from. See [Releasing](../releasing.md#using-a-release). | An `http` or `https` URL with a host and `/<owner>/<repo>`. |
 | `internal_sources` | list of strings | The internal allowlist: hosts (a name or an IP address, no scheme or port) a blocklist URL source may be fetched from over plain http or at an inside (private, loopback, link-local) address. Such a fetch goes to that host only. Empty: URL sources are https from public addresses only. See [Blocking](../blocking.md#lists-hosted-inside-your-network). | Each must be a host name or an IP address. |
 | `blocklist_refresh` | string | How often the controller checks the blocklists it downloads (a list's URL sources) for a new version, and sends a changed one to the nodes: `"off"`, or a time such as `"6h"`, `"12h"`, `"24h"`, `"168h"`. Empty or absent: every day (`"24h"`). The Blocking page's **Check for new versions** sets it. See [Blocking](../blocking.md#keep-the-lists-up-to-date). | `"off"`, or a Go duration from `1h` to `720h` (30 days). |
 
@@ -93,6 +93,7 @@ already sets `-data /data -catalog /catalog`; `compose.yaml` sets `-listen` from
 | `-listen` | `127.0.0.1:8480` | Address for the dashboard and API. Must be a loopback address (`127.0.0.1`, `[::1]` or `localhost`) with any port. The controller refuses to start on any other address. |
 | `-data` | `data` (image: `/data`) | The data directory. |
 | `-catalog` | `../boards` (image: `/catalog`) | The shipped board catalog. |
+| `-release-url` | `https://github.com/skitzo2000/espdns` | The repository the controller checks for new firmware releases and downloads them from, when `settings.json` has no `release_url`. |
 | `-project-pub` | `/keys/project.pub` | The project's release public key: a release whose `SHA256SUMS` it signed (or your release key signed) is imported. No node trusts it. |
 | `-browse-mdns` | `true` | Browse mDNS for nodes besides `settings.json`'s. `false`: poll only the listed nodes. |
 | `-check-mdns` | `3s` | How long a `check` job browses mDNS for extra nodes. `0`: don't. |
@@ -136,6 +137,7 @@ others.
 | `lists/` | Compiled blocklist and overrides files. |
 | `boards/` | Your own board definitions. |
 | `firmware/images/<image>/` | Chip images (`espdns release import` or `fetch`, Get firmware), each with its `provenance/`: the signed `SHA256SUMS`, its signature, the image's tarball and who signed it, checked again before every update. |
+| `firmware/latest` | The newest firmware release's version, as the controller last heard it (at start, every 24 hours, and when a new node shows up). Nothing is downloaded with it. |
 | `firmware/builds/<board>/` | Per-board firmware builds for rollouts. |
 | `changes/` | Pending changes, waiting for one apply. |
 | `fleet.lock` | The fleet lock: one fleet change at a time. |

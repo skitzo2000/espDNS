@@ -29,7 +29,7 @@ in, because that's what is tested. Memory sizes are left out until measured on t
 | `ethernet` (emac) | `phy` (`ip101`, `lan87xx`, `rtl8201`, `dp83848`), `addr` (0-31, -1 to search), `reset`, `power` (PHY or oscillator enable pin), `mdc`, `mdio`, `rmii_clock` (`{"mode": "in" or "out", "gpio": n}`) |
 | `ethernet` (w5500) | `spi_host`, `cs`, `int`, `rst`, `mhz` (default 20) |
 | `sd` | `kind`: `none`, `sdmmc` (`slot`, `width` 1 or 4, `ldo` channel powering the IO bank) or `spi` (`spi_host`, `cs`) |
-| `led` | `kind`: `none`, `gpio` (`pin`, `active_low`) or `ws2812` (`pin`) |
+| `led` | `kind`: `none`, `gpio` (`pin`, `active_low`), `ws2812` (`pin`) or `rgb`, a plain RGB LED on three GPIOs (`red`, `green`, `blue`, `common_anode`). A node config's `led` overrides it (the node page's Status light) |
 | `wifi` | `tx_power_dbm`: transmit power cap, 2-20 (default: the chip's maximum, 20) |
 | `memory` | The memory plan's values (below): how much each service gets. A key left out is the chip image's default |
 | `cpu` | Idle clock scaling (below): `dfs` (true or false) and `min_mhz`, the clock it idles at. A key left out is the chip image's default |

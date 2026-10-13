@@ -30,7 +30,18 @@ typedef enum { BOARD_ETH_NONE, BOARD_ETH_EMAC, BOARD_ETH_W5500 } board_eth_kind_
 typedef enum { BOARD_PHY_IP101, BOARD_PHY_LAN87XX, BOARD_PHY_RTL8201, BOARD_PHY_DP83848 } board_phy_t;
 typedef enum { BOARD_CLK_DEFAULT, BOARD_CLK_IN, BOARD_CLK_OUT } board_rmii_clock_t;
 typedef enum { BOARD_SD_NONE, BOARD_SD_SDMMC, BOARD_SD_SPI } board_sd_kind_t;
-typedef enum { BOARD_LED_NONE, BOARD_LED_GPIO, BOARD_LED_WS2812 } board_led_kind_t;
+typedef enum { BOARD_LED_NONE, BOARD_LED_GPIO, BOARD_LED_WS2812, BOARD_LED_RGB } board_led_kind_t;
+
+/* The status LED: none, a single-colour LED on a GPIO, one WS2812, or a plain RGB LED on
+ * three GPIOs. As JSON, in a board definition and a node config alike:
+ *   { "kind": "gpio", "pin": 2, "active_low": true }        (lit by a low level)
+ *   { "kind": "ws2812", "pin": 48 }
+ *   { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }  (lit low) */
+typedef struct {
+    board_led_kind_t kind;
+    int pin[3]; /* gpio, ws2812: pin[0]; rgb: red, green, blue */
+    bool active_low;
+} board_led_t;
 
 /* A network address setting, as the board definition's "network" and the node config's write
  * it (cfg_parse_net): a static address, "dhcp", or not given. DHCP only when a setting says
@@ -74,11 +85,7 @@ typedef struct {
         int spi_bus, cs;
     } sd;
 
-    struct {
-        board_led_kind_t kind;
-        int pin;
-        bool active_low;
-    } led;
+    board_led_t led;
 
     /* Wi-Fi transmit power cap in dBm, 0 = the chip's default. Small boards with a marginal
      * antenna or supply often transmit cleaner below full power. */
@@ -127,6 +134,11 @@ typedef struct {
 /* Fills *out from a board definition. False with a reason in err if it is malformed: unknown
  * kinds, pins out of range, a pin used twice, a device on an SPI bus the board doesn't define. */
 bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err, size_t errlen);
+
+/* The "led" object o into *out. With b, its pins are checked against the rest of board b's
+ * (b's own LED replaced). False with a reason in err. */
+struct cJSON;
+bool board_led_parse(const struct cJSON *o, const board_desc_t *b, board_led_t *out, char *err, size_t errlen);
 
 /* Checks a `board` partition's header and CRC. On success points *json at the definition. */
 bool board_part_open(const uint8_t *part, size_t size, const char **json, size_t *len, const char **err);

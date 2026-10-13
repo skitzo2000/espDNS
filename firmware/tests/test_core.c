@@ -3746,6 +3746,42 @@ static void test_board_defs(void)
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":\"dhcp\"}", &b, err) &&
           strstr(err, "network: an object"));
 
+    /* The status LED: a plain RGB LED on three GPIOs; a node config's in place of the board's,
+     * its pins checked against the board's others (the board's own LED pin free for it). */
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":5,\"blue\":6,"
+                "\"common_anode\":true}}", &b, err) &&
+          b.led.kind == BOARD_LED_RGB && b.led.pin[0] == 4 && b.led.pin[1] == 5 && b.led.pin[2] == 6 && b.led.active_low);
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":5}}", &b, err) &&
+          strstr(err, "led: blue: required"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":4,\"blue\":6}}",
+                 &b, err) && strstr(err, "GPIO 4 used twice: led red and led green"));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"spi\":[{\"host\":2,\"sclk\":7,\"mosi\":9,\"miso\":8}],"
+                "\"sd\":{\"kind\":\"spi\",\"spi_host\":2,\"cs\":21},\"led\":{\"kind\":\"ws2812\",\"pin\":38}}", &b, err));
+    static cfg_t cf, run;
+    CHECK(cfg_build(&run, &b, NULL, 0, err, sizeof(err)) && run.led.kind == BOARD_LED_WS2812 && run.led.pin[0] == 38 &&
+          !run.led_config);
+    const char *lj = "{\"led\":{\"kind\":\"rgb\",\"red\":38,\"green\":39,\"blue\":40,\"common_anode\":true}}";
+    CHECK(cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && cf.led.kind == BOARD_LED_RGB && cf.led.pin[0] == 38 &&
+          cf.led.pin[2] == 40 && cf.led.active_low && cf.led_config);
+    CHECK(cfg_reboot_reasons(&run, &cf) == 0); /* live */
+    cfg_copy_live(&run, &cf);
+    CHECK(run.led.kind == BOARD_LED_RGB && run.led.pin[1] == 39 && run.led_config);
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":21,\"active_low\":true}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: GPIO 21 used twice: sd cs and led") &&
+          cf.led.kind == BOARD_LED_WS2812 && !cf.led_config);
+    lj = "{\"led\":{\"kind\":\"rgb\",\"red\":1,\"green\":2,\"blue\":9}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "GPIO 9 used twice: spi mosi and led blue"));
+    lj = "{\"led\":{\"kind\":\"rgb\",\"red\":1,\"green\":2}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: blue: required"));
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":60}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: pin: GPIO 60 out of range"));
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":2,\"colour\":\"red\"}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led.colour: unknown setting"));
+    lj = "{\"led\":{\"kind\":\"rainbow\"}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: kind: unknown value"));
+    lj = "{\"led\":{\"kind\":\"none\"}}";
+    CHECK(cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && cf.led.kind == BOARD_LED_NONE && cf.led_config);
+
     /* The partition: header and CRC (vector: zlib.crc32(b"123456789") = 0xCBF43926). */
     CHECK(board_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
     static const char def[] = "{\"name\":\"x\",\"image\":\"esp32s3-quad\"}";

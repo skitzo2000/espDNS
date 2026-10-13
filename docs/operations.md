@@ -92,16 +92,23 @@ controller is down.
 
 ### Versions
 
-The firmware and the controller share one version number, the same on every board. Each
-node gets a state from comparing its version with the newest release (or a newer firmware
-you imported):
+The firmware has its own version number, the same on every chip and board. The controller
+has another, so a new controller never makes your nodes out of date. Each node gets a state
+from comparing its version with the newest firmware release (or a newer firmware you
+imported):
 
 | State | Meaning |
 | --- | --- |
 | `available` | The node runs an older version: "Update available: 0.0.1 → 0.0.2". |
 | `current` | The node runs the newest version. |
 | `newer` | The node runs a newer version than the newest release. |
-| `unknown` | The controller has not read the node yet, its firmware is from before version numbers, or no release is known yet. |
+| `unknown` | The controller hasn't read the node yet, its firmware is from before version numbers, no release is known yet, or the node's firmware and the controller don't fit together (it says which protocol each speaks; update the controller first). |
+
+The controller asks GitHub (or your `release_url`) for the newest firmware release when it
+starts, every 24 hours, and when a new node shows up. It keeps only the version number, in
+`firmware/latest` in the data directory, and downloads nothing. A node on an older version
+is offered the update, whatever its chip. The chip image it needs is downloaded and checked
+when you apply the update.
 
 ### Get the firmware into the controller
 
@@ -110,19 +117,19 @@ The controller loads chip images only as a signed release: the project's (checke
 ever see your key: the controller signs every update with it, after checking again that the
 release still vouches for the app it sends.
 
-- The project's release: the controller checks GitHub for new releases daily, at start and
-  when a new node shows up, and offers the update; applying it downloads the chip image
-  each node needs. To get one now, **Get firmware** in the account menu's
-  Firmware (or in Install over USB, for a board whose chip image isn't there yet), or:
+- The project's release: you don't need to do anything for updates, since applying one
+  downloads the chip image each node needs. To get the chip images now, press **Get
+  firmware** in the account menu's Firmware (or in Install over USB, for a board whose chip
+  image isn't there yet), or run:
 
   ```sh
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data
   ```
 
-  It downloads the newest release (`-version v0.0.2` for another), checks the project's
-  signature and every file, and imports it as "project release v0.0.2". It gets only the
-  chip images needed: in Install over USB, that board's; otherwise what your nodes need
-  (`-image esp32s3-eth` names one).
+  It downloads the newest firmware release (`-version 0.0.2` for another), checks the
+  project's signature and every file, and imports it as "project release v0.0.2". It gets
+  only the chip images needed: in Install over USB, that board's; otherwise what your nodes
+  need (`-image esp32p4-rev1` names one).
 - Your own build: build, package, sign and import as in
   [Build your own firmware](developer.md#build-your-own-firmware). Remove
   `build/release/dist` first: `release build` only writes into a missing or empty directory.
@@ -156,9 +163,10 @@ its keys and erases its settings.
 Edits and firmware updates queue as *pending changes*. Nothing reaches a node until you
 apply.
 
-1. Open the controller, `http://127.0.0.1:8480`. **Nodes** says when an update is there,
-   e.g. "Update available: 0.0.2 → 0.0.3".
-2. Click **Update** (or **Update all**), check the from and to versions, and confirm.
+1. Open the controller, `http://127.0.0.1:8480`. On **Nodes**, a node with an update has an
+   amber dot and an **Update 0.0.2 → 0.0.3** button in its row. **Update all** sits by
+   **+ Add node** while two or more nodes have one.
+2. Click the button (or **Update all**), check the from and to versions, and confirm.
 3. Open the orange chip in the top bar ("2 changes to apply"). It lists each change, what it
    does and which nodes restart. You can discard one here.
 4. Open **How it rolls out**. Pick the canary and how long to watch each node: 1, 5 or 15
@@ -255,8 +263,9 @@ On its node page:
   offline. If it's up, it still answers DNS.
 - **Return to service.** The node must answer and trust your release key. The controller
   then sends it what it missed: settings, hosted zones, allowed and blocked sites, its
-  blocklist, and newer firmware if it's behind. Each is checked first, like an apply. If it
-  doesn't answer, it stays out, and the page says why.
+  blocklist, and newer firmware if it's behind and its chip image is here (else update it
+  from Nodes). Each is checked first, like an apply. If it doesn't answer, it stays out,
+  and the page says why.
 - **Remove from the group.** It comes off your list. Its config file is kept and the node
   isn't touched: if it's up it keeps answering DNS, so take it off your router's
   DNS servers too. While it's on your network it shows up under New device found, and you
@@ -549,6 +558,8 @@ last one as long as the controller's clock is right.
 
 ## Releases
 
-A release is one version of firmware and controller together, its `SHA256SUMS` signed with
-the project's key; its chip images are key-neutral. [Releasing](releasing.md) covers what it
-holds and how to check one with `espdns release verify`.
+A firmware release holds the chip images and a controller release holds the controller's
+image, each with its own version and tag (`firmware-v0.0.3`, `controller-v0.0.3`). Each
+release's `SHA256SUMS` is signed with the project's key, and the chip images are
+key-neutral. [Releasing](releasing.md) covers what each holds and how to check one with
+`espdns release verify`.

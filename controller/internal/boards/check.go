@@ -1,7 +1,9 @@
 package boards
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -116,10 +118,25 @@ func pins(b Board) []pinUse {
 	if b.SD != nil && b.SD.Kind == "spi" {
 		add("SD CS", b.SD.CS)
 	}
-	if b.LED != nil && b.LED.Kind != "none" {
-		add("LED", b.LED.Pin)
+	if b.LED != nil {
+		for _, p := range b.LED.Pins() {
+			add(strings.TrimSuffix("LED "+p.Key, " pin"), p.Pin)
+		}
 	}
 	return u
+}
+
+// CheckLED is what is wrong with l as the status LED of board b, in place of b's own (a node
+// config's "led"): Check's errors about it, so its pins are checked against the chip's and the
+// board's others. nil if nothing; b is a board that passes Check.
+func CheckLED(b Board, l LED) error {
+	b.LED = &l
+	errs, _ := Check(b)
+	errs = slices.DeleteFunc(errs, func(s string) bool { return !strings.Contains(s, "LED") && !strings.HasPrefix(s, "led") })
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(errs, "; "))
 }
 
 func oneOf(v string, allowed ...string) bool {
@@ -246,11 +263,9 @@ func Check(b Board) (errs, warns []string) {
 	if b.SD == nil || b.SD.Kind == "none" {
 		w("no SD card: zones and blocking live in RAM only")
 	}
-	if l := b.LED; l != nil {
-		if !oneOf(l.Kind, "none", "gpio", "ws2812") {
-			e("led kind %q: none, gpio or ws2812", l.Kind)
-		} else if l.Kind != "none" && l.Pin == nil {
-			e("led pin: required")
+	if b.LED != nil {
+		if err := b.LED.Check(); err != nil {
+			e("%v", err)
 		}
 	}
 	if b.WiFi != nil && b.WiFi.TxPowerDBm != 0 {

@@ -41,13 +41,12 @@ if(EXTRA_SDKCONFIG)
     list(APPEND SDKCONFIG_DEFAULTS "${EXTRA_SDKCONFIG}")
 endif()
 
-# The version: the repository's VERSION (version.cmake), as the app descriptor's version (what
-# /status, the image header and the controller say), never `git describe`. The build
-# containers mount it at /VERSION, this directory's parent (firmware/Makefile). A change to it
-# configures the build again.
+# The version: the firmware's VERSION, in this directory (version.cmake), as the app
+# descriptor's version (what /status, the image header and the controller say), never
+# `git describe`. A change to it configures the build again.
 include("${CMAKE_CURRENT_LIST_DIR}/version.cmake")
-espdns_version("${CMAKE_CURRENT_LIST_DIR}/../VERSION" PROJECT_VER)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
+espdns_version("${CMAKE_CURRENT_LIST_DIR}/VERSION" PROJECT_VER)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/VERSION")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(ESPDNS_IMAGE "${IMAGE}")

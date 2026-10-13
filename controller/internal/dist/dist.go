@@ -65,7 +65,7 @@ var chipFiles = []string{"app.bin", "bootloader.bin", "image.json", "ota_data_in
 
 // Options are what Build makes a release from.
 type Options struct {
-	Version string   // the repository's VERSION: every chip image must be built at it
+	Version string   // firmware/VERSION: every chip image must be built at it
 	Images  string   // the exported chip images, <Images>/<image>/image.json
 	Catalog string   // the board catalog (boards/): every board's chip image must be in Images
 	Out     string   // where the release's files go: missing or empty

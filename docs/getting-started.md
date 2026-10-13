@@ -58,7 +58,7 @@ through it:
 
 ## Check it works
 
-The dashboard shows both nodes, healthy. To ask one yourself:
+The Nodes page shows both nodes with a green dot. To ask one yourself:
 
 ```sh
 docker run --rm --network host alpine:3 nslookup example.com 192.0.2.53
@@ -77,8 +77,10 @@ docker run --rm --network host alpine:3 nslookup example.com 192.0.2.53
   docker compose up -d
   ```
 
-  Then update your nodes from the Nodes page. They go one at a time, so DNS never drops.
-  The nodes don't need the controller to answer, so stopping it never stops DNS.
+  The controller looks for new firmware when it starts and every day. When there's some,
+  each node that needs it gets an **Update** button in its row on the Nodes page. Updates go
+  one node at a time, so DNS never drops. The nodes don't need the controller to answer, so
+  stopping it never stops DNS.
 
 ## Where next
 

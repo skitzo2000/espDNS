@@ -21,7 +21,8 @@
 //	  "time": { "ntp": [ "192.0.2.1" ], "tz": "EST5EDT,M3.2.0,M11.1.0" },
 //	  "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
 //	  "cpu": { "dfs": false },
-//	  "querylog": { "enabled": true, "client": "full" }
+//	  "querylog": { "enabled": true, "client": "full" },
+//	  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
 //	}
 package nodecfg
 
@@ -63,6 +64,59 @@ type Config struct {
 	Blocking          *Blocking      `json:"blocking,omitempty"`
 	CPU               *CPU           `json:"cpu,omitempty"`
 	QueryLog          *QueryLog      `json:"querylog,omitempty"`
+	LED               *LED           `json:"led,omitempty"`
+}
+
+// LED is the status LED, in place of the board definition's (firmware board_def.h,
+// board_led_t), live: Kind "none", "gpio" (Pin; ActiveLow: lit by a low level), "ws2812"
+// (Pin) or "rgb", a plain RGB LED on three GPIOs (Red, Green, Blue; CommonAnode: lit low).
+// The board definition's "led" (internal/boards) is the same setting. Its pins against the
+// board's other pins are the node's check, and the controller's where it knows the board
+// (boards.CheckLED).
+type LED struct {
+	Kind        string `json:"kind"`
+	Pin         *int   `json:"pin,omitempty"`
+	ActiveLow   bool   `json:"active_low,omitempty"`
+	Red         *int   `json:"red,omitempty"`
+	Green       *int   `json:"green,omitempty"`
+	Blue        *int   `json:"blue,omitempty"`
+	CommonAnode bool   `json:"common_anode,omitempty"`
+}
+
+// LEDKinds are the values LED.Kind takes.
+var LEDKinds = []string{"none", "gpio", "ws2812", "rgb"}
+
+// LEDPin is one pin an LED uses.
+type LEDPin struct {
+	Key string // its key in the JSON: "pin", "red", "green" or "blue"
+	Pin *int
+}
+
+// Pins are the pins the LED's kind uses.
+func (l *LED) Pins() []LEDPin {
+	switch l.Kind {
+	case "gpio", "ws2812":
+		return []LEDPin{{"pin", l.Pin}}
+	case "rgb":
+		return []LEDPin{{"red", l.Red}, {"green", l.Green}, {"blue", l.Blue}}
+	}
+	return nil
+}
+
+// Check checks an LED as the node does (board_led_parse), but for the board's pins.
+func (l *LED) Check() error {
+	if !slices.Contains(LEDKinds, l.Kind) {
+		return fmt.Errorf(`led.kind: "none", "gpio", "ws2812" or "rgb"; not %q`, l.Kind)
+	}
+	for _, p := range l.Pins() {
+		if p.Pin == nil {
+			return fmt.Errorf("led.%s: required", p.Key)
+		}
+		if *p.Pin < 0 || *p.Pin > 54 {
+			return fmt.Errorf("led.%s: GPIO %d out of range", p.Key, *p.Pin)
+		}
+	}
+	return nil
 }
 
 // QueryLog: Enabled false turns the query log off (left out: on, on a board with
@@ -220,6 +274,10 @@ func (c *Config) SetsCPU() bool { return c.CPU != nil }
 // SetsQueryLog says whether the config has "querylog", which firmware from before the query
 // log refuses (its /status has no "querylog").
 func (c *Config) SetsQueryLog() bool { return c.QueryLog != nil }
+
+// SetsLED says whether the config has "led", which firmware from before it refuses (its
+// /status "led" has no "from").
+func (c *Config) SetsLED() bool { return c.LED != nil }
 
 // Services are the node services the config runs, in the node's order (firmware svc.h,
 // svc_enabled): a list the config leaves out is the firmware's default, which has
@@ -454,6 +512,9 @@ func (c *Config) Validate() error {
 	}
 	if q := c.QueryLog; q != nil && q.Client != "" && !slices.Contains(QueryLogClients, q.Client) {
 		return errors.New(`querylog.client: "full", "subnet" or "hidden"`)
+	}
+	if c.LED != nil {
+		return c.LED.Check()
 	}
 	return nil
 }

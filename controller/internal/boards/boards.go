@@ -84,11 +84,9 @@ type SD struct {
 	CS      *int   `json:"cs,omitempty"`
 }
 
-type LED struct {
-	Kind      string `json:"kind"`
-	Pin       *int   `json:"pin,omitempty"`
-	ActiveLow bool   `json:"active_low,omitempty"`
-}
+// LED is the board's status LED, the same setting as a node config's "led", which takes its
+// place.
+type LED = nodecfg.LED
 
 type WiFi struct {
 	TxPowerDBm int `json:"tx_power_dbm,omitempty"`

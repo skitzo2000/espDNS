@@ -9,8 +9,8 @@ import (
 )
 
 // Versions. The plan shows updates as versions ("0.0.1 → 0.0.4"), with the build hash only
-// under Details. A firmware's version is what its app descriptor says: the repository's
-// VERSION when it was built (internal/version),
+// under Details. A firmware's version is what its app descriptor says: firmware/VERSION
+// when it was built (docs/developer.md, Versions and releases; internal/version),
 // MAJOR.MINOR.PATCH, the same on every chip and board. One whose version isn't one
 // (firmware from before versions, whose descriptor says a commit) can't be ordered.
 

@@ -11,7 +11,7 @@ Open an issue on the repository with:
 - The version. For the controller, run
   `docker compose run --rm -T --entrypoint /espdns espdns-controller version` from
   `controller/`; for a node, it's `"version"` in `http://<node>/status`.
-- The board (its catalog name, such as `ws-s3-eth`) and whether it's on Ethernet or Wi-Fi.
+- The board (its catalog name, such as `p4-ip101`) and whether it's on Ethernet or Wi-Fi.
 - What you did, what you expected, and what happened.
 - Logs. For the controller, `docker compose logs --tail 200` from `controller/`; for a
   node, its `http://<node>/status` and `http://<node>/health`.
@@ -46,7 +46,7 @@ any test.
 
 ```sh
 docker build -t espdns-controller:dev \
-  --build-context boards=boards --build-context version=. --build-context keys=keys \
+  --build-context boards=boards --build-context keys=keys \
   controller
 docker run --rm --entrypoint /espdns espdns-controller:dev version
 ```

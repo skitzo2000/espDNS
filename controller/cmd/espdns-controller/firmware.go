@@ -131,8 +131,8 @@ func (k fetchKind) kind(raw json.RawMessage) (jobs.Func, error) {
 			return nil, fmt.Errorf("params: %v", err)
 		}
 	}
-	if v := strings.TrimPrefix(p.Version, "v"); p.Version != "" && !validVersion(v) {
-		return nil, fmt.Errorf(`params: "version" %q: v and MAJOR.MINOR.PATCH`, p.Version)
+	if v, ok := dist.FirmwareVersion(p.Version); p.Version != "" && !validVersion(p.Version) && !(ok && validVersion(v)) {
+		return nil, fmt.Errorf(`params: "version" %q: MAJOR.MINOR.PATCH, or a firmware release's tag (firmware-v0.0.3)`, p.Version)
 	}
 	for _, img := range p.Images {
 		if !dist.ImageName(img) {
@@ -252,7 +252,7 @@ func newRelease(ctx context.Context, k fetchKind, logf func(string, ...any)) {
 		logf("firmware: no check for a new release: %v", err)
 		return
 	}
-	v := strings.TrimPrefix(tag, "v")
+	v, _ := dist.FirmwareVersion(tag)
 	if _, err := version.Parse(v); err != nil {
 		logf("firmware: release %s: %v", tag, err)
 		return
@@ -264,7 +264,7 @@ func newRelease(ctx context.Context, k fetchKind, logf func(string, ...any)) {
 		logf("firmware %s, a new release: not kept: %v", tag, err)
 		return
 	}
-	logf("firmware %s, a new release: nodes on an older version are offered it", tag)
+	logf("firmware %s, a new release: nodes on an older version are offered it", v)
 }
 
 // getImage gets the chip image img of the newest release (updates.Latest), as Get firmware
@@ -290,10 +290,10 @@ func (k fetchKind) getImage(ctx context.Context, img string) (got bool, err erro
 	if err != nil {
 		return false, err
 	}
-	_, err = dist.Fetch(ctx, dist.FetchOptions{Forge: forge, Version: "v" + v, ProjectPub: pub, Images: []string{img}, Client: k.client,
+	_, err = dist.Fetch(ctx, dist.FetchOptions{Forge: forge, Version: v, ProjectPub: pub, Images: []string{img}, Client: k.client,
 		Logf: func(string, ...any) {}}, fw, filepath.Join(fw, "images"))
 	if err != nil {
-		return false, fmt.Errorf("%s of release v%s not got: %w", img, v, err)
+		return false, fmt.Errorf("%s of firmware release %s not got: %w", img, v, err)
 	}
 	return true, nil
 }

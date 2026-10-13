@@ -637,7 +637,7 @@ docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espd
   release verify -dir /release -pub /keys/project.pub
 docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
   release import -dir /release -data /data
-docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -version v0.0.2
+docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.2
 docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -image esp32s3-eth
 ```
 
@@ -656,14 +656,14 @@ provenance (your own export, or `firmware/builds/`) is your own build, sent as i
 | `-dir` | sign, verify, import (required) | The release's files, with `SHA256SUMS`. |
 | `-pub` | sign, verify (required); import, fetch | The public key of the key that signs the release, raw (65 bytes). For import and fetch: the project's, default `/keys/project.pub`; the controller's own release key is taken too by import, never by fetch. |
 | `-data` | import, fetch (required) | The data directory. |
-| `-version` | fetch | The release, `v0.0.2`. Default: the newest published. |
+| `-version` | fetch | The firmware release: its version, `0.0.2`, or its tag, `firmware-v0.0.3` (`v0.0.2` and older: both parts together). Default: the newest published. |
 | `-url` | fetch | The repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
 | `-image` | fetch | A chip image to get, `esp32s3-eth`. Comma-separated or repeat. Default: the ones needed (above). |
 | `-catalog` | fetch | The board catalog, for each node's board's chip image. Default `/catalog`. |
 
 ## version
 
-Prints this build's version (the repository's `VERSION`). Takes no flags.
+Prints this build's version (`controller/VERSION`). Takes no flags.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller version

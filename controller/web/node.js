@@ -362,6 +362,9 @@ function renderAttention() {
 const QL = [["full", "Its address"], ["subnet", "Its network only (/24)"], ["hidden", "Nothing"]];
 const qlWords = q => (!q.enabled ? "Off" : q.client === "subnet" ? "Keeps client networks" : q.client === "hidden" ? "Keeps no client" : "Keeps client addresses");
 const appliesHint = a => (a === "restart" ? "Changing it restarts this node while another answers." : "Applies live.");
+const LEDS = [["none", "None"], ["gpio", "One-colour LED"], ["ws2812", "WS2812"], ["rgb", "RGB LED"]];
+const ledWords = l => (!l ? "Not known" : l.kind === "gpio" ? `One-colour LED on GPIO ${l.pin}${l.active_low ? ", on when low" : ""}`
+  : l.kind === "ws2812" ? `WS2812 on GPIO ${l.pin}` : l.kind === "rgb" ? `RGB LED on GPIO ${l.red}, ${l.green}, ${l.blue}${l.common_anode ? ", common anode" : ""}` : "None");
 
 async function readSettings() {
   const n = theNode();
@@ -561,6 +564,22 @@ function renderSettings() {
   const qlSel = h("select", { class: "t", id: "set-querylog", onchange: mark },
     QL.map(([v, t]) => h("option", { value: v, selected: qv.enabled !== false && (qv.client || "full") === v }, t)),
     h("option", { value: "off", selected: qv.enabled === false }, "Keep no query log"));
+  // Status light: its board's, or one set here in its place
+  const ld = obj(f.led), lv = obj(ld.value), ledCfg = ld.from === "config" && lv.led ? obj(lv.led) : null, lc = ledCfg || {};
+  const num = (id, v) => h("input", { class: "t mono", id, inputmode: "numeric", value: typeof v === "number" ? String(v) : "", autocomplete: "off", oninput: mark });
+  const ledPin = num("set-led-pin", lc.pin), ledR = num("set-led-red", lc.red), ledG = num("set-led-green", lc.green), ledB = num("set-led-blue", lc.blue);
+  const ledLow = h("input", { type: "checkbox", id: "set-led-low", checked: !!lc.active_low, onchange: mark });
+  const ledCA = h("input", { type: "checkbox", id: "set-led-ca", checked: !!lc.common_anode, onchange: mark });
+  const lowRow = h("label", { class: "check" }, ledLow, h("span", {}, "On when low (the LED wired to 3.3 V)"));
+  const one = h("div", { class: "stack" }, h("label", { class: "f" }, h("span", {}, "GPIO"), ledPin), lowRow);
+  const three = h("div", { class: "stack" },
+    h("div", { class: "pins3" }, ...[["Red", ledR], ["Green", ledG], ["Blue", ledB]].map(([t, i]) => h("label", { class: "f" }, h("span", {}, `${t} GPIO`), i))),
+    h("label", { class: "check" }, ledCA, h("span", {}, "Common anode (its common leg to 3.3 V)")));
+  const showLed = () => { const k = ledSel.value; one.hidden = k !== "gpio" && k !== "ws2812"; lowRow.hidden = k !== "gpio"; three.hidden = k !== "rgb"; };
+  const ledSel = h("select", { class: "t", id: "set-led", onchange: () => { mark(); showLed(); } },
+    h("option", { value: "", selected: !ledCfg }, "Its board's"),
+    LEDS.map(([v, t]) => h("option", { value: v, selected: !!ledCfg && lc.kind === v }, t)));
+  showLed();
 
   const rows = [
     row("name", "Name", str(nm.value) || "–",
@@ -578,13 +597,18 @@ function renderSettings() {
         h("span", { class: "hint" }, bl.value === false ? `Off: ${nameOf(n)} blocks nothing, and its memory goes to the cache.` : "On: as set up on the Blocking page."))),
     row("querylog", "Query log", qlWords({ enabled: qv.enabled !== false, client: qv.client }),
       h("label", { class: "f" }, h("span", {}, "What to keep about each device"), qlSel, h("span", { class: "hint" }, appliesHint(ql.applies)))),
+    row("led", "Status light", ledCfg ? ledWords(ledCfg) : lv.led ? `${ledWords(obj(lv.led))} (its board's)` : "Its board's",
+      h("label", { class: "f" }, h("span", {}, "The light that shows its health"), ledSel,
+        h("span", { class: "hint" }, `Its board's: ${lv.board ? ledWords(obj(lv.board)) : "not known"}. ${appliesHint(ld.applies)}`)),
+      one, three,
+      h("p", { class: "hint" }, "An RGB LED takes three free GPIOs, each through its own resistor (about 220 Ω).")),
   ];
   // A field with a pending change: its row says so.
   for (const fld of arr(pend && pend.fields)) {
     const d = rows.find(x => x.dataset.field === fld);
     if (d) { d.classList.add("pending"); d.querySelector("summary .val").prepend(h("span", { class: "tag" }, "waiting"), " "); }
   }
-  for (const c of [nameIn, dhcpIn, addrIn, gwIn, fwIn, tzSel, blSel, qlSel]) c.disabled = !canEdit;
+  for (const c of [nameIn, dhcpIn, addrIn, gwIn, fwIn, tzSel, blSel, qlSel, ledSel, ledPin, ledR, ledG, ledB, ledLow, ledCA]) c.disabled = !canEdit;
 
   const msg = h("p", { class: "hint bad", role: "status" });
   const save = h("button", { class: "btn primary", type: "button", id: "set-save", disabled: !canEdit }, "Save changes");
@@ -599,10 +623,15 @@ function renderSettings() {
     const fws = fwIn.value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
     if (fwList === null ? fws.length : fws.join(",") !== fwList.join(",")) edit.forwarders = fws;
     const tzNow = tzv.tz ? (zones.some(z => z.tz === tzv.tz && z.name === tzv.name) ? str(tzv.name) : str(tzv.tz)) : "";
-    if (tzSel.value !== tzNow) { if (tzSel.value) edit.tz = tzSel.value; else edit.reset = ["tz"]; }
+    if (tzSel.value !== tzNow) { if (tzSel.value) edit.tz = tzSel.value; else (edit.reset ||= []).push("tz"); }
     if ((blSel.value === "on") !== (bl.value !== false)) edit.blocking = blSel.value === "on";
     const qlNow = qv.enabled === false ? "off" : str(qv.client) || "full";
     if (qlSel.value !== qlNow) edit.querylog = qlSel.value === "off" ? { enabled: false } : { enabled: true, client: qlSel.value };
+    const k = ledSel.value, gp = x => (x.value.trim() === "" ? null : Number(x.value));
+    const ledWant = !k ? null : k === "none" ? { kind: k } : k === "rgb" ? { kind: k, red: gp(ledR), green: gp(ledG), blue: gp(ledB), ...(ledCA.checked ? { common_anode: true } : {}) }
+      : { kind: k, pin: gp(ledPin), ...(k === "gpio" && ledLow.checked ? { active_low: true } : {}) };
+    if (!ledWant && ledCfg) (edit.reset ||= []).push("led");
+    else if (ledWant && JSON.stringify(ledWant) !== JSON.stringify(ledCfg)) edit.led = ledWant;
     if (!Object.keys(edit).length) { msg.textContent = "Nothing changed: open a row first."; return; }
     save.disabled = true;
     try {
@@ -628,8 +657,8 @@ function renderSettings() {
         return;
       }
       // A refusal names its field (name:, network:, ...): shown in that row, opened.
-      const fld = ["name", "network", "forwarders", "tz", "blocking", "querylog"].find(x => m.startsWith(`${x}:`) || m.startsWith(`${x}.`))
-        || (/address|gateway|moves/.test(m) ? "network" : /forwarder/.test(m) ? "forwarders" : "");
+      const fld = ["name", "network", "forwarders", "tz", "blocking", "querylog", "led"].find(x => m.startsWith(`${x}:`) || m.startsWith(`${x}.`))
+        || (/address|gateway|moves/.test(m) ? "network" : /forwarder/.test(m) ? "forwarders" : /status light|\bLED\b/.test(m) ? "led" : "");
       const p = errs.get(fld);
       if (p) { p.className = "hint bad"; p.textContent = m; p.hidden = false; p.closest("details").open = true; } else msg.textContent = m;
     }

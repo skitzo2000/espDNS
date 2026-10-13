@@ -6,8 +6,11 @@ from your clone's `controller/` directory ([Operations](operations.md#before-you
 
 ## First look
 
-In the web page at `http://127.0.0.1:8480`, **Nodes** shows each node's state, LED
-pattern and reasons; click a node for the details and its raw `/status`.
+In the web page at `http://127.0.0.1:8480`, **Nodes** gives each node a dot: green while it
+answers and all is well, amber when something needs doing (an update, a reason to read, a
+node not added yet), red when it isn't working, is offline or is out of service. A short
+flag sits beside a dot that isn't green; hover over the dot for the state and reasons.
+Click a node for the details and its raw `/status`.
 
 On the command line, every node in `settings.json`:
 
@@ -194,7 +197,11 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 ## LED patterns
 
 One status LED per board, if its board definition (or an add-on LED in the config) has
-one. The patterns work in a single colour; RGB adds colour. The Nodes page shows them too.
+one. The patterns work in a single colour; RGB adds colour. The Nodes page shows the state
+as its dot ([First look](#first-look)).
+
+The two ESP32-P4 boards and the XIAO have no LED the node can use: add one
+([A status light](hardware.md#a-status-light)).
 
 | Pattern | RGB colour | State | What to do |
 | --- | --- | --- | --- |
@@ -244,6 +251,18 @@ Read `docker compose logs`.
 | It can't write to the data directory | The directory must exist and be owned by `ESPDNS_UID`. Docker creates a missing one as root, which the controller can't use. |
 | `settings: ...` | `settings.json` doesn't parse, or has a field it doesn't know. The message names the problem; fix the file. |
 | A refused `ESPDNS_LISTEN` | The dashboard listens on localhost only. Any other address is refused. |
+
+### No update is offered
+
+A node's dot on Nodes, hovered, says why:
+
+- `No release known yet`: the controller hasn't heard from GitHub (or your `release_url`)
+  since it started. It asks at start, every 24 hours and when a new node shows up. Check
+  the host can reach GitHub; the controller's log has a `firmware:` line when a check fails.
+- `Its firmware speaks node protocol ...`: the node and this controller don't fit together.
+  Update the controller first.
+- `It runs "...", not a version`: firmware from before version numbers. Update it with a
+  rollout ([Update from the command line](operations.md#update-from-the-command-line)).
 
 ### "the fleet is locked by ..."
 

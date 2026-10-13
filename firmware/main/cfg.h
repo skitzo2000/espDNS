@@ -36,6 +36,9 @@
  *     "querylog": { "enabled": true, "client": "full" }
  *                                           (the query log, qlog.h; client: "full", "subnet"
  *                                            (the /24 only) or "hidden" (no address kept))
+ *     "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
+ *                                           (the status LED, in place of the board's:
+ *                                            board_led_t; its pins checked against the board's)
  *   }
  *
  * The services a node runs follow from it (svc.h): forwarding while it has default
@@ -44,7 +47,7 @@
  * defaults, config.h). A service that is off costs nothing.
  *
  * Settings that can change live (name, wifi tx_power_dbm and power_save, forwarders,
- * upstream_timeout_ms, secondary soa_poll_s and retry_s, hosted, time, blocking, cpu, querylog) do,
+ * upstream_timeout_ms, secondary soa_poll_s and retry_s, hosted, time, blocking, cpu, querylog, led) do,
  * and so forwarding, hosted zones, blocking and the query log start and stop live; any other change (address,
  * Wi-Fi network, zones, primary, forward zones) applies with a reboot.
  *
@@ -131,6 +134,10 @@ typedef struct {
      * (ql_client_t, qlog.h) */
     bool querylog;
     uint8_t querylog_client;
+
+    /* the status LED (live): the board's, or the config's in its place (led_config) */
+    board_led_t led;
+    bool led_config;
 
     char pool[CFG_POOL];
     size_t pool_used;

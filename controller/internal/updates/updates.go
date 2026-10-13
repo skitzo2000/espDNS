@@ -1,8 +1,8 @@
 // Package updates is update availability for the Nodes page: for each node, whether it runs
 // an older version than the newest one the controller knows (its /status), said as versions
-// (version.go). The newest version is the newest release the forge lists (Latest: asked for
-// with nothing downloaded), or a newer chip image held in the data directory (your own
-// import). Versions are the same on every chip and board: a node on an older one is out of
+// (version.go). The newest version is the newest firmware release the forge lists (Latest:
+// asked for with nothing downloaded; a controller release never counts), or a newer chip
+// image held in the data directory (your own import). Versions are the same on every chip and board: a node on an older one is out of
 // date, whatever it runs on. Offering an update makes a pending firmware change
 // (internal/changes) of the node's chip image (images/<image>), which the apply job fetches
 // if it isn't held at that version and sends; nothing here pushes to a node.
@@ -27,6 +27,13 @@ const (
 	Current   = "current"   // it runs the newest version
 	Newer     = "newer"     // it runs a newer version than the newest known
 	Unknown   = "unknown"   // not seen yet, its version isn't one, or no newest is known
+)
+
+// The node protocols this controller speaks (/status "proto"; none said: 1). A node outside
+// them is offered no update: its firmware and this controller don't fit together.
+const (
+	ProtoMin = 1
+	ProtoMax = 1
 )
 
 // maxName is the most of a node's config name shown (a config name is a file name).
@@ -175,6 +182,11 @@ func node(n Node, newest Version) NodeUpdate {
 	}
 	runs := Of(st.Version, st.Built, st.ElfSHA256)
 	u.Runs = &runs
+	if p := max(st.Proto, 1); p < ProtoMin || p > ProtoMax {
+		u.State, u.Why = Unknown, fmt.Sprintf("Its firmware speaks node protocol %d, which this controller (%d to %d) doesn't: no update offered",
+			p, ProtoMin, ProtoMax)
+		return u
+	}
 	if !newest.ok {
 		u.State, u.Why = Unknown, "No release known yet: the controller asks for the newest when it starts, daily, and when a new node shows up"
 		return u

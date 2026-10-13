@@ -20,14 +20,15 @@ Getting started file replaces this container, and it uses the `data` folder besi
 file, not your data directory.
 
 This runs the same published image from a release checkout. You need the `docker compose`
-plugin v2.17 or newer (`docker compose version`) and git. From the repository you only need
-`controller/compose.yaml` and `controller/.env.example`, so clone the release's tag (nothing
-is built). Set `V` to the newest version on the
-[releases page](https://github.com/skitzo2000/espdns/releases):
+plugin v2.17 or newer (`docker compose version`), git and curl. From the repository you
+only need `controller/compose.yaml` and `controller/.env.example`, so clone the release's tag
+(nothing is built). The first two lines look up the newest controller release on GitHub, so
+they stay right as new versions come out: `TAG` is its tag and `V` its version.
 
 ```sh
-V=0.0.2
-git clone --depth 1 --branch "v$V" https://github.com/skitzo2000/espdns.git
+TAG=$(curl -fsSL https://api.github.com/repos/skitzo2000/espdns/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+V=${TAG##*v}
+git clone --depth 1 --branch "$TAG" https://github.com/skitzo2000/espdns.git
 cd espdns/controller
 ```
 
@@ -69,9 +70,11 @@ docker compose up -d --no-build # start it again
 
 To update, set `ESPDNS_IMAGE` in `.env` to the new release's image, run
 `docker compose pull` and `docker compose up -d --no-build`, then update the nodes from the
-Nodes page ([Operations](operations.md)). The controller checks GitHub for new releases
-daily, at start and when a new node shows up; a node on an older version is offered the
-update, and its firmware is downloaded when you apply it.
+Nodes page ([Operations](operations.md)). The controller asks GitHub for the newest
+firmware release when it starts, every day, and when a new node shows up. A node on an
+older version is offered the update, and its firmware is downloaded when you apply it. The
+firmware and the controller have their own versions, so a controller release never makes a
+node out of date.
 
 ## The command line
 
@@ -101,13 +104,13 @@ The browser's setup steps, from the command line:
   docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
   ```
 
-- **Get firmware**, for a given version:
+- **Get firmware**, for a given firmware version (or its tag, `firmware-v0.0.3`):
 
   ```sh
-  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version "v$V"
+  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.2
   ```
 
-  It gets the chip images your nodes need; `-image esp32s3-eth` gets one you name.
+  It gets the chip images your nodes need; `-image esp32p4-rev1` gets one you name.
 
   For a mirror on another forge, use `-url`, or `"release_url"` in
   `settings.json` for the pages ([Settings](reference/settings.md)). Either way, only a
@@ -171,12 +174,14 @@ Node not listed? mDNS doesn't cross subnets: type its address in **+ Add node**.
 ## How Get firmware checks a release
 
 Nodes run chip images: one per chip, the same for everyone. **Get firmware** gets only
-the chip images you need. In Install over USB, that is the chosen board's. In the account
+the chip images you need. In Install over USB, that's the chosen board's. In the account
 menu under **Firmware**, it is what your nodes need (from each node's board). If a node
 hasn't reported yet, it also gets the chip images the controller already has, since it
-can't tell what that node needs. With no nodes, it says there is nothing to get yet. It:
+can't tell what that node needs. With no nodes, it says there's nothing to get yet.
+Applying a firmware update gets the chip image it needs the same way. Either way, it:
 
-1. downloads the newest published release's `SHA256SUMS` and `SHA256SUMS.sig` from GitHub,
+1. downloads the newest published firmware release's `SHA256SUMS` and `SHA256SUMS.sig`
+   from GitHub,
 2. checks the signature with the project's key (`ceccd5865252c2df`, `/keys/project.pub` in
    its image) before downloading anything else,
 3. downloads the chip images it needs, each checked against `SHA256SUMS`,
@@ -206,7 +211,7 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/src" -w /src "$IDF
 
 - It builds every chip image, key-neutral and generic: no board, address, keys or site
   settings. To build only some, name them after the output directory
-  (`esp32p4-rev1 esp32s3-eth esp32s3-octal` are the ones the catalog's boards run).
+  (`esp32p4-rev1 esp32s3-eth esp32s3-octal esp32s3-quad` are the ones the catalog's boards run).
 - Each image takes several minutes. Output lands in `build/release/images/`.
 - It fails on a compiler warning, a changed component lock, or an image with an address or
   keys built in.
@@ -219,7 +224,7 @@ directory:
 ```sh
 # Package the chip images, with SHA256SUMS (every catalog board's chip image must be there)
 docker compose run --rm -T -v "$PWD/../build/release:/release" --entrypoint /espdns espdns-controller \
-  release build -version "$(cat ../VERSION)" -images /release/images -catalog /catalog -out /release/dist
+  release build -version "$(cat ../firmware/VERSION)" -images /release/images -catalog /catalog -out /release/dist
 
 # Sign SHA256SUMS with your release key (on standard input)
 docker compose run --rm -T -v "$PWD/../build/release:/release" --entrypoint /espdns espdns-controller \
@@ -239,6 +244,31 @@ docker compose run --rm -T -v "$PWD/../build/release:/release:ro" --entrypoint /
 To build your own controller image too, run `docker compose up -d --build` from
 `controller/`, with `ESPDNS_IMAGE` left out of `.env`. [Releasing](releasing.md) explains
 the release's files.
+
+## Versions and releases
+
+The firmware and the controller are versioned and released separately, from the same
+repository:
+
+| Part | Version | Tag | Release |
+| --- | --- | --- | --- |
+| Firmware | `firmware/VERSION` | `firmware-v<version>` | The chip images, `SHA256SUMS`, `SHA256SUMS.sig` |
+| Controller | `controller/VERSION` | `controller-v<version>` | The controller's image, `compose.yaml`, `SHA256SUMS`, `SHA256SUMS.sig` |
+
+Bump the one you changed: anything under `firmware/` (and a board catalog change the chip
+images need) is a firmware release; anything under `controller/` is a controller release.
+Change both and release both, each on its own tag. The nodes are offered firmware releases
+only, so a controller release never makes them look out of date. Releases up to 0.0.2
+(`v0.0.1`, `v0.0.2`) held both parts and count as firmware releases.
+
+The controller and the nodes check they fit together: each node's `/status` says the
+protocol it speaks (`"proto": 1`), and a node on a protocol the controller doesn't speak is
+offered no update, with the reason on the Nodes page. Raise it in the firmware
+(`STATUS_PROTO` in `firmware/main/ota.c`) only for a change that breaks what a controller
+expects, and the controller's range (`ProtoMin`, `ProtoMax` in
+`controller/internal/updates`) with it.
+
+The steps are in [Releasing](releasing.md#making-a-release).
 
 ## Keys made outside the browser
 

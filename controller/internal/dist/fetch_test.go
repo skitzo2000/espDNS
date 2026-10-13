@@ -57,12 +57,12 @@ func (f *forge) asked() []string {
 
 // fetch downloads a release's signed sums and the chip tarballs asked for only, checks them
 // with the project's key, and imports them with their provenance; the newest published
-// release by default (drafts and other tags skipped).
+// firmware release by default (drafts, controller releases and other tags skipped).
 func TestFetch(t *testing.T) {
 	dir, pub := signedRelease(t)
 	f := newForge(t)
 	f.rels["v0.0.4"] = dir
-	f.list = []map[string]any{{"tag_name": "v0.0.5", "draft": true}, {"tag_name": "nightly"}, {"tag_name": "v0.0.4"}, {"tag_name": "v0.0.3"}}
+	f.list = []map[string]any{{"tag_name": "controller-v0.0.9"}, {"tag_name": "v0.0.5", "draft": true}, {"tag_name": "nightly"}, {"tag_name": "v0.0.4"}, {"tag_name": "v0.0.3"}}
 	work := t.TempDir()
 	images := filepath.Join(work, "images")
 	var log []string
@@ -92,6 +92,33 @@ func TestFetch(t *testing.T) {
 		if _, err := Fetch(context.Background(), FetchOptions{Forge: f.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
 			filepath.Join(t.TempDir(), "images")); err != nil {
 			t.Errorf("%s: %v", v, err)
+		}
+	}
+	// A firmware release of its own (firmware-v0.0.4): the newest, by its tag, or by its version
+	g := newForge(t)
+	g.rels["firmware-v0.0.4"] = dir
+	g.list = []map[string]any{{"tag_name": "controller-v0.0.5"}, {"tag_name": "firmware-v0.0.4"}, {"tag_name": "v0.0.2"}}
+	if tag, err := Latest(context.Background(), http.DefaultClient, g.URL+"/owner/espdns"); err != nil || tag != "firmware-v0.0.4" {
+		t.Errorf("latest %q %v", tag, err)
+	}
+	for _, v := range []string{"", "firmware-v0.0.4", "0.0.4"} {
+		imp, err := Fetch(context.Background(), FetchOptions{Forge: g.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
+			filepath.Join(t.TempDir(), "images"))
+		if err != nil || imp.Signer.Version != "0.0.4" || imp.Signer.From != g.URL+"/owner/espdns/releases/tag/firmware-v0.0.4" {
+			t.Errorf("%q: %+v %v", v, imp, err)
+		}
+	}
+	if _, err := Fetch(context.Background(), FetchOptions{Forge: g.URL + "/owner/espdns", Version: "0.0.3", ProjectPub: pub, Images: []string{"esp32p4"}}, work,
+		filepath.Join(t.TempDir(), "images")); err == nil || !strings.Contains(err.Error(), "no published firmware release 0.0.3") {
+		t.Errorf("0.0.3: %v", err)
+	}
+}
+
+func TestFirmwareVersion(t *testing.T) {
+	for tag, want := range map[string]string{"firmware-v0.0.3": "0.0.3", "v0.0.2": "0.0.2", "controller-v0.0.3": "", "0.0.3": "",
+		"firmware-0.0.3": "", "vfirmware-v0.0.3": "", "v0.0": ""} {
+		if v, ok := FirmwareVersion(tag); ok != (want != "") || (ok && v != want) {
+			t.Errorf("%s: %q %v", tag, v, ok)
 		}
 	}
 }

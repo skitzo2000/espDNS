@@ -65,6 +65,7 @@ built once per chip; the board file says how the board is wired.
 | Board | Chip | Network | Tier |
 |---|---|---|---|
 | Guition JC-ESP32P4-M3-DEV (`p4-ip101`) | ESP32-P4, 32 MB PSRAM | Ethernet (built-in MAC) | Tested |
+| Waveshare ESP32-P4-ETH (`ws-p4-eth`) | ESP32-P4, 32 MB PSRAM | Ethernet (built-in MAC), optional PoE module | Tested |
 | Waveshare ESP32-S3-ETH (`ws-s3-eth`) | ESP32-S3, 8 MB PSRAM | Ethernet (W5500), optional PoE | Tested |
 | Seeed XIAO ESP32S3 Sense (`xiao-s3-sense`) | ESP32-S3, 8 MB PSRAM | Wi-Fi, or Ethernet with an added W5500 | Tested |
 
@@ -104,8 +105,11 @@ PSRAM or more. Describe your own board in the controller's builder.
 
 ## Versions
 
-The firmware and the controller share one version, set in [`VERSION`](VERSION). It stays
-0.0.x during alpha. The controller's version:
+The firmware and the controller each have their own version, set in
+[`firmware/VERSION`](firmware/VERSION) and [`controller/VERSION`](controller/VERSION), and
+each is released on its own tag (`firmware-v0.0.3`, `controller-v0.0.3`). Both stay 0.0.x
+during alpha. Your nodes are compared with firmware releases only, so a new controller
+never makes them out of date. The controller's version:
 
 ```sh
 docker exec espdns-controller /espdns version

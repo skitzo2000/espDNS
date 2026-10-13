@@ -36,17 +36,19 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-// The repository's VERSION, the one source of the version, is one version on one line.
+// The controller's and the firmware's VERSION are each one version on one line.
 func TestRepoVersion(t *testing.T) {
-	b, err := os.ReadFile("../../../VERSION")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, ok := strings.CutSuffix(string(b), "\n")
-	if !ok || strings.Contains(s, "\n") {
-		t.Fatalf("VERSION %q: one line, ending in a newline", b)
-	}
-	if _, err := Parse(s); err != nil {
-		t.Error(err)
+	for _, f := range []string{"../../VERSION", "../../../firmware/VERSION"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, ok := strings.CutSuffix(string(b), "\n")
+		if !ok || strings.Contains(s, "\n") {
+			t.Fatalf("%s %q: one line, ending in a newline", f, b)
+		}
+		if _, err := Parse(s); err != nil {
+			t.Error(err)
+		}
 	}
 }

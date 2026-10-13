@@ -44,7 +44,8 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
   "time": { "ntp": ["192.0.2.1"], "tz": "EST5EDT,M3.2.0,M11.1.0" },
   "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
   "cpu": { "dfs": false },
-  "querylog": { "enabled": true, "client": "full" }
+  "querylog": { "enabled": true, "client": "full" },
+  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
 }
 ```
 
@@ -72,6 +73,7 @@ reboots nodes one at a time.
 | `blocking` | object | enabled, `null` answer, TTL 10 | See [blocking](#blocking). | live |
 | `cpu` | object | the board's, else the chip image's | See [cpu](#cpu). | live |
 | `querylog` | object | enabled, full client address | See [querylog](#querylog). | live |
+| `led` | object | the board's LED | See [led](#led). | live |
 
 An **IPv4 address** here means a dotted address that is not `0.0.0.0`, not loopback, not
 multicast and not `255.255.255.255`.
@@ -169,6 +171,23 @@ The hosted zones themselves aren't in the config; they're pushed as their own re
 | `enabled` | `false` turns the query log off. Default `true`, on a board that gives the query log memory. | — |
 | `client` | How much of a client's address the log keeps: `"full"`, `"subnet"` (the /24 only) or `"hidden"` (none). Default `"full"`. | One of the three. |
 
+### led
+
+The status light, in place of the one the board definition names. The node page's
+*Status light* sets it.
+
+| `kind` | Other keys |
+|--------|-----------|
+| `"none"` | — |
+| `"gpio"` | `pin`; `active_low`: `true` for an LED lit by a low level (wired to 3.3 V) |
+| `"ws2812"` | `pin` |
+| `"rgb"` | `red`, `green`, `blue`: a plain RGB LED on three GPIOs; `common_anode`: `true` for a common-anode LED |
+
+Checks: every pin the kind takes is given, 0 to 54. The node refuses a pin its board uses for
+something else (Ethernet, SD card, SPI; the board's own LED pins are free for it), and one
+its chip can't drive or keeps for the flash, PSRAM or Ethernet. The controller makes the
+same check against the catalog board before it sends the config.
+
 ## Services
 
 A node runs these services, following its config:
@@ -186,7 +205,7 @@ A node runs these services, following its config:
 ## What applies live and what needs a reboot
 
 Live: `name`, `wifi.tx_power_dbm`, `wifi.power_save`, `forwarders`, `upstream_timeout_ms`,
-`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`.
+`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`, `led`.
 Services start and stop live with them.
 
 At a reboot, with the reason the node reports:

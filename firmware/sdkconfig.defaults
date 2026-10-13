@@ -64,3 +64,10 @@ CONFIG_PM_ENABLE=y
 CONFIG_PM_DFS_INIT_AUTO=n
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=n
 CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=n
+
+# The status LED is the only RMT user (led.c): a WS2812 frame or an RGB LED's symbol fits the
+# channel's memory, so no interrupt has to refill it in time: its ISR and encoders stay in
+# flash, not resident in IRAM on every node.
+CONFIG_RMT_ENCODER_FUNC_IN_IRAM=n
+CONFIG_RMT_TX_ISR_HANDLER_IN_IRAM=n
+CONFIG_RMT_RX_ISR_HANDLER_IN_IRAM=n

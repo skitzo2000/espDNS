@@ -125,8 +125,7 @@ CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 # The containers. Each runs as you, with no network
 # unless it talks to something, the source (this directory) read-only and only what it writes
 # mounted writable over it, the board catalog (boards/ at the top of the repo) read-only at
-# /boards, the repository's VERSION read-only at /VERSION (the source's parent, where
-# CMakeLists.txt reads it) and the site defaults (if any) at /site/defaults.h. secrets/, the private keys, is
+# /boards and the site defaults (if any) at /site/defaults.h. secrets/, the private keys, is
 # covered by an empty read-only tmpfs in every container but the signing step's (SIGN): a
 # build, a test, the component fetch or a push never sees a key. The directories mounted are
 # made first, as you (docker would make a missing one as root, and can't make a mount point
@@ -142,7 +141,7 @@ CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 #   KEYGEN      make keys: no network, writes keys/ and secrets/
 MOUNT_DIRS = build dist managed_components secrets
 CONTAINER = mkdir -p $(MOUNT_DIRS) && chmod 700 secrets && docker run --rm -u $(shell id -u):$(shell id -g) \
-         -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $(CURDIR)/../boards:/boards:ro -v $(CURDIR)/../VERSION:/VERSION:ro \
+         -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $(CURDIR)/../boards:/boards:ro \
          $(if $(SITE_DEFAULTS),-v $(abspath $(SITE_DEFAULTS)):/site/defaults.h:ro )$(if \
          $(KEYS_SEED),-v $(abspath $(KEYS_SEED)):/seed:ro )-w /project
 SRC       = -v $(CURDIR):/project:ro

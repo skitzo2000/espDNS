@@ -1,7 +1,9 @@
 # Changelog
 
-What changed in each version of espDNS, the node firmware and the controller together (they
-share one version, the repository's `VERSION`). The format follows
+What changed in each version of espDNS. The node firmware and the controller each have their
+own version (`firmware/VERSION`, `controller/VERSION`) and their own sections
+(`## [firmware 0.0.3]`, `## [controller 0.0.3]`); 0.0.1 and 0.0.2 covered both under one
+version. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html): 0.0.x while in alpha, when any
 version may change anything. Write each change under Unreleased as it merges;
@@ -11,6 +13,16 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Added
 
+- A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
+  driven with PWM, shows the node's health in the controller's colours (green, amber, red;
+  blue while booting or updating; white to *Blink its light*). The node page gets a
+  **Status light** setting (None, one-colour LED, WS2812 or RGB LED, with its pins), which
+  shows the board's own LED and goes out with the other changes to apply; the node changes
+  lights live, without a restart. The node config's new `led` key carries it, checked by the
+  controller and the node against the board's other pins and the chip's. Board definitions
+  take `"kind": "rgb"` too. `/status` `led` now reports the light in effect, its pins, where
+  it comes from and the board's own; `failed` is now a field of its own, no longer a kind.
+  Wiring in [docs/hardware.md](docs/hardware.md#a-status-light).
 - Nodes hand over their copy of a zone: `GET /zone?name=<zone>` on a node returns a
   secondary zone's records as the node holds them, 200 a page (500 at most), from private
   addresses only. `/status` lists `"reads": ["zone"]` on nodes that have it. See
@@ -27,13 +39,39 @@ version may change anything. Write each change under Unreleased as it merges;
   or more, the sizes tested: a board with less is refused (`psram_mb: espDNS needs at
   least 8 MB of PSRAM`). The library tables are in
   [docs/hardware.md](docs/hardware.md#untested-boards).
+- The Waveshare ESP32-P4-ETH (`ws-p4-eth`) is a tested board.
 
 ### Changed
 
+- Two versions: the firmware and the controller each have their own, in
+  `firmware/VERSION` and `controller/VERSION` (the root `VERSION` is gone), and are
+  released on their own tags: `firmware-v<version>` builds the chip images,
+  `controller-v<version>` the controller's image and `compose.yaml`, each signed as before.
+  The controller offers the nodes firmware releases only (`firmware-v*`, and the older
+  `v0.0.1` and `v0.0.2`), so a controller release never makes a node out of date. Get
+  firmware and `espdns release fetch -version` take a firmware version (`0.0.3`) or its
+  tag. A node's `/status` says the protocol it speaks to the controller (`"proto": 1`); a
+  node on one the controller doesn't speak is offered no update, and the Nodes page says
+  why. `scripts/bump-version.sh` takes the part first (`firmware patch`), and a version's
+  changelog section is `## [firmware 0.0.3]` or `## [controller 0.0.3]`
+  ([docs/releasing.md](docs/releasing.md)).
 - Only the supported chip images are built, released and offered: esp32p4-rev1, esp32p4,
   esp32s3-octal, esp32s3-eth and esp32s3-quad. A board file or import naming another image
   is refused (`not one of the chip images`).
-
+- Updates go by version, whatever the chip. The controller asks GitHub (or `release_url`)
+  for the newest firmware release when it starts, every 24 hours and when a new node shows
+  up, and keeps only its version, in `firmware/latest`. A node on an older version is
+  offered the update; you no longer need Get firmware to see one. Applying it downloads and
+  checks the node's chip image of that release if the controller doesn't have it. Per-board
+  builds no longer count for updates, and the `unordered` and `no_build` states are gone
+  ([docs/operations.md](docs/operations.md#versions)).
+- The Nodes page puts each node on one line: its name (the board on hover), a dot, the
+  address with a wired or Wi-Fi icon (the MAC on hover), Uptime and Load (q/s). The dot is
+  green while the node serves, amber when there's something to do (an update, a reason, a
+  node not added yet) and red when it isn't working; hover for its state and reason. A node
+  that isn't green gets a short flag, or an amber **Update 0.0.1 → 0.0.2** button that opens
+  the Update panel with only it ticked. The banner above the table and the MAC line are
+  gone; **Update all** sits by **+ Add node** while two or more nodes are out of date.
 - The setup's zone step is about your own zones. "Add your zone", after the second node:
   type a name for your network, like home.example, and host it on espDNS (it starts with
   the records every zone needs); the + Add zone box is the Zones page's. Already run a DNS

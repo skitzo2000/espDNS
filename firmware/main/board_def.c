@@ -123,13 +123,43 @@ static void check_pins(ctx_t *c, const board_desc_t *b)
     }
     if (b->sd.kind == BOARD_SD_SPI)
         USE("sd cs", b->sd.cs);
-    if (b->led.kind != BOARD_LED_NONE)
-        USE("led", b->led.pin);
+    static const char *const rgb[] = { "led red", "led green", "led blue" };
+    for (int i = 0; i < 3 && b->led.kind != BOARD_LED_NONE; i++)
+        USE(b->led.kind == BOARD_LED_RGB ? rgb[i] : "led", b->led.pin[i]);
 #undef USE
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++)
             if (use[i].pin == use[j].pin)
                 fail(c, "GPIO %d used twice: %s and %s", use[i].pin, use[i].what, use[j].what);
+}
+
+static void parse_led(ctx_t *c, const cJSON *o, board_led_t *out)
+{
+    static const char *const kinds[] = { "none", "gpio", "ws2812", "rgb" };
+    static const char *const rgb[] = { "red", "green", "blue" };
+    out->kind = choice(c, o, "kind", kinds, 4, BOARD_LED_NONE);
+    int n = out->kind == BOARD_LED_RGB ? 3 : out->kind != BOARD_LED_NONE;
+    for (int i = 0; i < 3; i++) {
+        const char *key = n == 3 ? rgb[i] : "pin";
+        out->pin[i] = i < n ? pin(c, o, key) : BOARD_NC;
+        if (i < n && out->pin[i] == BOARD_NC)
+            fail(c, "%s: required", key);
+    }
+    out->active_low = flag(c, o, n == 3 ? "common_anode" : "active_low");
+}
+
+bool board_led_parse(const cJSON *o, const board_desc_t *b, board_led_t *out, char *err, size_t errlen)
+{
+    ctx_t c = { .err = err, .errlen = errlen };
+    if (errlen)
+        err[0] = 0;
+    parse_led(&c, o, out);
+    if (b && !c.failed) {
+        board_desc_t t = *b;
+        t.led = *out;
+        check_pins(&c, &t);
+    }
+    return !c.failed;
 }
 
 bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err, size_t errlen)
@@ -218,13 +248,11 @@ bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err,
             fail(&c, "sd cs: required");
     }
 
-    static const char *const led_kinds[] = { "none", "gpio", "ws2812" };
     const cJSON *led = cJSON_GetObjectItemCaseSensitive(root, "led");
-    out->led.kind = led ? choice(&c, led, "kind", led_kinds, 3, BOARD_LED_NONE) : BOARD_LED_NONE;
-    out->led.pin = led ? pin(&c, led, "pin") : BOARD_NC;
-    out->led.active_low = led && flag(&c, led, "active_low");
-    if (out->led.kind != BOARD_LED_NONE && out->led.pin == BOARD_NC)
-        fail(&c, "led pin: required");
+    char why[96];
+    out->led = (board_led_t){ BOARD_LED_NONE, { BOARD_NC, BOARD_NC, BOARD_NC }, false };
+    if (led && !board_led_parse(led, NULL, &out->led, why, sizeof(why)))
+        fail(&c, "led: %s", why);
 
     const cJSON *wifi = cJSON_GetObjectItemCaseSensitive(root, "wifi");
     out->wifi_max_tx_dbm = wifi ? num(&c, wifi, "tx_power_dbm", 0) : 0;

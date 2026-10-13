@@ -41,15 +41,18 @@ type NodeStatus struct {
 	KeysRetired string            `json:"keys_retired"`
 	Seq         map[string]uint64 `json:"seq"`
 	Project     string            `json:"project"`
-	Version     string            `json:"version"`
-	Built       string            `json:"built"`
-	ElfSHA256   string            `json:"elf_sha256"` // first 8 bytes, hex, as AppDesc.ElfSHA256
-	Slot        string            `json:"slot"`
-	OTAState    string            `json:"ota_state"` // "trial" until a new firmware confirms itself, then "valid"
-	UptimeS     int64             `json:"uptime_s"`
-	IP          string            `json:"ip"`
-	BootMS      int               `json:"boot_ms"`
-	Degraded    bool              `json:"degraded"`
+	// Proto is the protocol it speaks to the controller (firmware/main/ota.c STATUS_PROTO);
+	// 0 on firmware from before it said one, which speaks 1.
+	Proto     int    `json:"proto"`
+	Version   string `json:"version"`
+	Built     string `json:"built"`
+	ElfSHA256 string `json:"elf_sha256"` // first 8 bytes, hex, as AppDesc.ElfSHA256
+	Slot      string `json:"slot"`
+	OTAState  string `json:"ota_state"` // "trial" until a new firmware confirms itself, then "valid"
+	UptimeS   int64  `json:"uptime_s"`
+	IP        string `json:"ip"`
+	BootMS    int    `json:"boot_ms"`
+	Degraded  bool   `json:"degraded"`
 	// BoardSource is where its board definition came from: "partition" (written when it was
 	// flashed), "fallback" (built into a transitional image) or "none"; empty on firmware
 	// from before board definitions.
@@ -90,6 +93,8 @@ type NodeStatus struct {
 	// CPU is the node's clock scaling (firmware power.h, cpuplan.h); nil on firmware from
 	// before it, which takes no "cpu" in a config.
 	CPU *CPUStatus `json:"cpu"`
+	// LED is the node's status LED (firmware led.h); nil on firmware from before /status had it.
+	LED *LEDStatus `json:"led"`
 	// Queries are the node's DNS counters since its boot (firmware/main/ota.c); nil if it
 	// doesn't report them.
 	Queries *QueryCounts `json:"queries"`
@@ -114,6 +119,23 @@ func MAC(s string) string {
 		return ""
 	}
 	return hw.String()
+}
+
+// LEDSetting is a status LED as /status gives it: its kind ("none", "gpio", "ws2812", "rgb"),
+// its pins (an RGB LED's red, green, blue) and whether it is lit low (a common anode).
+type LEDSetting struct {
+	Kind      string `json:"kind"`
+	Pins      []int  `json:"pins"`
+	ActiveLow bool   `json:"active_low"`
+}
+
+// LEDStatus is /status's "led": the LED in effect, whether it failed to start, where it comes
+// from ("config", "board"; "" on firmware that takes no "led" in a config) and the board's.
+type LEDStatus struct {
+	LEDSetting
+	Failed bool        `json:"failed"`
+	From   string      `json:"from"`
+	Board  *LEDSetting `json:"board"`
 }
 
 // CPUStatus is /status's "cpu": clock scaling, and how long the node held its full clock

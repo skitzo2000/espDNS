@@ -686,6 +686,9 @@ static const char *reset_name(esp_reset_reason_t r)
  * secondary zone's entry without its name, with every number at its longest (111 bytes),
  * which also holds a forward zone's (41 bytes without its name). */
 #define STATUS_FIXED 9216
+/* The protocol this firmware speaks to the controller (/status "proto"): raised only by a
+ * change that breaks what a controller expects (controller/internal/updates, Proto*). */
+#define STATUS_PROTO "1"
 #define STATUS_SLOT  128
 
 static esp_err_t status_get(httpd_req_t *req)
@@ -743,7 +746,7 @@ static esp_err_t status_get(httpd_req_t *req)
     if (!j)
         return httpd_resp_send_500(req);
     n += (size_t)snprintf(j + n, cap - n,
-        "{\"project\":\"%s\",\"version\":\"%s\",\"elf_sha256\":\"%s\",\"built\":\"%s\",\"idf\":\"%s\","
+        "{\"project\":\"%s\",\"proto\":" STATUS_PROTO ",\"version\":\"%s\",\"elf_sha256\":\"%s\",\"built\":\"%s\",\"idf\":\"%s\","
         "\"slot\":\"%s\",\"ota_state\":\"%s\",\"uptime_s\":%lld,\"ip\":\"" IPSTR "\","
         "\"node_id\":\"" MACSTR "\",\"board\":\"%s\",\"image\":\"%s\",\"board_source\":\"%s\","
         "\"board_error\":\"%s\",\"fallback_board\":\"%s\",\"keys\":[\"%s\",\"%s\"],"
@@ -791,10 +794,10 @@ static esp_err_t status_get(httpd_req_t *req)
         n += health_json(&h, j + n, cap - n);
     if (n < cap)
         n += (size_t)snprintf(j + n, cap - n,
-                              "},\"sd\":{\"state\":\"%s\",\"timed_out\":%s,\"timeout_ms\":%d},"
-                              "\"led\":{\"kind\":\"%s\",\"identify_s\":%lu},",
-                              sd_state_name(sd_state()), sd_timed_out() ? "true" : "false", SD_BOOT_TIMEOUT_MS,
-                              led_kind_name(), (unsigned long)health_identify_left());
+                              "},\"sd\":{\"state\":\"%s\",\"timed_out\":%s,\"timeout_ms\":%d},",
+                              sd_state_name(sd_state()), sd_timed_out() ? "true" : "false", SD_BOOT_TIMEOUT_MS);
+    if (n < cap)
+        n += led_status_json(j + n, cap - n, health_identify_left());
     n += (size_t)snprintf(j + n, cap - n, "\"reset\":\"%s\",\"boot_ms\":", reset_name(esp_reset_reason()));
     n += (size_t)(boot_ms() ? snprintf(j + n, cap - n, "%lu", (unsigned long)boot_ms()) : snprintf(j + n, cap - n, "null"));
     n += (size_t)snprintf(j + n, cap - n, ",\"boot_limit_ms\":%d,\"boot\":{", BOOT_LIMIT_MS);
