@@ -26,8 +26,10 @@
  * Groups and caps. Each flight belongs to a group: the default forwarders, or forward zone i.
  * So that one dead forwarder can't take the whole table, a group holds at most half the
  * slots and half the parked queries, and the forward zones together at most half as well:
- * the default forwarders always keep half the table. A query past a cap, or with the table
- * full, gets FLIGHT_FULL: it is answered SERVFAIL at once, which costs nothing else.
+ * the default forwarders always keep half the table. So that one slow name can't take the
+ * parked places, a flight holds at most a quarter of them. A query past a cap, or with the
+ * table full, gets FLIGHT_FULL (FLIGHT_NAME_FULL past its flight's cap alone): it is
+ * answered SERVFAIL at once, which costs nothing else.
  *
  * What the table holds is counted for /metrics and health (flight_counts): the slots each
  * group holds, the most held at once, and whether the default forwarders have held more than
@@ -121,6 +123,7 @@ typedef struct {
     int16_t fq_next; /* the next slot on the fwdq queue it is on (-1: the last) */
     bool fq_fresh;   /* on the loop's queue to start (else to go on after a TCP retry) */
     flight_waiter_t *head, *tail; /* in the order they joined */
+    uint16_t parked; /* the UDP queries among them (flights_t's lock) */
     uint16_t alen; /* the answer's length in answer; 0: none here (failed, or in fwdq's TCP buffer) */
     uint8_t answer[MP_UDP_OUT];
 } flight_t;
@@ -183,14 +186,16 @@ typedef enum {
                     * then flight_free */
     FLIGHT_JOINED, /* w waits on the flight open for q: no answer now */
     FLIGHT_FULL,   /* the table, or a cap, is full (or no w to join with): SERVFAIL */
+    FLIGHT_NAME_FULL, /* only q's flight is full (its parked UDP queries): SERVFAIL */
 } flight_role_t;
 
 /* q's flight. None open: opens one (*slot) with a deadline wait_ms from now_ms, and w waits
  * on it (the caller hands the slot to be asked: fwdq_submit). One open: w waits on it. Either
  * way w is a UDP item, parked, or a flight_tcp_t, and *deadline_ms is the flight's deadline.
  * A slot past the table or its group's caps, or a parked UDP query past max_waiting or its
- * group's caps, is FLIGHT_FULL: nothing is opened or parked. w NULL (the tests): opens one
- * with no one waiting, or FLIGHT_FULL if one is open. */
+ * group's caps, is FLIGHT_FULL; one past only its flight's cap, FLIGHT_NAME_FULL: nothing is
+ * opened or parked. w NULL (the tests): opens one with no one waiting, or FLIGHT_FULL if one
+ * is open. */
 flight_role_t flight_begin(flights_t *fl, const flight_query_t *q, flight_waiter_t *w, uint32_t now_ms,
                            uint32_t wait_ms, int *slot, uint32_t *deadline_ms);
 

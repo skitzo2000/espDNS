@@ -682,10 +682,17 @@ static void test_flight_caps(void)
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), NULL, &slot) == FLIGHT_FULL);
     flight_free(&fl, slots[0]);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), NULL, &slots[0]) == FLIGHT_OPENED);
-    /* Parked queries: 4 of the 8 on the default forwarders' flights... */
+    /* Parked queries: 2 of the 8 on a flight (a quarter), the next NAME_FULL... */
     kl = NAME("d%d.example.org", 1);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 2; i++)
         CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
+    CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[11].fw, &slot) == FLIGHT_NAME_FULL);
+    CHECK(flight_slot(&fl, slots[1])->parked == 2 && flight_waiting(&fl) == 2);
+    /* ...while another name's queries still park: 4 on the default forwarders' flights... */
+    kl = NAME("d%d.example.org", 2);
+    for (int i = 2; i < 4; i++)
+        CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
+    kl = NAME("d%d.example.org", 3);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[4].fw, &slot) == FLIGHT_FULL);
     /* ...4 on the zones' (any zone's flight, the zones together)... */
     for (int i = 0; i < 4; i++) {
@@ -699,13 +706,16 @@ static void test_flight_caps(void)
     fake_tcp_t t;
     fake_tcp_init(&t, buf, sizeof(buf));
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_ZONE(0)), &t.t.w, &slot) == FLIGHT_JOINED);
-    /* Ending a flight gives its parked queries' places back to its group. */
-    kl = NAME("d%d.example.org", 1);
-    CHECK(flight_end(&fl, slots[1], NULL, -1) != NULL && fl.parked[FLIGHT_GROUP_DEFAULT] == 0);
-    kl = NAME("d%d.example.org", 2);
+    /* Ending a flight gives its parked queries' places back to its group, and its own count
+     * goes to zero; freeing one still open (failed) does too. */
+    CHECK(flight_end(&fl, slots[1], NULL, -1) != NULL && fl.parked[FLIGHT_GROUP_DEFAULT] == 2);
+    CHECK(flight_slot(&fl, slots[1])->parked == 0);
+    kl = NAME("d%d.example.org", 3);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[10].fw, &slot) == FLIGHT_JOINED);
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 8; i++) {
         flight_free(&fl, slots[i]);
+        CHECK(flight_slot(&fl, slots[i])->parked == 0);
+    }
     CHECK(t.wakes == 1 && t.t.len == -1);
     CHECK(flight_waiting(&fl) == 0 && fl.zones_held == 0 && fl.zones_parked == 0);
     for (int g = 0; g < FLIGHT_GROUPS; g++)
@@ -2384,6 +2394,28 @@ static void test_upq(void)
     }
     upq_stats(u, &us);
     CHECK(us.table.held_all == 0 && !us.table.busy && us.expired[UPQ_DEFAULT] == 17 && us.expired[UPQ_ZONES] == 17);
+    /* Past one flight's cap (a quarter of 32, the one opening it among them): shed, counted,
+     * but not noted for health: one slow name isn't the forwarders slow. */
+    flight_waiter_t ws[9];
+    memset(ws, 0, sizeof(ws));
+    CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[0]) == FLIGHT_OPENED);
+    for (int i = 1; i < 8; i++)
+        CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[i]) ==
+              FLIGHT_JOINED);
+    CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[8]) == FLIGHT_FULL);
+    upq_stats(u, &us);
+    CHECK(us.shed[UPQ_DEFAULT] == 2);
+    health_upstream_get(&u->health, fwd_now_ms(), &f);
+    CHECK(f.shed == 1);
+    /* It ends by its budget with its 8 handed back. */
+    int back = 0;
+    for (uint32_t w0 = mono_ms(); mono_ms() - w0 < 2000 && !upq_take(u, &d, fwd_now_ms(), 1000);)
+        usleep(1000);
+    for (flight_waiter_t *w = d.parked; w; w = w->next)
+        back++;
+    CHECK(back == 8);
+    upq_release(u, &d);
+    CHECK(flight_waiting(&u->fl) == 0);
     upqh_stop(h);
     cache_free(c);
     sem_destroy(&t.sem);
