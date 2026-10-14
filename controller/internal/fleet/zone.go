@@ -18,8 +18,13 @@ import (
 // errChanged is a /zone page refused because the zone changed since the read began (409).
 var errChanged = errors.New("the zone changed during the read")
 
-// zoneTries are the reads of a zone that keeps changing under the reader before giving up.
-const zoneTries = 3
+// zoneTries are the reads of a zone that keeps changing under the reader before giving up;
+// zoneMaxRecords and zoneMaxBytes bound one read (a node holds far fewer, in far less).
+const (
+	zoneTries      = 3
+	zoneMaxRecords = 20000
+	zoneMaxBytes   = 32 << 20
+)
 
 // Zone is a secondary zone as a node holds it.
 type Zone struct {
@@ -43,6 +48,7 @@ func (c *Client) ReadZone(ctx context.Context, host, name string) (Zone, error) 
 func (c *Client) readZone(ctx context.Context, host, name string) (Zone, error) {
 	var z Zone
 	q := url.Values{"name": {name}}
+	read := 0
 	for from := uint64(0); ; {
 		q.Set("from", strconv.FormatUint(from, 10))
 		b, err := c.fetch(ctx, host, "/zone?"+q.Encode())
@@ -51,6 +57,9 @@ func (c *Client) readZone(ctx context.Context, host, name string) (Zone, error) 
 		}
 		if err != nil {
 			return z, err
+		}
+		if read += len(b); read > zoneMaxBytes {
+			return z, fmt.Errorf("%s/zone: over %d bytes", host, zoneMaxBytes)
 		}
 		var p struct {
 			Name   string `json:"name"`
@@ -71,6 +80,9 @@ func (c *Client) readZone(ctx context.Context, host, name string) (Zone, error) 
 		if from == 0 {
 			z.Name, z.Serial = p.Name, p.Serial
 			q.Set("gen", strconv.FormatUint(p.Gen, 10))
+		}
+		if len(z.RRs)+len(p.RRs) > zoneMaxRecords {
+			return z, fmt.Errorf("%s/zone: over %d records", host, zoneMaxRecords)
 		}
 		for _, r := range p.RRs {
 			d, err := hex.DecodeString(r.D)

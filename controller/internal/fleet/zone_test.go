@@ -13,12 +13,14 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 )
 
-// testZone is a zone of n address records after its SOA (serial).
+// testZone is a zone of n address records after its SOA (serial) and a few other types.
 func testZone(t *testing.T, serial uint32, n int) []dns.RR {
 	t.Helper()
 	rrs := []dns.RR{}
 	for i, s := range append([]string{fmt.Sprintf("lab.example. 3600 IN SOA ns1.lab.example. hostmaster.lab.example. %d 3600 600 604800 300", serial),
-		`lab.example. 300 IN TXT "hello there"`, "lab.example. 300 IN MX 10 mail.lab.example."}, make([]string, n)...) {
+		`lab.example. 300 IN TXT "hello there" "a \"b\"" "\255"`, "lab.example. 300 IN MX 10 mail.lab.example.",
+		`lab.example. 300 IN CAA 0 issue "ca.example"`, "_sip._tcp.lab.example. 300 IN SRV 1 2 5060 sip.lab.example.",
+		"*.lab.example. 300 IN A 192.0.2.1"}, make([]string, n)...) {
 		if s == "" {
 			s = fmt.Sprintf("h%d.lab.example. 300 IN A 192.0.2.%d", i, i%250)
 		}
@@ -68,7 +70,7 @@ func TestReadZone(t *testing.T) {
 			}
 		}
 	})
-	if z, err = c.ReadZone(ctx, host, "lab.example"); err != nil || z.Serial != 8 || len(z.RRs) != 303 {
+	if z, err = c.ReadZone(ctx, host, "lab.example"); err != nil || z.Serial != 8 || len(z.RRs) != 306 {
 		t.Fatalf("after a swap: %d, %d records, %v", z.Serial, len(z.RRs), err)
 	}
 	// Swapped on every page: given up on.
@@ -80,5 +82,13 @@ func TestReadZone(t *testing.T) {
 	}
 	if _, err = c.ReadZone(ctx, host, "other.example"); err == nil || !strings.Contains(err.Error(), "no copy") {
 		t.Errorf("a zone it doesn't hold: %v", err)
+	}
+	// More records than any node holds: given up on.
+	n.Do(func(n *fakenode.Node) {
+		n.ZonePage = nil
+		n.SetCopy("big.example", testZone(t, 1, 20000))
+	})
+	if _, err = c.ReadZone(ctx, host, "big.example"); err == nil || !strings.Contains(err.Error(), "over 20000 records") {
+		t.Errorf("too big: %v", err)
 	}
 }

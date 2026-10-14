@@ -163,11 +163,12 @@ type zoneTransfer interface {
 }
 
 // Limits of one copied zone's read: the records kept (a node holds far fewer), the time
-// (from each node tried, then from the primary).
+// (from each node tried, from the nodes together, then from the primary).
 const (
-	maxTransfer     = 20000
-	transferTimeout = 20 * time.Second
-	nodeReadTimeout = 10 * time.Second
+	maxTransfer      = 20000
+	transferTimeout  = 20 * time.Second
+	nodeReadTimeout  = 10 * time.Second
+	nodeReadsTimeout = 15 * time.Second
 	// maxShownRecords are the records a reply lists; "more" counts the rest.
 	maxShownRecords = 5000
 )
@@ -383,6 +384,8 @@ func (v inventoryServer) readFromNode(ctx context.Context, hs []holder, zone str
 	if c == nil {
 		c = &fleet.Client{}
 	}
+	ctx, cancel := context.WithTimeout(ctx, nodeReadsTimeout)
+	defer cancel()
 	for _, h := range hs {
 		rctx, cancel := context.WithTimeout(ctx, nodeReadTimeout)
 		z, err := c.ReadZone(rctx, h.host, zone)
