@@ -687,7 +687,7 @@ static void test_flight_caps(void)
         CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[11].fw, &slot) == FLIGHT_FULL);
     CHECK(flight_slot(&fl, slots[1])->parked == 2 && flight_waiting(&fl) == 2);
-    /* ...while another name's still park: 4 on the default forwarders' flights... */
+    /* ...while another name's queries still park: 4 on the default forwarders' flights... */
     kl = NAME("d%d.example.org", 2);
     for (int i = 2; i < 4; i++)
         CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
