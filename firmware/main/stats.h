@@ -53,7 +53,8 @@ typedef struct {
     uint32_t other_queries, other_failures, other_timeouts;
 } st_t;
 
-/* One query answered (or not: QR_DROPPED) with rcode (-1: no response), taking us. */
+/* One query answered (or not: QR_DROPPED) with rcode (-1: no response), taking us. A NOTIFY
+ * counts only as refused, if it was (its own count is server.c's). */
 void st_query(st_t *s, ql_result_t r, int rcode, uint32_t us);
 /* One attempt at forwarder addr: answered (ok) or not (timeout: no answer within the try's
  * timeout; else SERVFAIL, or not sent), taking us. */

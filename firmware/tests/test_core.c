@@ -2758,6 +2758,135 @@ static void test_query_parse(void)
     size_t n = dns_make_error(&q, out, sizeof(out), DNS_R_REFUSED, 0);
     parsed_t p;
     CHECK(parse_resp(out, n, &p) && p.h.id == 0x1234 && DNS_RCODE(p.h.flags) == DNS_R_REFUSED && p.h.ar == 1);
+
+    /* An EDNS version over 0 is read; BADVERS (16) goes out as rcode 0 with 1 in the OPT's
+     * upper rcode bits, version 0, DO echoed (RFC 6891, 6.1.3). */
+    qb[ql - 11 + 6] = 1; /* the OPT's version */
+    CHECK(dns_query_parse(qb, ql, &q) == 0 && q.has_edns && q.edns_version == 1);
+    n = dns_make_error(&q, out, sizeof(out), DNS_R_BADVERS, 0);
+    CHECK(parse_resp(out, n, &p) && DNS_RCODE(p.h.flags) == 0 && p.h.an == 0 && p.h.ar == 1 &&
+          p.rr[0].type == DNS_T_OPT && p.rr[0].ttl == (0x01000000u | 0x8000));
+
+    /* OPT only in the additional section, and once (RFC 6891, 6.1.1): else FORMERR. */
+    ql = make_query(qb, "x.test", DNS_T_A, true);
+    wr16(qb + 10, 0);
+    wr16(qb + 6, 1); /* in the answer section */
+    CHECK(dns_query_parse(qb, ql, &q) == DNS_R_FORMERR);
+    wr16(qb + 6, 0);
+    wr16(qb + 8, 1); /* in authority */
+    CHECK(dns_query_parse(qb, ql, &q) == DNS_R_FORMERR);
+    wr16(qb + 8, 0);
+    wr16(qb + 10, 1);
+    CHECK(dns_query_parse(qb, ql, &q) == 0 && q.has_edns);
+    memcpy(qb + ql, qb + ql - 11, 11); /* two */
+    wr16(qb + 10, 2);
+    CHECK(dns_query_parse(qb, ql + 11, &q) == DNS_R_FORMERR);
+}
+
+/* An upstream answer to www.example.org TXT: a CNAME (compressed), then a TXT of rdlen bytes. */
+static size_t big_resp(uint8_t *m, uint16_t rdlen)
+{
+    uint8_t n[256];
+    int nl = N("www.example.org", n);
+    memset(m, 0, 12);
+    wr16(m + 2, DNS_F_QR | DNS_F_RD | DNS_F_RA);
+    wr16(m + 4, 1);
+    wr16(m + 6, 2);
+    size_t p = 12;
+    memcpy(m + p, n, (size_t)nl);
+    p += (size_t)nl;
+    wr16(m + p, DNS_T_TXT);
+    wr16(m + p + 2, DNS_C_IN);
+    p += 4;
+    m[p] = 0xC0, m[p + 1] = 12;
+    wr16(m + p + 2, DNS_T_CNAME);
+    wr16(m + p + 4, DNS_C_IN);
+    wr32(m + p + 6, 300);
+    wr16(m + p + 10, 6);
+    memcpy(m + p + 12, "\003txt\xC0\x10", 6); /* txt.example.org */
+    p += 18;
+    size_t target = p - 6;
+    wr16(m + p, 0xC000 | (uint16_t)target);
+    wr16(m + p + 2, DNS_T_TXT);
+    wr16(m + p + 4, DNS_C_IN);
+    wr32(m + p + 6, 300);
+    wr16(m + p + 10, rdlen);
+    p += 12;
+    for (uint16_t i = 0; i < rdlen; i += 256) {
+        uint16_t l = rdlen - i < 256 ? rdlen - i : 256;
+        m[p + i] = (uint8_t)(l - 1);
+        memset(m + p + i + 1, 'a' + i / 256 % 26, l - 1);
+    }
+    return p + rdlen;
+}
+
+/* RRs of any size are relayed whole within the reply's limit, or the reply is truncated;
+ * a malformed message leaves nothing of itself behind. */
+static void test_relay_sizes(void)
+{
+    static uint8_t m[8192], out[8192];
+    uint8_t qb[512];
+    dns_query_t q;
+    size_t ql = make_query(qb, "www.example.org", DNS_T_TXT, true);
+    CHECK(dns_query_parse(qb, ql, &q) == 0);
+    dns_builder_t *b = malloc(sizeof(*b));
+    parsed_t p;
+
+    /* Over TCP: a 3000-byte TXT, past what the relay once took (1024), goes whole. */
+    size_t len = big_resp(m, 3000);
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    size_t ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && p.h.an == 2 && p.h.ar == 1 && !(p.h.flags & DNS_F_TC));
+    CHECK(p.rr[0].type == DNS_T_CNAME && p.rr[1].type == DNS_T_TXT && p.rr[1].rdlen == 3000 &&
+          !memcmp(out + p.rr[1].rdata_off, m + len - 3000, 3000));
+    uint8_t want[256], got[256];
+    int wl = N("txt.example.org", want);
+    size_t off = p.rr[0].rdata_off;
+    CHECK(dns_name_read(out, ol, &off, got) == wl && dns_name_eq(got, wl, want, wl));
+
+    /* Over UDP it doesn't fit: TC, nothing partial, the OPT kept. */
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(ol <= DNS_EDNS_SIZE && parse_resp(out, ol, &p) && (p.h.flags & DNS_F_TC) && p.h.an == 0 && p.h.ar == 1);
+    /* One that just fits, the OPT's room left: whole. */
+    len = big_resp(m, 1);
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    size_t fixed = dnsb_finish(b) - 1; /* the reply, OPT and all, but the TXT's rdata */
+    len = big_resp(m, (uint16_t)(DNS_EDNS_SIZE - fixed));
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(ol == DNS_EDNS_SIZE && parse_resp(out, ol, &p) && !(p.h.flags & DNS_F_TC) && p.h.an == 2);
+    /* A byte more: truncated. */
+    len = big_resp(m, (uint16_t)(DNS_EDNS_SIZE - fixed + 1));
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && (p.h.flags & DNS_F_TC) && p.h.an == 0);
+
+    /* Malformed after the CNAME: -1, and the RR already copied is gone. */
+    len = big_resp(m, 600);
+    wr16(m + len - 600 - 2, 700); /* the TXT runs past the end */
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    uint8_t a[4] = { 10, 0, 0, 1 };
+    uint8_t own[256];
+    int owl = N("local.example.org", own);
+    CHECK(dnsb_rr(b, DNSB_ANSWER, own, owl, DNS_T_A, DNS_C_IN, 60, a, 4));
+    size_t before = b->len;
+    int nct = b->nctab;
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == -1);
+    CHECK(b->len == before && b->an == 1 && b->nctab == nct && !b->truncated);
+    ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && p.h.an == 1 && p.rr[0].type == DNS_T_A);
+    free(b);
 }
 
 /* Releases signed by tools/release.py (see gen_release_vectors.py) verify here. */
@@ -6012,6 +6141,7 @@ int main(void)
     test_cache_stress();
     test_cache_key();
     test_dnssec_relay();
+    test_relay_sizes();
     test_flights();
     test_flight_caps();
     test_flight_counts();

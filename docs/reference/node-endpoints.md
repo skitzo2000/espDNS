@@ -174,7 +174,8 @@ Counters since boot: `total`, `udp`, `tcp`, `auth` (answered authoritatively, fr
 `forwarded`, `cache_hits`, `nxdomain`, `servfail`, `refused`, `notifies`, `dropped` (never
 answered), `refused_source` (dropped unanswered, or the TCP connection closed: not from a
 private address nor one in the config's [`allow`](node-config.md#allow); not counted in
-`total`, `udp` or `tcp`).
+`total`, `udp` or `tcp`). `servfail` counts a forwarder's SERVFAIL passed on too, and
+`refused` a refused NOTIFY (counted in `notifies` as well).
 
 ### net
 
@@ -295,7 +296,7 @@ Prometheus text format (`text/plain; version=0.0.4`). Open to anyone, like `/hea
 | `espdns_wifi_rssi_dbm` | gauge | | Wi-Fi signal (Wi-Fi nodes only). |
 | `espdns_clock_synced` | gauge | | 1 once the clock is set over SNTP. |
 | `espdns_queries_received_total` | counter | `transport` (`udp`, `tcp`) | DNS messages received. |
-| `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. |
+| `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. A forwarder's SERVFAIL, passed on, is `servfail`; a refused NOTIFY counts as `notify` and `refused`; `error` is FORMERR, NOTIMP or BADVERS (an EDNS version other than 0). |
 | `espdns_queries_refused_source_total` | counter | | Queries dropped unanswered (UDP) or connections closed (TCP): not from a private address nor one in the config's `allow`. |
 | `espdns_responses_total` | counter | `rcode` (`NOERROR`, `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, and others once seen) | Responses by rcode. NOTIFY replies not included. |
 | `espdns_query_duration_seconds` | histogram | | Time to answer a query, forwarders included. |

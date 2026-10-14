@@ -34,6 +34,8 @@ ql_result_t ql_result(const ql_note_t *n, int rcode, size_t len)
         return QR_BLOCKED;
     if (rcode == 5)
         return QR_REFUSED;
+    if (rcode == 2) /* SERVFAIL, the node's or a forwarder's */
+        return QR_SERVFAIL;
     if (n->cache)
         return QR_CACHE;
     if (n->asked && n->answered)

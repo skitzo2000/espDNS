@@ -21,6 +21,7 @@ enum { DNS_OP_QUERY = 0, DNS_OP_NOTIFY = 4 };
 enum {
     DNS_R_NOERROR = 0, DNS_R_FORMERR = 1, DNS_R_SERVFAIL = 2, DNS_R_NXDOMAIN = 3,
     DNS_R_NOTIMP = 4, DNS_R_REFUSED = 5, DNS_R_NOTAUTH = 9,
+    DNS_R_BADVERS = 16, /* extended (RFC 6891): its upper bits go in the OPT */
 };
 
 #define DNS_F_QR 0x8000
@@ -98,7 +99,8 @@ typedef struct {
     bool     do_bit;
 } dns_query_t;
 
-/* Returns DNS_R_NOERROR or DNS_R_FORMERR. Exactly one question is required. */
+/* Returns DNS_R_NOERROR or DNS_R_FORMERR. Exactly one question is required, and at most one
+ * OPT, in the additional section. */
 int dns_query_parse(const uint8_t *m, size_t len, dns_query_t *q);
 
 /* ---- response builder ---- */
@@ -112,6 +114,7 @@ typedef struct {
     bool     truncated;
     uint16_t opt_size;  /* non-zero: OPT is appended by dnsb_finish */
     bool     opt_do;    /* echo the DO bit (RFC 3225) */
+    uint8_t  opt_ercode; /* the upper 8 bits of an extended rcode (dnsb_set_rcode) */
     uint16_t an, ns, ar;
     int      section;  /* 0 answer, 1 authority, 2 additional */
     int      nctab;
@@ -135,6 +138,7 @@ bool dnsb_rr(dns_builder_t *b, int section, const uint8_t *owner, int owner_len,
 /* Requests an OPT record (advertising udp_size, echoing DO) at the end of the response.
  * Call before adding RRs so its space is reserved. */
 void dnsb_opt(dns_builder_t *b, uint16_t udp_size, bool do_bit);
+/* An extended rcode (over 15) needs the OPT for its upper bits. */
 void dnsb_set_rcode(dns_builder_t *b, int rcode);
 void dnsb_set_flags(dns_builder_t *b, uint16_t set, uint16_t clear);
 /* Writes section counts. On truncation, drops all RRs and sets TC. Returns length. */
@@ -145,7 +149,8 @@ size_t dnsb_finish(dns_builder_t *b);
  * dnssec: the client set DO. Without it the DNSSEC records (RRSIG, NSEC, NSEC3) are left
  * out, unless the question asked for that type or ANY (RFC 4035, 3.2.1): every upstream
  * query asks with DO, so one cached answer serves clients with and without it (cache.h).
- * Returns the upstream rcode, or -1 if the message is malformed. */
+ * An RR that doesn't fit marks b truncated. Returns the upstream rcode, or -1 if the message
+ * is malformed (b then holds what it held before). */
 int dnsb_relay(dns_builder_t *b, const uint8_t *m, size_t len, uint32_t age, bool answers_only, bool dnssec);
 
 /* Cacheable lifetime of a response (RFC 2308 for negatives); 0 = do not cache. */

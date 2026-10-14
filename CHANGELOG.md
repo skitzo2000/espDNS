@@ -119,6 +119,19 @@ Update the controller as usual, then install each node from it with **Install ov
   `ff:ff:ff:ff:ff:ff`. Every release must name the node's own ID, whatever its kind.
   Nothing signed such a release.
 
+### Fixed
+
+- Nodes answer a query with an EDNS version other than 0 with BADVERS (RFC 6891), not
+  with an answer.
+- Nodes answer FORMERR to a query with an OPT record outside the additional section, or
+  more than one.
+- Nodes pass on forwarded records over 1024 bytes, where they fit, and set TC where they
+  don't, instead of answering SERVFAIL. A malformed upstream answer no longer leaves part
+  of itself in the SERVFAIL reply.
+- `/metrics` counts a forwarder's SERVFAIL, passed on, as `servfail`, not `forwarded`.
+- A refused NOTIFY counts as refused too: in `/status` `queries.refused` and `/metrics`
+  `espdns_queries_total{result="refused"}`.
+
 ## [0.0.2] - 2026-10-11
 
 ### Added
