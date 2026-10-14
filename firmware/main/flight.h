@@ -28,7 +28,8 @@
  * slots and half the parked queries, and the forward zones together at most half as well:
  * the default forwarders always keep half the table. So that one slow name can't take the
  * parked places, a flight holds at most a quarter of them. A query past a cap, or with the
- * table full, gets FLIGHT_FULL: it is answered SERVFAIL at once, which costs nothing else.
+ * table full, gets FLIGHT_FULL (FLIGHT_NAME_FULL past its flight's cap alone): it is
+ * answered SERVFAIL at once, which costs nothing else.
  *
  * What the table holds is counted for /metrics and health (flight_counts): the slots each
  * group holds, the most held at once, and whether the default forwarders have held more than
@@ -185,14 +186,16 @@ typedef enum {
                     * then flight_free */
     FLIGHT_JOINED, /* w waits on the flight open for q: no answer now */
     FLIGHT_FULL,   /* the table, or a cap, is full (or no w to join with): SERVFAIL */
+    FLIGHT_NAME_FULL, /* only q's flight is full (its parked UDP queries): SERVFAIL */
 } flight_role_t;
 
 /* q's flight. None open: opens one (*slot) with a deadline wait_ms from now_ms, and w waits
  * on it (the caller hands the slot to be asked: fwdq_submit). One open: w waits on it. Either
  * way w is a UDP item, parked, or a flight_tcp_t, and *deadline_ms is the flight's deadline.
- * A slot past the table or its group's caps, or a parked UDP query past max_waiting, its
- * group's caps or its flight's, is FLIGHT_FULL: nothing is opened or parked. w NULL (the
- * tests): opens one with no one waiting, or FLIGHT_FULL if one is open. */
+ * A slot past the table or its group's caps, or a parked UDP query past max_waiting or its
+ * group's caps, is FLIGHT_FULL; one past only its flight's cap, FLIGHT_NAME_FULL: nothing is
+ * opened or parked. w NULL (the tests): opens one with no one waiting, or FLIGHT_FULL if one
+ * is open. */
 flight_role_t flight_begin(flights_t *fl, const flight_query_t *q, flight_waiter_t *w, uint32_t now_ms,
                            uint32_t wait_ms, int *slot, uint32_t *deadline_ms);
 

@@ -33,10 +33,12 @@ flight_role_t upq_ask(upq_t *u, const flight_query_t *q, flight_waiter_t *w, uin
     flight_role_t r = flight_begin(&u->fl, q, w, now_ms, flight_wait_ms(q->nservers, q->timeout_ms), &slot, deadline_ms);
     if (r == FLIGHT_OPENED) {
         fwdq_submit(&u->q, slot);
-    } else if (r == FLIGHT_FULL) {
+    } else if (r != FLIGHT_JOINED) {
         __atomic_fetch_add(&u->shed[upq_kind(q->group)], 1, __ATOMIC_RELAXED);
-        if (q->group == FLIGHT_GROUP_DEFAULT)
+        /* One slow name isn't the forwarders slow. */
+        if (r == FLIGHT_FULL && q->group == FLIGHT_GROUP_DEFAULT)
             health_upstream_shed(&u->health, now_ms);
+        r = FLIGHT_FULL;
     }
     return r;
 }

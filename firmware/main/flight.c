@@ -34,16 +34,15 @@ static int find(flights_t *fl, const flight_query_t *q)
 
 static void set_waiting(flights_t *fl, uint32_t n) { __atomic_store_n(&fl->waiting, n, __ATOMIC_RELEASE); }
 
-/* Whether w may wait on a flight of group with parked UDP queries on it already (under the
- * lock). A TCP waiter holds only its own worker: no cap. A parked UDP query holds an item
- * from the receive pool: at most max_waiting in all, half that per group and for the forward
- * zones together, and a quarter per flight. */
-static bool park_ok(const flights_t *fl, const flight_waiter_t *w, int group, uint32_t parked)
+/* Whether w may wait on a flight of group (under the lock). A TCP waiter holds only its own
+ * worker: no cap. A parked UDP query holds an item from the receive pool: at most
+ * max_waiting in all, and half that per group and for the forward zones together. */
+static bool park_ok(const flights_t *fl, const flight_waiter_t *w, int group)
 {
     if (w->wake)
         return true;
     uint32_t hw = flight_half(fl->max_waiting);
-    return fl->waiting < fl->max_waiting && fl->parked[group] < hw && parked < flight_half(hw) &&
+    return fl->waiting < fl->max_waiting && fl->parked[group] < hw &&
            (group == FLIGHT_GROUP_DEFAULT || fl->zones_parked < hw);
 }
 
@@ -85,8 +84,13 @@ flight_role_t flight_begin(flights_t *fl, const flight_query_t *q, flight_waiter
         flight_t *f = &fl->f[i];
         *deadline_ms = f->deadline_ms;
         /* Its group is the flight's (the same question routes the same way). */
-        if (!w || !park_ok(fl, w, f->group, f->parked))
+        if (!w || !park_ok(fl, w, f->group))
             goto out;
+        /* A quarter of max_waiting per flight: one slow name, not its group, is full. */
+        if (!w->wake && f->parked >= flight_half(flight_half(fl->max_waiting))) {
+            role = FLIGHT_NAME_FULL;
+            goto out;
+        }
         park(fl, &fl->f[i], i, w);
         role = FLIGHT_JOINED;
         goto out;
@@ -95,7 +99,7 @@ flight_role_t flight_begin(flights_t *fl, const flight_query_t *q, flight_waiter
     if (fl->held[q->group] >= hs || (zone && fl->zones_held >= hs))
         goto out;
     /* The query opening it is parked on it too: no room for that, no flight. */
-    if (w && !park_ok(fl, w, q->group, 0))
+    if (w && !park_ok(fl, w, q->group))
         goto out;
     for (i = 0; i < fl->n && fl->f[i].state != FLIGHT_FREE; i++)
         ;
