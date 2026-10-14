@@ -339,6 +339,7 @@ What to do:
 | Firmware rollback | A new firmware boots on trial and rolls back if it does not come up healthy. |
 | Node HTTP guard | `Host` check against DNS rebinding, one deadline per request, releases verified before they take any lock, JSON-escaped output. |
 | Release endpoints | `POST /release`, `POST /ota` and `/querylog` only from private source addresses. |
+| DNS clients | Port 53 answers private source addresses only, plus the node config's `allow` networks; any other query gets no answer, so a node is no open resolver or reflector ([allow](reference/node-config.md#allow)). |
 | Forwarding | Random source port and ID per upstream query; no worker waits on a forwarder; per-group caps. |
 | Controller on localhost | Refuses to listen on any other address. |
 | Controller CSP and headers | Strict CSP, no inline scripts, no framing, no referrer, no CORS; ESP Web Tools bundled, not from a CDN. |
@@ -358,8 +359,9 @@ Known gaps in the 0.0.x alpha:
   on the path, including a Wi-Fi node's password in its config (wired nodes have none).
   Signed reads of `/status` and `/querylog` are planned but not built.
 - No DNS over TLS. Nodes speak plain DNS on port 53, to clients and to forwarders.
-- No client access list, and responses can be larger than queries. Do not expose
-  nodes to the internet.
+- Responses can be larger than queries, and there is no rate limit. A node answers only
+  private addresses and its `allow` networks, but still do not expose nodes to the
+  internet.
 - `/status`, `/health` and `/metrics` are open, and `/querylog` to any private address.
 - No flash encryption, secure boot or anti-rollback on the boards.
 - Zone transfers are not authenticated (no TSIG). Your primary allows the nodes by

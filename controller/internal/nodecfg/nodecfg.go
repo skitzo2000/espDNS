@@ -22,7 +22,8 @@
 //	  "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
 //	  "cpu": { "dfs": false },
 //	  "querylog": { "enabled": true, "client": "full" },
-//	  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
+//	  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true },
+//	  "allow": [ "198.51.100.0/24", "2001:db8::/32" ]
 //	}
 package nodecfg
 
@@ -48,6 +49,8 @@ const (
 	maxForwarders = 4
 	maxZones      = 32
 	maxNTP        = 3
+	// MaxAllow is how many networks "allow" may name (firmware CFG_MAX_ALLOW).
+	MaxAllow = 16
 )
 
 type Config struct {
@@ -65,6 +68,9 @@ type Config struct {
 	CPU               *CPU           `json:"cpu,omitempty"`
 	QueryLog          *QueryLog      `json:"querylog,omitempty"`
 	LED               *LED           `json:"led,omitempty"`
+	// Allow are networks (CIDR, IPv4 or IPv6) the node answers DNS queries from besides the
+	// private ones, live (firmware cfg_src_allowed); queries from anywhere else go unanswered.
+	Allow *[]string `json:"allow,omitempty"`
 }
 
 // LED is the status LED, in place of the board definition's (firmware board_def.h,
@@ -278,6 +284,10 @@ func (c *Config) SetsQueryLog() bool { return c.QueryLog != nil }
 // SetsLED says whether the config has "led", which firmware from before it refuses (its
 // /status "led" has no "from").
 func (c *Config) SetsLED() bool { return c.LED != nil }
+
+// SetsAllow says whether the config has "allow", which firmware from before it refuses (its
+// /status "queries" has no "refused_source").
+func (c *Config) SetsAllow() bool { return c.Allow != nil }
 
 // Services are the node services the config runs, in the node's order (firmware svc.h,
 // svc_enabled): a list the config leaves out is the firmware's default, which has
@@ -513,8 +523,31 @@ func (c *Config) Validate() error {
 	if q := c.QueryLog; q != nil && q.Client != "" && !slices.Contains(QueryLogClients, q.Client) {
 		return errors.New(`querylog.client: "full", "subnet" or "hidden"`)
 	}
+	if c.Allow != nil {
+		if len(*c.Allow) > MaxAllow {
+			return fmt.Errorf("allow: at most %d networks", MaxAllow)
+		}
+		for _, s := range *c.Allow {
+			if err := allowNet(s); err != nil {
+				return err
+			}
+		}
+	}
 	if c.LED != nil {
 		return c.LED.Check()
+	}
+	return nil
+}
+
+// allowNet checks one of "allow" as the node does: a network in CIDR, IPv4 (strict dotted
+// quad) or IPv6, with no host bits set.
+func allowNet(s string) error {
+	p, err := netip.ParsePrefix(s)
+	if err != nil || p.Addr().Zone() != "" || p.Addr().Is4() && strings.Count(s[:strings.IndexByte(s, '/')], ".") != 3 {
+		return fmt.Errorf("allow: a network as 198.51.100.0/24 or 2001:db8::/32; not %q", s)
+	}
+	if p.Masked() != p {
+		return fmt.Errorf("allow: %s has host bits set (the network is %s)", s, p.Masked())
 	}
 	return nil
 }

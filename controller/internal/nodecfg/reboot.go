@@ -165,6 +165,7 @@ func Compare(from, to *Config, running *Network) Change {
 		{"cpu", from.CPU, to.CPU},
 		{"querylog", from.QueryLog, to.QueryLog},
 		{"led", from.LED, to.LED},
+		{"allow", from.Allow, to.Allow},
 	}
 	for _, l := range live {
 		a, _ := json.Marshal(l.a)

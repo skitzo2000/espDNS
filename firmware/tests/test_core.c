@@ -4393,6 +4393,104 @@ static uint32_t ip4(const char *s)
     return v;
 }
 
+/* Who a node answers (cfg_src_allowed): private sources by default, plus the config's
+ * "allow" networks. The private addresses are built, not written (no private address in a
+ * test: .github/workflows/ci.yml). */
+static uint32_t v4(unsigned a, unsigned b, unsigned c, unsigned d)
+{
+    uint8_t q[4] = { (uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d };
+    uint32_t v;
+    memcpy(&v, q, 4);
+    return v;
+}
+
+static bool v6_allowed(const cfg_t *c, const char *s)
+{
+    uint8_t a[16];
+    CHECK(inet_pton(AF_INET6, s, a) == 1);
+    return cfg_src_allowed(c, a);
+}
+
+static void test_client_allow(void)
+{
+    static cfg_t c, d;
+    char err[160];
+    CHECK(cfg_build(&c, NULL, NULL, 0, err, sizeof(err)) && c.nallow == 0);
+
+    /* IPv4: the private ranges in, at their edges; the rest out */
+    static const struct {
+        uint8_t q[4];
+        bool ok;
+    } V[] = {
+        { { 10, 0, 0, 1 }, true },        { { 10, 255, 255, 255 }, true },  { { 11, 0, 0, 1 }, false },
+        { { 172, 16, 0, 1 }, true },      { { 172, 31, 255, 255 }, true },  { { 172, 32, 0, 1 }, false },
+        { { 172, 15, 255, 255 }, false }, { { 192, 168, 1, 1 }, true },     { { 192, 169, 0, 1 }, false },
+        { { 100, 64, 0, 1 }, true },      { { 100, 127, 255, 255 }, true }, { { 100, 128, 0, 1 }, false },
+        { { 169, 254, 1, 1 }, true },     { { 169, 253, 1, 1 }, false },    { { 127, 0, 0, 1 }, true },
+        { { 192, 0, 2, 1 }, false },      { { 198, 51, 100, 7 }, false },   { { 8, 8, 8, 8 }, false },
+        { { 0, 0, 0, 0 }, false },
+    };
+    for (size_t i = 0; i < sizeof(V) / sizeof(V[0]); i++) {
+        bool ok = cfg_src4_allowed(&c, v4(V[i].q[0], V[i].q[1], V[i].q[2], V[i].q[3]));
+        if (ok != V[i].ok)
+            fprintf(stderr, "allow: %u.%u.%u.%u\n", V[i].q[0], V[i].q[1], V[i].q[2], V[i].q[3]);
+        CHECK(ok == V[i].ok);
+    }
+    /* IPv6: loopback, unique local, link-local in; the rest out */
+    CHECK(v6_allowed(&c, "::1") && v6_allowed(&c, "fd12:3456::1") && v6_allowed(&c, "fc00::1") &&
+          v6_allowed(&c, "fe80::1") && v6_allowed(&c, "febf::1"));
+    CHECK(!v6_allowed(&c, "::2") && !v6_allowed(&c, "::") && !v6_allowed(&c, "fec0::1") && !v6_allowed(&c, "fe00::1") &&
+          !v6_allowed(&c, "2001:db8::1"));
+    /* IPv4-mapped: judged by its IPv4 address; IPv4-compatible (::a.b.c.d) is not mapped */
+    uint8_t m[16] = { [10] = 0xff, [11] = 0xff, [12] = 10, [13] = 1, [14] = 2, [15] = 3 };
+    CHECK(cfg_src_allowed(&c, m));
+    m[12] = 192, m[13] = 0, m[14] = 2, m[15] = 1;
+    CHECK(!cfg_src_allowed(&c, m) && !v6_allowed(&c, "::ffff:192.0.2.1"));
+    m[10] = m[11] = 0, m[12] = 10;
+    CHECK(!cfg_src_allowed(&c, m));
+
+    /* "allow" adds networks to the private ones, live */
+    CHECK(cfg_try(&d, "{\"allow\":[\"198.51.100.0/24\",\"203.0.113.128/25\",\"2001:db8:1::/48\",\"192.0.2.7/32\"]}", err));
+    CHECK(d.nallow == 4 && !cfg_needs_reboot(&c, &d));
+    cfg_copy_live(&c, &d);
+    CHECK(c.nallow == 4 && cfg_src4_allowed(&c, v4(198, 51, 100, 9)) && cfg_src4_allowed(&c, v4(198, 51, 100, 255)) &&
+          !cfg_src4_allowed(&c, v4(198, 51, 101, 1)));
+    CHECK(cfg_src4_allowed(&c, v4(203, 0, 113, 200)) && !cfg_src4_allowed(&c, v4(203, 0, 113, 127)));
+    CHECK(cfg_src4_allowed(&c, v4(192, 0, 2, 7)) && !cfg_src4_allowed(&c, v4(192, 0, 2, 8)));
+    CHECK(v6_allowed(&c, "::ffff:198.51.100.1")); /* mapped, by its IPv4 address */
+    CHECK(v6_allowed(&c, "2001:db8:1:ffff::1") && !v6_allowed(&c, "2001:db8:2::1"));
+    CHECK(cfg_src4_allowed(&c, v4(10, 9, 8, 7)) && v6_allowed(&c, "fe80::1")); /* the private ones still */
+    CHECK(cfg_try(&d, "{\"allow\":[\"0.0.0.0/0\"]}", err) && cfg_src4_allowed(&d, v4(8, 8, 8, 8)) &&
+          !v6_allowed(&d, "2001:db8::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[\"::/0\"]}", err) && v6_allowed(&d, "2001:db8::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[\"2001:db8::/31\"]}", err) && v6_allowed(&d, "2001:db9::1") &&
+          !v6_allowed(&d, "2001:dba::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[]}", err) && d.nallow == 0);
+    char many[1024] = "{\"allow\":[";
+    for (int i = 0; i < CFG_MAX_ALLOW; i++)
+        snprintf(many + strlen(many), sizeof(many) - strlen(many), "%s\"198.51.100.%d/32\"", i ? "," : "", i);
+    strcat(many, "]}");
+    CHECK(cfg_try(&d, many, err) && d.nallow == CFG_MAX_ALLOW);
+
+    /* refused: not a network, host bits set, a bad length, too many */
+    static const char *const bad[] = { "198.51.100.0", "198.51.100.1/24", "198.51.100.0/33", "198.51.100.0/",
+                                       "198.51.100.0/024", "198.51.100.0/-1", "198.51.100.0/24 ", "2001:db8::/129",
+                                       "2001:db8::1/32", "2001:db8::/x", "example.com/24", "/24", "1.2.3/24",
+                                       "2001:db8:::/32" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char j[96];
+        snprintf(j, sizeof(j), "{\"allow\":[\"%s\"]}", bad[i]);
+        bool ok = cfg_try(&d, j, err);
+        if (ok)
+            fprintf(stderr, "allow: %s taken\n", bad[i]);
+        CHECK(!ok && strstr(err, "allow: networks as"));
+    }
+    CHECK(!cfg_try(&d, "{\"allow\":[24]}", err) && strstr(err, "allow: networks as"));
+    CHECK(!cfg_try(&d, "{\"allow\":\"198.51.100.0/24\"}", err) && strstr(err, "allow: a list of at most 16"));
+    strcpy(many + strlen(many) - 2, ",\"203.0.113.0/24\"]}");
+    CHECK(!cfg_try(&d, many, err) && strstr(err, "allow: a list of at most 16"));
+}
+
 static void test_config(void)
 {
     static cfg_t c, d; /* big: not on the stack */
@@ -5944,6 +6042,7 @@ int main(void)
     test_health();
     test_led_patterns();
     test_config();
+    test_client_allow();
     test_services();
     test_memplan();
     test_place();

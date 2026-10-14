@@ -55,12 +55,15 @@ static volatile bool s_udp_ok, s_tcp_ok, s_listen_failed;
 
 static uint32_t now_s(void) { return (uint32_t)(esp_timer_get_time() / 1000000); }
 
-/* Mirrors Technitium's AllowOnlyForPrivateNetworks for recursion. */
-static bool is_private(uint32_t src)
+/* Whether a query from src (IPv4, network order) is answered: a private address or one in
+ * the node config's allow list (cfg_src_allowed), or the primary's (its NOTIFY). Any other
+ * is dropped unanswered (UDP) or its connection closed (TCP), and counted. */
+static bool src_allowed(uint32_t src)
 {
-    uint32_t a = ntohl(src);
-    return (a >> 24) == 10 || (a >> 20) == (172 << 4 | 1) || (a >> 16) == (192 << 8 | 168) ||
-           (a >> 22) == (100 << 2 | 1) || (a >> 24) == 127 || (a >> 16) == (169 << 8 | 254);
+    if (src == settings()->primary || settings_src_allowed(src))
+        return true;
+    STAT(refused_source);
+    return false;
 }
 
 /* ---- upstream queries (upq.h): no worker waits on a forwarder ---- */
@@ -279,7 +282,7 @@ static size_t handle(const uint8_t *m, size_t mlen, uint32_t src, bool tcp, uint
      * are. REFUSED, not SERVFAIL: it is this node's policy, not a failure, so a client asks
      * its next server at once instead of retrying, and nothing caches it as a failure. */
     bool forwarding = settings()->nfwd > 0;
-    bool recurse_ok = is_private(src) && (forwarding || reg_nfzones() > 0);
+    bool recurse_ok = forwarding || reg_nfzones() > 0; /* every client here may (src_allowed) */
     bool cd = (q.flags & DNS_F_CD) != 0;
     size_t limit = tcp ? cap : q.has_edns ? (q.edns_size < DNS_EDNS_SIZE ? q.edns_size : DNS_EDNS_SIZE) : 512;
     uint16_t flags = (uint16_t)(DNS_F_QR | (rd ? DNS_F_RD : 0) | (recurse_ok ? DNS_F_RA : 0) | (cd ? DNS_F_CD : 0));
@@ -535,6 +538,8 @@ static void udp_rx(void *arg)
             load_idle(&s_load, (int)uxQueueMessagesWaiting(s_udp_q), now_ms());
             continue;
         }
+        if (!src_allowed(it->from.sin_addr.s_addr))
+            continue; /* no reply, so nothing to reflect: the item is reused */
         STAT(udp);
         it->len = (uint16_t)n;
         it->rx_ms = now_ms();
@@ -608,9 +613,15 @@ static void tcp_accept(void *arg)
     boot_mark(BOOT_LISTEN); /* UDP was bound before this task started */
     for (;;) {
         supervisor_kick(s_acc_watch);
-        int c = accept(ls, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t pl = sizeof(peer);
+        int c = accept(ls, (struct sockaddr *)&peer, &pl);
         if (c < 0)
             continue;
+        if (!src_allowed(peer.sin_addr.s_addr)) {
+            close(c); /* not answered */
+            continue;
+        }
         if (xQueueSend(s_tcp_q, &c, 0) != pdTRUE) {
             STAT(dropped);
             close(c); /* all workers busy */

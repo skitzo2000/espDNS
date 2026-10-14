@@ -1,8 +1,11 @@
 #include "cfg.h"
 
+#include <arpa/inet.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h> /* inet_pton, AF_INET6 (lwIP's on the node) */
 
 #include "cJSON.h"
 #include "config.h"
@@ -548,6 +551,97 @@ static void parse_blocking(ctx_t *c, cfg_t *cf, const cJSON *b)
     integer(c, b, "ttl", 0, 86400, &cf->block_ttl);
 }
 
+/* ---- who may query ---- */
+
+/* An IPv4 address (network order) as IPv4-mapped IPv6. */
+static void mapped4(uint32_t ip, uint8_t a[16])
+{
+    static const uint8_t pre[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+    memcpy(a, pre, 12);
+    memcpy(a + 12, &ip, 4);
+}
+
+/* "a.b.c.d/n" or an IPv6 address with "/n", with no host bits set. */
+static bool parse_cidr(const char *s, cfg_net_t *n)
+{
+    char tmp[64];
+    const char *slash = strchr(s, '/');
+    size_t len = slash ? (size_t)(slash - s) : 0;
+    if (!slash || !len || len >= sizeof(tmp) || slash[1] < '0' || slash[1] > '9' || strlen(slash + 1) > 3 ||
+        (slash[1] == '0' && slash[2]))
+        return false;
+    memcpy(tmp, s, len);
+    tmp[len] = 0;
+    char *end;
+    long bits = strtol(slash + 1, &end, 10);
+    uint32_t ip;
+    if (*end)
+        return false;
+    if (cfg_parse_ipv4(tmp, &ip)) {
+        if (bits > 32)
+            return false;
+        mapped4(ip, n->addr);
+        bits += 96;
+    } else if (!strchr(tmp, ':') || inet_pton(AF_INET6, tmp, n->addr) != 1 || bits > 128) {
+        return false;
+    }
+    n->bits = (uint8_t)bits;
+    for (int i = 0; i < 16; i++) {
+        int keep = bits >= 8 ? 8 : bits > 0 ? (int)bits : 0;
+        bits -= keep;
+        if (n->addr[i] & (0xff >> keep))
+            return false; /* an address, not a network */
+    }
+    return true;
+}
+
+static void parse_allow(ctx_t *c, cfg_t *cf, const cJSON *root)
+{
+    const cJSON *a = array(c, root, "allow", CFG_MAX_ALLOW);
+    if (!a)
+        return;
+    cf->nallow = 0;
+    for (const cJSON *v = a->child; v; v = v->next) {
+        if (!cJSON_IsString(v) || !parse_cidr(v->valuestring, &cf->allow[cf->nallow])) {
+            fail(c, "allow: networks as 198.51.100.0/24 or 2001:db8::/32 (no host bits set)");
+            return;
+        }
+        cf->nallow++;
+    }
+}
+
+static bool in_net(const uint8_t a[16], const cfg_net_t *n)
+{
+    int full = n->bits / 8, rest = n->bits % 8;
+    return !memcmp(a, n->addr, (size_t)full) && (!rest || !((a[full] ^ n->addr[full]) & (0xff00 >> rest)));
+}
+
+bool cfg_src_allowed(const cfg_t *c, const uint8_t a[16])
+{
+#define V4(x, y, bits) { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, x, y }, 96 + bits }
+    static const cfg_net_t priv[] = {
+        V4(10, 0, 8),    V4(172, 16, 12), V4(192, 168, 16), V4(100, 64, 10), V4(169, 254, 16), V4(127, 0, 8),
+        { { [15] = 1 }, 128 },     /* ::1 */
+        { { 0xfc }, 7 },           /* unique local */
+        { { 0xfe, 0x80 }, 10 },    /* link-local */
+    };
+#undef V4
+    for (size_t i = 0; i < sizeof(priv) / sizeof(priv[0]); i++)
+        if (in_net(a, &priv[i]))
+            return true;
+    for (int i = 0; i < c->nallow; i++)
+        if (in_net(a, &c->allow[i]))
+            return true;
+    return false;
+}
+
+bool cfg_src4_allowed(const cfg_t *c, uint32_t ip)
+{
+    uint8_t a[16];
+    mapped4(ip, a);
+    return cfg_src_allowed(c, a);
+}
+
 /* Checks across settings, once the layers are in. */
 static void check_all(ctx_t *c, const cfg_t *cf)
 {
@@ -624,7 +718,7 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
     } else {
         static const char *const keys[] = { "format", "name", "network", "wifi", "forwarders", "upstream_timeout_ms",
                                              "forward_zones", "secondary", "hosted", "time", "blocking", "cpu", "querylog",
-                                             "led", NULL };
+                                             "led", "allow", NULL };
         only(&x, root, "", keys);
         int format = CFG_FORMAT;
         integer(&x, root, "format", 1, 1000, &format);
@@ -658,6 +752,7 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
             parse_querylog(&x, c, o);
         if ((o = object(&x, root, "led")))
             parse_led(&x, c, o, b);
+        parse_allow(&x, c, root);
         if (!x.failed)
             check_all(&x, c);
     }
@@ -729,6 +824,8 @@ void cfg_copy_live(cfg_t *dst, const cfg_t *src)
     dst->querylog_client = src->querylog_client;
     dst->led = src->led;
     dst->led_config = src->led_config;
+    memcpy(dst->allow, src->allow, sizeof(dst->allow));
+    dst->nallow = src->nallow;
 }
 
 /* ---- slots ---- */

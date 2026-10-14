@@ -45,7 +45,8 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
   "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
   "cpu": { "dfs": false },
   "querylog": { "enabled": true, "client": "full" },
-  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
+  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true },
+  "allow": ["198.51.100.0/24", "2001:db8::/32"]
 }
 ```
 
@@ -74,6 +75,7 @@ reboots nodes one at a time.
 | `cpu` | object | the board's, else the chip image's | See [cpu](#cpu). | live |
 | `querylog` | object | enabled, full client address | See [querylog](#querylog). | live |
 | `led` | object | the board's LED | See [led](#led). | live |
+| `allow` | list of networks | none | See [allow](#allow). | live |
 
 An **IPv4 address** here means a dotted address that is not `0.0.0.0`, not loopback, not
 multicast and not `255.255.255.255`.
@@ -188,6 +190,30 @@ something else (Ethernet, SD card, SPI; the board's own LED pins are free for it
 its chip can't drive or keeps for the flash, PSRAM or Ethernet. The controller makes the
 same check against the catalog board before it sends the config.
 
+### allow
+
+Who may send the node DNS queries. By default a node answers queries (UDP and TCP port 53)
+only from private source addresses:
+
+| | Networks |
+|-|----------|
+| IPv4 | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (shared, CGNAT), `169.254.0.0/16` (link-local), `127.0.0.0/8` |
+| IPv6 | `::1`, `fc00::/7` (unique local), `fe80::/10` (link-local) |
+
+An IPv4-mapped IPv6 source (`::ffff:a.b.c.d`) is judged by its IPv4 address. The zone
+primary in `secondary.primary` is always answered, for its NOTIFY.
+
+`allow` adds networks to that set; it never takes any away. A query from anywhere else gets
+no answer at all: over UDP it is dropped, over TCP the connection is closed. So a node on a
+public address can't be used as an open resolver, or to reflect traffic at someone else.
+The node counts them in `/status` `queries.refused_source` and `/metrics`
+`espdns_queries_refused_source_total`.
+
+Checks: at most 16 networks, each in CIDR form, IPv4 (`198.51.100.0/24`, prefix 0 to 32) or
+IPv6 (`2001:db8::/32`, prefix 0 to 128), with no host bits set (`198.51.100.1/24` is
+refused). `"0.0.0.0/0"` answers every IPv4 client: only for a node behind a firewall that
+does the filtering.
+
 ## Services
 
 A node runs these services, following its config:
@@ -205,7 +231,8 @@ A node runs these services, following its config:
 ## What applies live and what needs a reboot
 
 Live: `name`, `wifi.tx_power_dbm`, `wifi.power_save`, `forwarders`, `upstream_timeout_ms`,
-`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`, `led`.
+`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`, `led`,
+`allow`.
 Services start and stop live with them.
 
 At a reboot, with the reason the node reports:

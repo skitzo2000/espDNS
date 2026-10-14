@@ -290,6 +290,10 @@ func (n *Node) status() map[string]any {
 	if pending == nil {
 		pending = []string{}
 	}
+	queries := n.Queries
+	if queries.RefusedSource == nil {
+		queries.RefusedSource = new(uint64) // firmware with "allow"
+	}
 	src, from, cseq := "node", "board", n.seq["config"]
 	var cerr any
 	if n.defaults {
@@ -324,7 +328,7 @@ func (n *Node) status() map[string]any {
 			"reverted_from": n.hosted.RevertedFrom, "bytes": n.hosted.Bytes, "limit_bytes": n.hosted.LimitBytes, "zones": hz},
 		"services": n.services(),
 		"blocking": map[string]any{"list": n.list, "overrides": n.ovr, "paused_s": n.pausedS()},
-		"queries":  n.Queries,
+		"queries":  queries,
 	}
 	if n.NoConfigs {
 		delete(st, "config")

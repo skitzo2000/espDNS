@@ -13,6 +13,16 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Added
 
+- Nodes answer DNS only from private addresses: UDP and TCP port 53 take queries from
+  IPv4 `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `169.254/16` and `127/8` and IPv6
+  `::1`, `fc00::/7` and `fe80::/10` (an IPv4-mapped source by its IPv4 address), and drop
+  anything else unanswered, so a node on a public address is no open resolver or
+  reflector. The node config's new `allow` key adds up to 16 more networks (IPv4 or IPv6,
+  CIDR), live; the controller checks it, and refuses it for a node whose firmware is older.
+  The dropped queries are counted in `/status` `queries.refused_source` and `/metrics`
+  `espdns_queries_refused_source_total`. See
+  [docs/reference/node-config.md](docs/reference/node-config.md#allow).
+
 - A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
   driven with PWM, shows the node's health in the controller's colours (green, amber, red;
   blue while booting or updating; white to *Blink its light*). The node page gets a

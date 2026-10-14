@@ -170,7 +170,9 @@ this order.
 
 Counters since boot: `total`, `udp`, `tcp`, `auth` (answered authoritatively, from the node's own zones),
 `forwarded`, `cache_hits`, `nxdomain`, `servfail`, `refused`, `notifies`, `dropped` (never
-answered).
+answered), `refused_source` (dropped unanswered, or the TCP connection closed: not from a
+private address nor one in the config's [`allow`](node-config.md#allow); not counted in
+`total`, `udp` or `tcp`).
 
 ### net
 
@@ -292,6 +294,7 @@ Prometheus text format (`text/plain; version=0.0.4`). Open to anyone, like `/hea
 | `espdns_clock_synced` | gauge | | 1 once the clock is set over SNTP. |
 | `espdns_queries_received_total` | counter | `transport` (`udp`, `tcp`) | DNS messages received. |
 | `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. |
+| `espdns_queries_refused_source_total` | counter | | Queries dropped unanswered (UDP) or connections closed (TCP): not from a private address nor one in the config's `allow`. |
 | `espdns_responses_total` | counter | `rcode` (`NOERROR`, `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, and others once seen) | Responses by rcode. NOTIFY replies not included. |
 | `espdns_query_duration_seconds` | histogram | | Time to answer a query, forwarders included. |
 | `espdns_upstream_queries_total` | counter | `upstream` (an address, or `other`) | Attempts at each forwarder. |

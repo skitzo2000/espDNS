@@ -222,6 +222,9 @@ type QueryCounts struct {
 	Servfail  uint64 `json:"servfail"`
 	Refused   uint64 `json:"refused"`
 	Dropped   uint64 `json:"dropped"`
+	// RefusedSource are the queries dropped unanswered for their source address (not private,
+	// nor in the config's "allow"); nil on firmware from before it.
+	RefusedSource *uint64 `json:"refused_source"`
 }
 
 // List is the blocklist or overrides (k) the node reports, nil when it reports none (no

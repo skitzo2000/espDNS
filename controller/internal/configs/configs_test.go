@@ -534,3 +534,20 @@ func TestRefusalLED(t *testing.T) {
 		}
 	}
 }
+
+// A config's "allow": refused by firmware from before it (no "refused_source" in /status).
+func TestRefusalAllow(t *testing.T) {
+	s, err := ParseSpec("192.0.2.10", "a.json", []byte(`{"allow":["198.51.100.0/24"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zero uint64
+	if err := s.Refusal(release.NodeStatus{Queries: &release.QueryCounts{RefusedSource: &zero}}, ""); err != nil {
+		t.Error(err)
+	}
+	for _, st := range []release.NodeStatus{{}, {Queries: &release.QueryCounts{}}} {
+		if err := s.Refusal(st, ""); err == nil || !strings.Contains(err.Error(), "update its firmware first") {
+			t.Errorf("firmware from before: %v", err)
+		}
+	}
+}

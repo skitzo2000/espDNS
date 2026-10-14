@@ -60,6 +60,14 @@ int settings_forwarders(uint32_t *out, int *timeout_ms)
     return n;
 }
 
+bool settings_src_allowed(uint32_t ip)
+{
+    taskENTER_CRITICAL(&s_mux);
+    bool ok = cfg_src4_allowed(s_run, ip);
+    taskEXIT_CRITICAL(&s_mux);
+    return ok;
+}
+
 /* ---- NVS state ---- */
 
 static uint64_t state_get(const char *key)
