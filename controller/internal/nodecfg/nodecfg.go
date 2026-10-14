@@ -13,6 +13,7 @@
 //	  "name": "dns-a",
 //	  "network": { "address": "192.0.2.53/24", "gateway": "192.0.2.1" },
 //	  "wifi": { "ssid": "home", "password": "...", "tx_power_dbm": 11, "power_save": false },
+//	           (the password goes to a node only sealed to its key, as "sealed": Wifi)
 //	  "forwarders": [ "9.9.9.9", "1.1.1.1" ],
 //	  "upstream_timeout_ms": 1500,
 //	  "forward_zones": [ { "zone": "corp.example", "forwarder": "192.0.2.53" } ],
@@ -182,9 +183,13 @@ func (n *Network) Check() error {
 	return nil
 }
 
+// Wifi is the Wi-Fi network. A config file has the password in plain text; the controller
+// sends it to a node only as Sealed, sealed to that node's key (release.SealConfig), and a
+// node refuses a config with Password.
 type Wifi struct {
 	SSID       *string `json:"ssid,omitempty"`
 	Password   *string `json:"password,omitempty"`
+	Sealed     *string `json:"sealed,omitempty"`
 	TxPowerDBm *int    `json:"tx_power_dbm,omitempty"`
 	PowerSave  *bool   `json:"power_save,omitempty"`
 }
@@ -423,6 +428,9 @@ func (c *Config) Validate() error {
 			if l := len(*w.Password); l > 63 || (l > 0 && l < 8) {
 				return errors.New("wifi.password: 8-63 characters, or empty for an open network")
 			}
+		}
+		if w.Sealed != nil && (w.SSID == nil || w.Password != nil) {
+			return errors.New("wifi.sealed: only with wifi.ssid, and without wifi.password")
 		}
 		if err := intIn(w.TxPowerDBm, 2, 20, "wifi.tx_power_dbm"); err != nil {
 			return err

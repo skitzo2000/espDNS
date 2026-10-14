@@ -331,7 +331,7 @@ func TestPushIgnoresStatusIDAndSeq(t *testing.T) {
 
 	// The spoofed seqs: signed with the clock, as if they weren't there.
 	for _, kind := range []Kind{Config, Control} {
-		r, err := p.PushRelease(context.Background(), host, kind, []byte("x"))
+		r, err := p.PushRelease(context.Background(), host, kind, []byte("{}"))
 		if err != nil || r.Seq != 1_800_000_000_000 {
 			t.Fatalf("%s: %+v %v", kind, r, err)
 		}

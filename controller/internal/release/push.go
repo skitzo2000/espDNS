@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/memplan"
+	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 )
 
@@ -38,9 +40,12 @@ type NodeStatus struct {
 	// KeysRetired is the fingerprint of the release key a KEYS release replaced and the node
 	// keeps as its retired key (what it stored with it still loads at boot until pushed
 	// again with the new key), "" for none (null in /status) and on firmware from before.
-	KeysRetired string            `json:"keys_retired"`
-	Seq         map[string]uint64 `json:"seq"`
-	Project     string            `json:"project"`
+	KeysRetired string `json:"keys_retired"`
+	// NodeKey is its node key (firmware/main/nodekey.h), base64; "" if it has none. Pinned
+	// when it is adopted: its Wi-Fi password is sealed to the pinned one (SealConfig).
+	NodeKey string            `json:"node_key"`
+	Seq     map[string]uint64 `json:"seq"`
+	Project string            `json:"project"`
 	// Proto is the protocol it speaks to the controller (firmware/main/ota.c STATUS_PROTO);
 	// 0 on firmware from before it said one, which speaks 1.
 	Proto     int    `json:"proto"`
@@ -468,6 +473,39 @@ func (p *Pusher) target(host string, kind Kind, st NodeStatus) ([6]byte, uint64,
 	return node, seq, nil
 }
 
+// sealWifi is a config payload with its Wi-Fi password sealed to the node key pinned for
+// node (SealConfig), which st must report too. A node without one pinned gets no password.
+func (p *Pusher) sealWifi(host string, node [6]byte, st NodeStatus, payload []byte) ([]byte, error) {
+	c, err := nodecfg.Parse(payload)
+	if err != nil {
+		return nil, err
+	}
+	if c.Wifi == nil || c.Wifi.Password == nil || *c.Wifi.Password == "" {
+		return SealConfig(payload, "", node)
+	}
+	id := net.HardwareAddr(node[:]).String()
+	key, err := p.Pins.NodeKey(id)
+	if err != nil {
+		return nil, err
+	}
+	fp := func(k string) string {
+		if b, err := base64.StdEncoding.DecodeString(k); err == nil && k != "" {
+			return Fingerprint(b)
+		}
+		return "none"
+	}
+	switch {
+	case key == "":
+		return nil, fmt.Errorf("node %s has no node key pinned, and its Wi-Fi password goes only sealed to one: "+
+			"adopt it again (on firmware older than the node key, update it first)", id)
+	case st.NodeKey != key:
+		return nil, fmt.Errorf("%s reports node key %s, not %s, the one pinned for node %s: its Wi-Fi password is not "+
+			"sent (if it was reinstalled over USB, adopt it again, or espdns pin -host %s -node %s)", host, fp(st.NodeKey),
+			fp(key), id, host, id)
+	}
+	return SealConfig(payload, key, node)
+}
+
 // Push signs payload as a release of kind for the node at host (its node ID pinned to host,
 // its next seq from the record, its chip image from its /status) and posts it to /release.
 // It returns the node's reply, which says whether the release applied live or with a reboot.
@@ -547,6 +585,11 @@ func (p *Pusher) PushRelease(ctx context.Context, host string, kind Kind, payloa
 	node, seq, err := p.target(host, kind, st)
 	if err != nil {
 		return out, err
+	}
+	if kind == Config {
+		if payload, err = p.sealWifi(host, node, st, payload); err != nil {
+			return out, err
+		}
 	}
 	hdr, err := Header(p.KeyFor(st), kind, p.KeyID, node, st.Image, seq, payload)
 	if err != nil {
