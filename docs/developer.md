@@ -107,7 +107,7 @@ The browser's setup steps, from the command line:
 - **Get firmware**, for a given firmware version (or its tag, `firmware-v0.0.3`):
 
   ```sh
-  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.2
+  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.3
   ```
 
   It gets the chip images your nodes need; `-image esp32p4-rev1` gets one you name.
@@ -189,14 +189,14 @@ Applying a firmware update gets the chip image it needs the same way. Either way
    chip images in the controller stay as they are.
 
 If any check fails, nothing is imported. A chip image the release doesn't have is an error
-that names the ones it has. The pages call it **project release v0.0.2**.
+that names the ones it has. The pages call it **project release v0.0.3**.
 Before each firmware update the controller rechecks the provenance, then signs the update
 with your release key. Your nodes trust only your key ([Releasing](releasing.md#using-a-release)).
 
 ## Build your own firmware
 
 You can build the same chip images from source and sign them with your own release key. The
-controller labels such a build **your build v0.0.2** and checks it before every update, like
+controller labels such a build **your build v0.0.3** and checks it before every update, like
 a project release.
 
 You'll need about 15 GB of disk for the pinned ESP-IDF image. Use a clean checkout: the

@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.3] - 2026-10-14
+
 **Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.
 Update the controller as usual, then install each node from it with **Install over USB**
 (**+ Add node**, on Nodes).
@@ -26,7 +28,6 @@ Update the controller as usual, then install each node from it with **Install ov
   The dropped queries are counted in `/status` `queries.refused_source` and `/metrics`
   `espdns_queries_refused_source_total`. See
   [docs/reference/node-config.md](docs/reference/node-config.md#allow).
-
 - A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
   driven with PWM, shows the node's health in the controller's colours (green, amber, red;
   blue while booting or updating; white to *Blink its light*). The node page gets a
@@ -37,10 +38,6 @@ Update the controller as usual, then install each node from it with **Install ov
   take `"kind": "rgb"` too. `/status` `led` now reports the light in effect, its pins, where
   it comes from and the board's own; `failed` is now a field of its own, no longer a kind.
   Wiring in [docs/hardware.md](docs/hardware.md#a-status-light).
-- Nodes hand over their copy of a zone: `GET /zone?name=<zone>` on a node returns a
-  secondary zone's records as the node holds them, 200 a page (500 at most), from private
-  addresses only. `/status` lists `"reads": ["zone"]` on nodes that have it. See
-  [docs/reference/node-endpoints.md](docs/reference/node-endpoints.md#zone).
 - A board library: 18 boards from 6 makers added to the catalog (Adafruit, Espressif,
   LilyGO, M5Stack, Seeed, Waveshare), 22 boards in all, each from the maker's pinout,
   arduino-esp32 or ESPHome, with its sources in `notes`: the wired ESP32-S3 and ESP32-P4
@@ -53,7 +50,6 @@ Update the controller as usual, then install each node from it with **Install ov
   or more, the sizes tested: a board with less is refused (`psram_mb: espDNS needs at
   least 8 MB of PSRAM`). The library tables are in
   [docs/hardware.md](docs/hardware.md#untested-boards).
-- The Waveshare ESP32-P4-ETH (`ws-p4-eth`) is a tested board.
 
 ### Changed
 
@@ -113,12 +109,74 @@ Update the controller as usual, then install each node from it with **Install ov
   signature is still checked first, and other imported chip images stay as they are. The
   `fetch-release` job takes `"images"`, and `release fetch` takes `-image`.
 
+### Security
+
+- The Wi-Fi password no longer crosses the network in plain text. Each Wi-Fi node makes a
+  key pair at its first boot (the private key never leaves it) and reports the public key in
+  `/status` as `node_key`; the controller pins it when it adopts the node, and sends a
+  config's Wi-Fi password only sealed to that key (`wifi.sealed`: ECDH P-256, HKDF-SHA256,
+  AES-256-GCM). A node refuses a config release with a plain `wifi.password`. The controller
+  refuses to send a Wi-Fi password to a node with no node key pinned (adopt it again) or
+  one that reports a different key (reinstalled: adopt it again, or `espdns pin`). Config
+  files on the controller still hold the password as before; USB and Improv setup are
+  unchanged. See [docs/security.md](docs/security.md#the-wi-fi-password).
+
+## [firmware 0.0.3] - 2026-10-14
+
+**Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.
+Update the controller as usual, then install each node from it with **Install over USB**
+(**+ Add node**, on Nodes).
+
+### Added
+
+- Nodes answer DNS only from private addresses: UDP and TCP port 53 take queries from
+  IPv4 `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `169.254/16` and `127/8` and IPv6
+  `::1`, `fc00::/7` and `fe80::/10` (an IPv4-mapped source by its IPv4 address), and drop
+  anything else unanswered, so a node on a public address is no open resolver or
+  reflector. The node config's new `allow` key adds up to 16 more networks (IPv4 or IPv6,
+  CIDR), live; the controller checks it, and refuses it for a node whose firmware is older.
+  The dropped queries are counted in `/status` `queries.refused_source` and `/metrics`
+  `espdns_queries_refused_source_total`. See
+  [docs/reference/node-config.md](docs/reference/node-config.md#allow).
+- A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
+  driven with PWM, shows the node's health in the controller's colours (green, amber, red;
+  blue while booting or updating; white to *Blink its light*). The node page gets a
+  **Status light** setting (None, one-colour LED, WS2812 or RGB LED, with its pins), which
+  shows the board's own LED and goes out with the other changes to apply; the node changes
+  lights live, without a restart. The node config's new `led` key carries it, checked by the
+  controller and the node against the board's other pins and the chip's. Board definitions
+  take `"kind": "rgb"` too. `/status` `led` now reports the light in effect, its pins, where
+  it comes from and the board's own; `failed` is now a field of its own, no longer a kind.
+  Wiring in [docs/hardware.md](docs/hardware.md#a-status-light).
+- Nodes hand over their copy of a zone: `GET /zone?name=<zone>` on a node returns a
+  secondary zone's records as the node holds them, 200 a page (500 at most), from private
+  addresses only. `/status` lists `"reads": ["zone"]` on nodes that have it. See
+  [docs/reference/node-endpoints.md](docs/reference/node-endpoints.md#zone).
+- The Waveshare ESP32-P4-ETH (`ws-p4-eth`) is a tested board.
+
+### Changed
+
+- Two versions: the firmware and the controller each have their own, in
+  `firmware/VERSION` and `controller/VERSION` (the root `VERSION` is gone), and are
+  released on their own tags: `firmware-v<version>` builds the chip images,
+  `controller-v<version>` the controller's image and `compose.yaml`, each signed as before.
+  The controller offers the nodes firmware releases only (`firmware-v*`, and the older
+  `v0.0.1` and `v0.0.2`), so a controller release never makes a node out of date. Get
+  firmware and `espdns release fetch -version` take a firmware version (`0.0.3`) or its
+  tag. A node's `/status` says the protocol it speaks to the controller (`"proto": 1`); a
+  node on one the controller doesn't speak is offered no update, and the Nodes page says
+  why. `scripts/bump-version.sh` takes the part first (`firmware patch`), and a version's
+  changelog section is `## [firmware 0.0.3]` or `## [controller 0.0.3]`
+  ([docs/releasing.md](docs/releasing.md)).
+- Only the supported chip images are built, released and offered: esp32p4-rev1, esp32p4,
+  esp32s3-octal, esp32s3-eth and esp32s3-quad. A board file or import naming another image
+  is refused (`not one of the chip images`).
+
 ### Removed
 
 - The old HMAC key for firmware updates, used only by nodes on firmware from before signed
   releases: `make key-restore`, `secrets/ota.key` and `tools/ota_push.py --legacy-key`.
   `make ota` now refuses such a node; install it over USB.
-
 - Releases for any node: a node no longer takes a release addressed to
   `ff:ff:ff:ff:ff:ff`. Every release must name the node's own ID, whatever its kind.
   Nothing signed such a release.
