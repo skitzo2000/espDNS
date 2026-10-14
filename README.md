@@ -77,7 +77,7 @@ PSRAM or more. Describe your own board in the controller's builder.
 | Document | What it covers |
 |---|---|
 | [Getting started](docs/getting-started.md) | Start the controller and run the setup |
-| [Developer guide](docs/developer.md) | Docker Compose, the command line, setup in detail, how firmware is checked, your own build |
+| [Developer guide](docs/developer.md) | Docker Compose, the command line, setup in detail, how firmware is checked, your own build, tests and make targets |
 | [Hardware](docs/hardware.md) | The tested boards, what a board needs, and describing your own board |
 | [Zones and forwarding](docs/zones.md) | Hosted, secondary and forward zones, and the default forwarders |
 | [Blocking](docs/blocking.md) | Blocklists, overrides, pausing, the query log and the charts |

@@ -1,8 +1,8 @@
 # Developer guide
 
 Everything [Getting started](getting-started.md) leaves out: running the controller with
-Docker Compose, the command line, the setup's finer points, how firmware is checked, and
-building your own.
+Docker Compose, the command line, the setup's finer points, how firmware is checked,
+building your own, and working on the code: its layout, the tests and the make targets.
 
 The examples use documentation addresses. Swap in your own:
 
@@ -302,3 +302,217 @@ printed. Then, on the setup's Make your keys:
 2. **Use a recovery key you have**, and choose `recovery.pub` (only the public half).
 3. Move `recovery.pem` offline, tick **I saved recovery.pem somewhere safe, off this
    computer**, and **Done**.
+
+## Project layout
+
+| Path | What |
+|---|---|
+| `boards/` | The board catalog, one JSON file per board ([boards/README.md](../boards/README.md)) |
+| `configs/` | Example node config and `settings.json` |
+| `controller/cmd/espdns-controller/` | The controller: its HTTP server, API and jobs |
+| `controller/cmd/espdns/` | The `espdns` CLI |
+| `controller/internal/` | The packages both share: the fleet and rolling push, signed releases, keys, the board catalog and image builder, blocklists, zones, backup |
+| `controller/web/` | The pages, built into the binary, and the vendored flashers in `web/vendor/` |
+| `controller/e2e/` | The browser tests |
+| `firmware/main/` | The node firmware. The DNS core (wire format, zones, answers, cache, forwarding, blocklists, releases, keys) is portable C, tested on the host |
+| `firmware/images/` | One directory per chip image, its `sdkconfig.defaults` on top of the shared one |
+| `firmware/components/w5500/` | The W5500 Ethernet driver |
+| `firmware/tests/` | The firmware's host tests |
+| `firmware/tools/` | Python tools: key generation, the keys partition, release manifests, the network update, image export |
+| `firmware/enclosure/` | A parametric FreeCAD case for the Guition P4 board (`make -C firmware enclosure`, with `freecadcmd` on the host) |
+| `keys/project.pub` | The project's release public key |
+| `scripts/` | `bump-version.sh`, and the release scripts in `scripts/release/` |
+| `.github/workflows/` | CI and the release workflows |
+
+## Tests
+
+The tests run in Docker, except the browser tests. From the checkout's top:
+
+```sh
+make -C firmware test     # the firmware's host tests, in the pinned ESP-IDF image
+make -C controller test   # go vet and go test (Go on the host)
+```
+
+`make -C firmware test` needs only make and Docker. The host tests build the portable core
+with AddressSanitizer and UBSan. They also check the Makefile's containers (mounts and
+networks) and the network update's three steps against a fake node. For the controller's
+tests without Go, use the `docker run` command in [CONTRIBUTING.md](../CONTRIBUTING.md#the-controllers-tests).
+
+### Browser tests
+
+`make -C controller e2e` runs `controller/e2e/` in Chromium with Playwright, pinned by
+`e2e/package-lock.json`. It needs Go and Node.js on the host. The first run downloads
+Playwright's Chromium to `~/.cache/ms-playwright` (no root).
+
+The tests build a controller from the checkout and run it on `127.0.0.1:18480`
+(`E2E_PORT=`), with a throwaway data directory and login. Nothing goes on the network: no
+nodes, no mDNS, and Get firmware fetches from a stand-in release server on the next port
+(`E2E_FORGE_PORT=`), signed by a throwaway key. They check every page's security headers
+and Content Security Policy, the GUI's links and panels against fake APIs, the login and
+session, and Install over USB and Write keys only against a stubbed serial port.
+`E2E_SHOTS=<dir>` also saves screenshots at phone and desktop widths, light and dark.
+
+Run them after a change to a page, the login, the security headers
+(`controller/internal/websec`) or a vendored flasher.
+
+CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs the host tests, the
+controller's tests and a build of every chip image. It doesn't run the browser tests.
+
+## Working on the firmware
+
+`firmware/Makefile` runs everything in the pinned ESP-IDF image. Nothing is installed on
+the host but make, Docker and Python 3. From `firmware/`:
+
+```sh
+make test                              # host tests
+make build IMAGE=esp32s3-octal         # one chip image, in build/<image>/
+make images                            # every chip image
+make export-images                     # every chip image, exported into dist/images/ for the controller
+make factory BOARD=ws-s3-eth ADDRESS=192.0.2.53/24 GATEWAY=192.0.2.1   # a whole-flash image for a new node
+make flash IMAGE=esp32s3-eth           # flash a build over USB (PORT=, default /dev/ttyACM0)
+make monitor IMAGE=esp32s3-eth         # the serial console (Ctrl+] quits); make log SECS=30 captures it
+make ota IMAGE=esp32s3-eth HOST=192.0.2.53   # a signed network update, waited on until it confirms
+make status HOST=192.0.2.53            # the node's /status
+make boottime HOST=192.0.2.53          # how long the node is silent across a reboot
+make components                        # solve and fetch the component locks again
+make menuconfig IMAGE=...              # ESP-IDF's menuconfig for a build
+make clean IMAGE=...
+```
+
+- `IMAGE=` is a chip image from `firmware/images/`. `BOARD=` names a catalog board instead,
+  and builds its chip image with that board built in, for a node without a board partition.
+- Each container gets only what its step needs. The source is mounted read-only, and builds
+  and tests run with no network. Only the component fetch, `make components` and a push
+  reach the network. `firmware/secrets/`, the private keys, is hidden from every container
+  except the one that signs, which has no network.
+- A build fails on a compiler warning. Its version is `firmware/VERSION`, never
+  `git describe`.
+- A build changes no component lock. A lock that no longer matches
+  `main/idf_component.yml` stops the fetch; run `make components` and commit the locks.
+- `make ota`, `status` and `boottime` need `HOST=`. Nothing names a default node or address.
+  Put your own in `firmware/local.mk` (git-ignored; [`local.mk.example`](../firmware/local.mk.example)
+  shows each), such as `HOST` and `DEFAULT_BOARD`. `controller/local.mk` is the same for
+  the controller.
+- `make ota` holds the fleet lock, like the controller's rollouts, and refuses to run while
+  one is changing the fleet.
+
+### A bench node
+
+To work on a node outside your controller, give it development keys of its own:
+
+1. `make keys` makes a key pair in `firmware/keys/` (public) and `firmware/secrets/`
+   (private, mode 0600). Both are git-ignored, and an existing file is never overwritten.
+2. `make factory BOARD=<board> ADDRESS=<address>/<prefix> GATEWAY=<gateway>` writes
+   `dist/<board>/dns2-<board>.bin`: bootloader, partition table, the board partition with
+   the node's address, the keys partition with `firmware/keys`, and the app. There's no
+   default address, so a new node never gets another's by accident (`ADDRESS=dhcp` only on
+   a network with a DHCP server). `FACTORY_KEYS=` leaves the keys out, and the node comes up
+   in setup mode.
+3. Write it at offset 0 over USB. This erases the board:
+
+   ```sh
+   IDF=espressif/idf:v5.5.5@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
+   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp --device /dev/ttyACM0 \
+     --group-add "$(stat -c %g /dev/ttyACM0)" -v "$PWD/dist:/dist:ro" "$IDF" \
+     python -m esptool -p /dev/ttyACM0 write_flash 0x0 /dist/<board>/dns2-<board>.bin
+   ```
+
+4. From then on, `make ota HOST=<address> IMAGE=<image>` signs each build with
+   `firmware/secrets/release.pem` and pushes it. The update boots on trial and rolls back
+   if it isn't healthy within 90 s.
+
+`make flash` writes a build's bootloader, partition table and app. It leaves the board and
+keys partitions as they are.
+
+Images are key-neutral: no key is built in. `KEYS_SEED=keys` builds in `firmware/keys` as a
+seed, which a node writes to an empty keys partition at its first boot. Releases never
+carry a seed.
+
+### Test builds
+
+These build hooks test failure paths on a bench node:
+
+- **Rollback:** `make ota IMAGE=<image> BUILD=build/rollback IDF_EXTRA=-DDNS2_TEST_FAIL_HEALTH=1 FORCE=1`
+  fails its health check. The node should roll back to the firmware before it.
+- **Setup mode:** `make ota IMAGE=<image> TEST_NO_KEYS=1` (built in `build/nokeys-<image>`)
+  ignores the keys partition. The node comes up in setup mode, refuses releases with `403`,
+  and rolls back by itself after 60 s.
+- **Supervisor:** `IDF_EXTRA=-DDNS2_TEST_START_FAILS=4` starts blocking only on its fifth
+  try. `IDF_EXTRA=-DDNS2_TEST_STALL_S=180` hangs the UDP receive task 180 s after each boot:
+  the node reboots for it 3 times, then stays up in fault until normal firmware goes back
+  on. Give each its own `BUILD=build/<name>`.
+
+## Working on the controller
+
+From `controller/`:
+
+```sh
+make build        # the controller and the CLI, ./espdns-controller and ./espdns (Go on the host)
+make run          # the controller in the foreground, on http://127.0.0.1:8480
+make firmware     # import the chip images from make export-images (firmware/dist/images/)
+make test         # go vet and go test
+```
+
+`make run` uses `controller/data` (`DATA=` for another directory). Stop the container
+first: they share the port. To try a change in the container instead, run
+`docker compose up -d --build`.
+
+The controller's version is `controller/VERSION`, linked in by `make build` and the
+Dockerfile. A build without it, such as `go run` or the tests, says `dev`.
+
+The image's build context is an allowlist ([`.dockerignore`](../controller/.dockerignore)):
+`go.mod`, `go.sum`, `cmd/`, `internal/` and `web/`. The board catalog and
+`keys/project.pub` go in as named build contexts. `container_test.go` checks the hardening
+in `compose.yaml`.
+
+## Pinned versions
+
+Everything a build fetches from outside the repository is pinned:
+
+- Container images by digest, with their tag: `IDF_IMAGE` in `firmware/Makefile`, the
+  controller's `Dockerfile` and the CI containers. The Go version is `controller/go.mod`'s
+  everywhere.
+- CI actions by commit, with the tag in a comment.
+- ESP-IDF components by the committed lock for each chip target,
+  `firmware/dependencies.lock.<target>`.
+- The vendored flashers by version and checksum (below).
+
+`controller/pins_test.go` refuses an image or action that isn't pinned, two Go versions, or
+a chip target without its lock. `controller/releasescripts_test.go` refuses an ESP-IDF
+image in the docs that isn't `IDF_IMAGE`.
+
+To bump one, on purpose:
+
+- An image: `docker buildx imagetools inspect <name>:<tag>` gives the digest. Write
+  `<name>:<tag>@sha256:<digest>`. A new Go changes `go.mod`'s go line, the Dockerfile and CI
+  together.
+- An action: `git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>` gives the
+  commit. Write `<owner>/<repo>@<commit>  # <tag>`.
+- The components: change `firmware/main/idf_component.yml` if needed, then
+  `make -C firmware components`. It solves again for every chip target and writes the
+  locks. Commit them.
+
+## Updating the vendored flashers
+
+Install over USB uses [ESP Web Tools](https://github.com/esphome/esp-web-tools), and Write
+keys only uses esptool-js. Both are committed in `controller/web/vendor/` and built into the
+binary, so the pages load nothing from another origin. Each directory has a `VERSION` (the
+version and its npm integrity), `SHA256SUMS`, `LICENSE` and `THIRD_PARTY.md`.
+
+Keep esptool-js at the version ESP Web Tools was built with (0.6.0 for ESP Web Tools
+10.4.0). From `controller/`:
+
+```sh
+curl -s https://registry.npmjs.org/esp-web-tools/10.4.0 | jq -r .dist.integrity
+make vendor-ewt V=10.4.0 SHA512=sha512-...
+curl -s https://registry.npmjs.org/esptool-js/0.6.0 | jq -r .dist.integrity
+make vendor-etj V=0.6.0 SHA512=sha512-...
+make test
+make e2e
+```
+
+Each target refuses a tarball whose sha512 differs, then replaces the files and writes
+`VERSION` and `SHA256SUMS`. Check `THIRD_PARTY.md` against the new version's dependencies
+by hand. If ESP Web Tools' inline styles change, the Content Security Policy's hashes must
+change with them: `USBStyleHashes` and `USBStyleMapHashes` in `internal/websec`, and the
+tests that list them. Then install a board with Install over USB before you commit.
