@@ -134,10 +134,12 @@ Update the controller as usual, then install each node from it with **Install ov
 - One slow name no longer takes all of its forwarders' places for queries waiting on an
   upstream answer: the queries for one question wait in at most 8 of the 32 places, and
   past that are answered SERVFAIL at once, so queries for other names still wait for theirs.
-- Slow TCP clients no longer hold up a node's TCP port 53. A client has 2 s to start its
-  first query and 3 s to send each query whole, and is closed when idle while other
-  connections wait; one client may hold only half the connections. These closes are counted
-  in `/status` `queries.tcp_closed` and `/metrics` `espdns_tcp_closed_total`.
+- Slow TCP clients no longer hold up a node's TCP port 53. A node has 2 TCP workers and a
+  queue of 4 connections waiting for them. Once a worker takes a connection, the client has
+  2 s to start its first query and 3 s to send each query whole, and is closed when idle
+  while other connections wait. A connection may wait in the queue first, so it can be held
+  a little longer. One client may hold only 3 of the 6 places. These closes are counted in
+  `/status` `queries.tcp_closed` and `/metrics` `espdns_tcp_closed_total`.
 
 ### Security
 
