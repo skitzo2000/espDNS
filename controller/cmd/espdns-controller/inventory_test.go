@@ -17,6 +17,8 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/fakenode"
+	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/inventory"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
@@ -302,6 +304,93 @@ func TestZoneRecordsAPI(t *testing.T) {
 	h, _ := s.handler()
 	if w := serve(h, httptest.NewRequest("GET", "http://127.0.0.1:8480/api/zone-records?name=lab.example", nil)); w.Code != http.StatusUnauthorized {
 		t.Errorf("without a session: %d", w.Code)
+	}
+}
+
+// A copied zone's records read from a node that holds it: the highest serial among the nodes
+// online, answering and holding an unexpired copy; the next one when its read fails; the
+// primary when none hands it over, or no node holds it. The reply names where they came from.
+func TestZoneRecordsFromNode(t *testing.T) {
+	dir := t.TempDir()
+	hosts := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4", "203.0.113.5"}
+	if err := settings.Save(settings.Path(dir), settings.Settings{Nodes: hosts}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configs.Save(dir, "a.json", []byte(`{"name": "a", "secondary": {"primary": "192.0.2.254", "zones": ["lab.example"]}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	zone := func(serial uint32, a string) []dns.RR {
+		var rrs []dns.RR
+		for _, s := range []string{fmt.Sprintf("lab.example. 3600 IN SOA ns1.lab.example. hostmaster.lab.example. %d 3600 600 604800 300", serial),
+			"lab.example. 3600 IN NS ns1.lab.example.", "nas.lab.example. 300 IN A " + a} {
+			rr, err := dns.NewRR(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rrs = append(rrs, rr)
+		}
+		return rrs
+	}
+	lan := fakenode.NewLan()
+	defer lan.Close()
+	fake := map[string]*fakenode.Node{}
+	for i, h := range hosts {
+		n := fakenode.New(fmt.Sprintf("dns-%d", i+1), [6]byte{2, 0, 0, 0, 0, byte(i + 1)}, "esp32p4-rev1", "p4-ip101", nil)
+		n.Addr = h
+		n.SetCopy("lab.example", zone(uint32(7+i), fmt.Sprintf("192.0.2.%d", i+1)))
+		lan.Add(n)
+		fake[h] = n
+	}
+	// As the controller last read each: .1 serial 7; .2 serial 8; .3 serial 9, not
+	// answering; .4 serial 10, expired; .5 serial 11, offline.
+	st := func(name string, serial uint32, answering, expired bool) map[string]any {
+		return map[string]any{"reads": []any{"zone"}, "config": map[string]any{"name": name},
+			"health": map[string]any{"state": "healthy", "answering": answering},
+			"zones":  []any{map[string]any{"name": "lab.example", "serial": serial, "expired": expired}}}
+	}
+	ns := []nodes.Node{
+		{Addr: hosts[0], Online: true, Status: st("dns-a", 7, true, false)},
+		{Addr: hosts[1], Online: true, Status: st("dns-b", 8, true, false)},
+		{Addr: hosts[2], Online: true, Status: st("dns-c", 9, false, false)},
+		{Addr: hosts[3], Online: true, Status: st("dns-d", 10, true, true)},
+		{Addr: hosts[4], Online: false, Status: st("dns-e", 11, true, false)},
+	}
+	ft := &fakeTransfer{at: "192.0.2.254", zones: map[string][]dns.RR{"lab.example": zone(6, "192.0.2.254")}}
+	v := inventoryServer{dataDir: dir, nodes: func() []nodes.Node { return ns }, xfr: ft, client: &fleet.Client{HTTP: lan.HTTP()}}
+	get := func() (node, a string, serial uint32) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		v.records(w, httptest.NewRequest("GET", "/api/zone-records?name=lab.example", nil))
+		var got struct {
+			Node    string       `json:"node"`
+			Serial  uint32       `json:"serial"`
+			Records []zoneRecord `json:"records"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || len(got.Records) != 3 {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		return got.Node, got.Records[2].Data, got.Serial
+	}
+
+	if node, a, serial := get(); node != "dns-b" || a != "192.0.2.2" || serial != 8 || len(ft.asked) != 0 {
+		t.Errorf("best node: %s %s %d, primary asked %v", node, a, serial, ft.asked)
+	}
+	// dns-b no longer holds it (404): the next one, dns-a.
+	fake[hosts[1]].Do(func(n *fakenode.Node) { delete(n.Copies, "lab.example") })
+	if node, a, serial := get(); node != "dns-a" || a != "192.0.2.1" || serial != 7 || len(ft.asked) != 0 {
+		t.Errorf("next node: %s %s %d, primary asked %v", node, a, serial, ft.asked)
+	}
+	// No node hands it over: the primary.
+	fake[hosts[0]].Do(func(n *fakenode.Node) { delete(n.Copies, "lab.example") })
+	if node, a, serial := get(); node != "" || a != "192.0.2.254" || serial != 6 || len(ft.asked) != 1 {
+		t.Errorf("primary: %q %s %d, primary asked %v", node, a, serial, ft.asked)
+	}
+	// Firmware without /zone ("reads" missing): not asked; the primary.
+	for i := range ns {
+		delete(ns[i].Status, "reads")
+	}
+	if node, _, _ := get(); node != "" || len(ft.asked) != 2 {
+		t.Errorf("no reads: %q, primary asked %v", node, ft.asked)
 	}
 }
 

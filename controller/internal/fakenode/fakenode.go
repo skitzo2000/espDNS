@@ -1,5 +1,5 @@
 // Package fakenode is a fake espDNS node for tests and browser checks: its HTTP side
-// (/status, /health, /release, /ota) and its DNS answers, as firmware/main serves them.
+// (/status, /health, /release, /ota, /zone) and its DNS answers, as firmware/main serves them.
 // It checks every release as the firmware does (signed by the key in slot 0, for its node
 // ID and chip image, a seq above its last, the payload's hash) and takes firmware (staged,
 // rebooted into, on trial, or rolled back), configs, hosted zones, blocklists, overrides
@@ -75,6 +75,12 @@ type Node struct {
 	// them; none if nil. A zones release with one of them is refused, as the node does.
 	// Its /status says them ("forward_zones", each {"name", "forwarder"}), as the firmware.
 	Forward []nodecfg.ForwardZone
+	// Copies are the records it holds of its secondary zones (GET /zone, zone.go), by name,
+	// the SOA first; its /status says each one's serial and records, and "reads": ["zone"]
+	// (nil: firmware from before /zone). ZonePage, if set, runs after each /zone page it
+	// serves (locked): a test changes a copy mid-read there (SetCopy).
+	Copies   map[string][]dns.RR
+	ZonePage func(n *Node)
 	// Blocked are the names its blocklist blocks while it is on (the one it starts with, and
 	// any pushed while Lists is nil).
 	Blocked []string
@@ -130,6 +136,7 @@ type Node struct {
 	// blocking paused until (espdns pause); a reboot ends it, as on the node
 	pauseUntil time.Time
 	hosted     release.HostedStatus
+	copyGen    map[string]uint64     // each copy's gen: SetCopy bumps it
 	hostedPrev *release.HostedStatus // the bundle in its other slot: what a revert goes back to
 	cfg        *nodecfg.Config
 	retired    []byte // the release key a KEYS release replaced, kept for its stored releases
@@ -307,7 +314,11 @@ func (n *Node) status() map[string]any {
 	}
 	zs := []map[string]any{}
 	for _, z := range n.secondary() {
-		zs = append(zs, map[string]any{"name": z})
+		zm := map[string]any{"name": z}
+		if rrs, ok := n.Copies[z]; ok {
+			zm["serial"], zm["records"], zm["expired"] = n.copySerial(z), len(rrs), false
+		}
+		zs = append(zs, zm)
 	}
 	var hz []map[string]any
 	for _, z := range n.hosted.Zones {
@@ -329,6 +340,9 @@ func (n *Node) status() map[string]any {
 		"services": n.services(),
 		"blocking": map[string]any{"list": n.list, "overrides": n.ovr, "paused_s": n.pausedS()},
 		"queries":  queries,
+	}
+	if n.Copies != nil {
+		st["reads"] = []string{"zone"}
 	}
 	if n.NoConfigs {
 		delete(st, "config")
@@ -468,6 +482,12 @@ func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(reply)
+	case "/zone":
+		if n.Copies == nil {
+			http.NotFound(w, r)
+			return
+		}
+		n.serveZone(w, r)
 	default:
 		if !n.serveObserve(w, r) {
 			http.NotFound(w, r)

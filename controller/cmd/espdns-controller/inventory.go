@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,11 +26,12 @@ import (
 //
 //	GET /api/zone-inventory           every zone (hosted, secondary, forward), its source and the fleet's state; the zone primary
 //	GET /api/zone-lookup?name=<zone>  where a typed zone lives: the fleet's already, a configured primary's (asked over DNS), or none
-//	GET /api/zone-records?name=<zone> a copied (secondary) zone's records, read-only: one AXFR from the primary the configs name
+//	GET /api/zone-records?name=<zone> a copied (secondary) zone's records, read-only: a node's copy (GET /zone), else one AXFR from the primary the configs name
 //
 // Each needs a login. The lookup sends each configured primary one SOA query, without
-// recursion; the records one zone transfer from the zone's primary, only when asked;
-// nothing else leaves the controller.
+// recursion; the records are read from a node that holds the zone, or by one zone transfer
+// from the zone's primary when none can hand it over, only when asked; nothing else leaves
+// the controller.
 
 // lookupTimeout bounds one lookup, every primary asked.
 const lookupTimeout = 6 * time.Second
@@ -38,6 +41,7 @@ type inventoryServer struct {
 	nodes   func() []nodes.Node
 	dns     inventory.Resolver // nil: UDP to port 53 of each primary
 	xfr     zoneTransfer       // nil: AXFR over TCP to port 53 of the zone's primary
+	client  *fleet.Client      // nil: the defaults; reads a node's copy of a zone
 }
 
 func (v inventoryServer) routes(mux *routes) {
@@ -158,10 +162,13 @@ type zoneTransfer interface {
 	Transfer(ctx context.Context, primary, zone string) ([]dns.RR, error)
 }
 
-// Limits of one copied zone's read: the records kept (a node holds far fewer), the time.
+// Limits of one copied zone's read: the records kept (a node holds far fewer), the time
+// (from each node tried, from the nodes together, then from the primary).
 const (
-	maxTransfer     = 20000
-	transferTimeout = 20 * time.Second
+	maxTransfer      = 20000
+	transferTimeout  = 20 * time.Second
+	nodeReadTimeout  = 10 * time.Second
+	nodeReadsTimeout = 15 * time.Second
 	// maxShownRecords are the records a reply lists; "more" counts the rest.
 	maxShownRecords = 5000
 )
@@ -339,45 +346,99 @@ type zoneRecord struct {
 	Data  string `json:"data"`
 }
 
+// holder is a node to read a copied zone from: its name, address and copy's serial.
+type holder struct {
+	name, host string
+	serial     uint32
+}
+
+// holders are the nodes to read a copied zone from, best first: in the fleet (settings.json's
+// nodes, or every node known when it lists none), online, in service and answering, serving
+// GET /zone, with a copy that hasn't expired; the highest serial first.
+func holders(ns []nodes.Node, listed []string, zone string) []holder {
+	var out []holder
+	for _, n := range ns {
+		st, ok := status(n)
+		if !ok || !n.Online || n.OutOfService || len(listed) > 0 && !slices.Contains(listed, n.Addr) ||
+			st.Health != nil && !st.Health.Answering || !slices.Contains(st.Reads, "zone") {
+			continue
+		}
+		name := n.Addr
+		if st.Config != nil && st.Config.Name != "" {
+			name = st.Config.Name
+		}
+		for _, z := range st.Zones {
+			if strings.EqualFold(strings.TrimSuffix(z.Name, "."), zone) && !z.Expired && z.Serial != 0 {
+				out = append(out, holder{name, n.Addr, z.Serial})
+			}
+		}
+	}
+	slices.SortStableFunc(out, func(a, b holder) int { return cmp.Compare(b.serial, a.serial) })
+	return out
+}
+
+// readFromNode reads the zone from the first holder that hands it over: the records, and
+// the node's name ("" if none did).
+func (v inventoryServer) readFromNode(ctx context.Context, hs []holder, zone string) (fleet.Zone, string) {
+	c := v.client
+	if c == nil {
+		c = &fleet.Client{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, nodeReadsTimeout)
+	defer cancel()
+	for _, h := range hs {
+		rctx, cancel := context.WithTimeout(ctx, nodeReadTimeout)
+		z, err := c.ReadZone(rctx, h.host, zone)
+		cancel()
+		if err == nil {
+			return z, h.name
+		}
+	}
+	return fleet.Zone{}, ""
+}
+
 func (v inventoryServer) records(w http.ResponseWriter, r *http.Request) {
 	name, err := inventory.CheckName(r.URL.Query().Get("name"))
 	if err != nil {
 		httpErr(w, http.StatusBadRequest, err)
 		return
 	}
-	inv, _, err := v.build()
+	inv, s, err := v.build()
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	z, ok := inv.Of(name)
-	switch {
-	case !ok || z.Kind != inventory.KindSecondary:
+	if !ok || z.Kind != inventory.KindSecondary {
 		httpErr(w, http.StatusNotFound, fmt.Errorf("%s is not a zone the nodes copy from a primary", name))
 		return
-	case z.Primary == "":
-		httpErr(w, http.StatusConflict, fmt.Errorf("no config names %s's primary: its records can't be read from here", name))
-		return
 	}
-	xfr := v.xfr
-	if xfr == nil {
-		xfr = axfr{}
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), transferTimeout)
-	defer cancel()
-	rrs, err := xfr.Transfer(ctx, z.Primary, name)
-	if err != nil {
-		// "error" in words, as every route's; the rest for the page to phrase it.
-		f := xfrFailure(err)
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{"error": f.say(z.Primary), "kind": f.Kind,
-			"primary": z.Primary, "source": f.Source, "detail": f.Detail})
-		return
+	// A node's copy first, the data the fleet answers from; the primary if none hands it over.
+	nz, node := v.readFromNode(r.Context(), holders(v.nodes(), s.Nodes, name), name)
+	rrs, serial := nz.RRs, nz.Serial
+	if node == "" {
+		if z.Primary == "" {
+			httpErr(w, http.StatusConflict, fmt.Errorf("no node handed over %s and no config names its primary: its records can't be read from here", name))
+			return
+		}
+		xfr := v.xfr
+		if xfr == nil {
+			xfr = axfr{}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), transferTimeout)
+		defer cancel()
+		if rrs, err = xfr.Transfer(ctx, z.Primary, name); err != nil {
+			// "error" in words, as every route's; the rest for the page to phrase it.
+			f := xfrFailure(err)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{"error": f.say(z.Primary), "kind": f.Kind,
+				"primary": z.Primary, "source": f.Source, "detail": f.Detail})
+			return
+		}
 	}
 	out := []zoneRecord{}
-	var serial uint32
 	for _, rr := range rrs {
 		h := rr.Header()
 		if soa, ok := rr.(*dns.SOA); ok && serial == 0 {
@@ -389,5 +450,6 @@ func (v inventoryServer) records(w http.ResponseWriter, r *http.Request) {
 		out = append(out, zoneRecord{Owner: strings.ToLower(h.Name), Type: dns.TypeToString[h.Rrtype], TTL: h.Ttl,
 			Data: strings.TrimPrefix(rr.String(), h.String())})
 	}
-	writeJSON(w, map[string]any{"name": name, "primary": z.Primary, "serial": serial, "records": out, "more": len(rrs) - len(out)})
+	// node: the node the records were read from; "" when they came from the primary.
+	writeJSON(w, map[string]any{"name": name, "primary": z.Primary, "node": node, "serial": serial, "records": out, "more": len(rrs) - len(out)})
 }

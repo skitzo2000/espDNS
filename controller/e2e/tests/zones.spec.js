@@ -105,7 +105,7 @@ async function fake(page) {
     if (m === "GET" && p === "zone-records") {
       if (q("name") !== "lab.example" || state.refuse) return json(route, { error: `your primary DNS server (${PRIMARY}) refused to send this zone to the controller: allow zone transfers from this computer's address on it`,
         kind: "refused", primary: PRIMARY, source: SOURCE, detail: "rcode 5 (REFUSED)" }, 502);
-      return json(route, { name: "lab.example", primary: PRIMARY, serial: 7, more: 0, records: [
+      return json(route, { name: "lab.example", primary: PRIMARY, node: "dns-a", serial: 7, more: 0, records: [
         { owner: "printer.lab.example.", type: "A", ttl: 300, data: "192.0.2.45" },
         { owner: "lab.example.", type: "SOA", ttl: 3600, data: "ns1.lab.example. hostmaster.lab.example. 7 3600 600 604800 300" },
         { owner: "nas.lab.example.", type: "A", ttl: 300, data: "192.0.2.10" },
@@ -412,7 +412,9 @@ test("A copied zone: its records read-only; one the nodes can't copy, with the f
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.locator("#edit-at").getByRole("button", { name: `Copy ${PRIMARY}` }).click();
   await expect(page.locator(".toast")).toContainText(`Copied ${PRIMARY}`);
-  // The records, by name (the zone itself first) then type; no edit controls.
+  // The records, read from a node's copy, by name (the zone itself first) then type; no edit
+  // controls.
+  await expect(page.locator("#records-from")).toHaveText("Read from dns-a's copy.");
   await expect(page.locator(".recs tbody tr")).toHaveCount(5);
   await expect(page.locator(".recs tbody tr td:first-child")).toHaveText(["@", "@", "@", "nas", "printer"]);
   await expect(page.locator(".recs tbody tr td:nth-child(2)")).toHaveText(["NS", "SOA", "TXT", "A", "A"]);

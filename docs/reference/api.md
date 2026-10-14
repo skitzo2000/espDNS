@@ -171,6 +171,7 @@ Hosted zones are RFC 1035 master files in `<data>/zones/<zone>.zone`.
 | POST | `/api/zones/{name}` | login | `{"text", "hash"}` | Saves the file. `409` if it changed. |
 | POST | `/api/zones/{name}/delete` | login | `{"hash"}` | Deletes it. The file is kept in the history. |
 | GET | `/api/zone-inventory` | login | — | Every zone the fleet answers for (hosted, secondary, forward), its source and the fleet's state, and the zone primary (`address`, `allows`, `zones`, `set`; no node named). |
+| GET | `/api/zone-records` | login | `?name=<zone>` | A copied zone's records (`name`, `serial`, `records`, `more`): from the node with the newest copy (`node`, its name), else by zone transfer from its `primary` (`node` empty). `502` with `kind` (`refused`, `unknown`, `timeout`, `unreachable`, `failed`) when that transfer fails. |
 | GET | `/api/zone-lookup` | login | `?name=<zone>` | Where a zone lives: the fleet's already, a configured primary's, or none. Sends each configured primary one SOA query. |
 
 ### Blocking

@@ -287,7 +287,7 @@ What limits the damage:
   toolchain. Its image is built from an allowlist of the source, never the data directory.
 - No credential for your zone primary is stored. The controller only sends it DNS
   queries: an SOA lookup when you add a zone, and one zone transfer (AXFR) when you open a
-  copied zone's records ([zones.md](zones.md)). An older controller's API token in
+  copied zone's records and no node can hand over its copy ([zones.md](zones.md)). An older controller's API token in
   `keys/primary.token` is deleted at start, with a log line; revoke it on the primary too.
   Backups never include it, and a restore skips one an older backup carries.
 - Secrets stay out of logs. Wi-Fi passwords and the passphrase are never written to a

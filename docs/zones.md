@@ -190,6 +190,15 @@ The zones to copy end up in each node's config, under `"secondary"`:
 **Zone primary** and **+ Add zone** on the Zones page edit these for you, and a node's own
 page can edit its config.
 
+### See a copied zone's records
+
+Open the zone on **Zones** to see its records, read-only; edit them on your primary. The
+controller reads them from a node that holds the zone: the one with the newest copy, then
+the next if that one can't hand it over. The page says which node they came from. Only when
+no node can (none has copied it yet, or none answers) does the controller ask your primary
+for them by zone transfer, and then the primary must allow zone transfers from the
+controller's computer too.
+
 ### When the nodes can't copy a zone
 
 A zone the nodes can't copy shows **Can't copy it** on Zones. Its page says what to check:

@@ -57,6 +57,10 @@ Update the controller as usual, then install each node from it with **Install ov
 
 ### Changed
 
+- The Zones page reads a copied zone's records from a node that holds it (the newest copy,
+  through the node's `GET /zone`), and says which node. Your primary is asked by zone
+  transfer only when no node can hand them over, so it no longer has to allow transfers to
+  the controller's computer.
 - `release_url` (and `-release-url`, `espdns release fetch -url`) takes `https` only: an
   `http` URL is refused. Releases were checked with the project's key anyway; https keeps
   what is fetched, or held back, from the network between.
