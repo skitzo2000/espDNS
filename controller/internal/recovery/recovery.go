@@ -89,6 +89,9 @@ type Node struct {
 	Seq     map[string]uint64 `json:"seq,omitempty"`
 	// Config is the config it runs: its name, seq and address (not its contents).
 	Config *release.ConfigStatus `json:"config,omitempty"`
+	// NodeKey is its node key as it reports it, pinned with its ID: a Wi-Fi password is
+	// sealed to it (release.SealConfig).
+	NodeKey string `json:"node_key,omitempty"`
 	// ConfigFiles are the files here that are its config (by name or address), if any.
 	ConfigFiles []string `json:"config_files,omitempty"`
 	Hosted      []Zone   `json:"hosted,omitempty"`
@@ -252,7 +255,7 @@ func Run(ctx context.Context, c *fleet.Client, o Options) (Report, error) {
 }
 
 // pin pins each node listed in settings.json that is in service and trusts the key to its
-// address (internal/pins), as adoption would have: releases are signed only for a pinned
+// address (internal/pins), with its node key, as adoption would have: releases are signed only for a pinned
 // node. An address already pinned to another node is left so, with a note (espdns pin
 // changes it); a node ID at two addresses is pinned to neither.
 func pin(dataDir string, nodes []Node, byID map[string][]string) error {
@@ -279,6 +282,11 @@ func pin(dataDir string, nodes []Node, byID map[string][]string) error {
 			return err
 		}
 		n.Pinned = true
+		if _, err := release.ParseNodeKey(n.NodeKey); n.NodeKey != "" && err != nil {
+			n.Notes = append(n.Notes, err.Error()+": not pinned, so no Wi-Fi password is sent to it")
+		} else if err := l.SetNodeKey(n.ID, n.NodeKey); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -295,6 +303,7 @@ func describe(f fleet.Node, fp string, cfgs []configs.File, zfiles []zonefiles.F
 	s := *f.Status
 	n.raw = s
 	n.ID, n.Board, n.Image, n.Version, n.Seq, n.Config = s.NodeID, s.Board, s.Image, s.Version, s.Seq, s.Config
+	n.NodeKey = s.NodeKey
 	n.Trusts = len(s.Keys) > 0 && strings.EqualFold(s.Keys[0], fp)
 	switch {
 	case !n.Trusts:

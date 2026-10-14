@@ -5832,12 +5832,13 @@ static void test_nodekey(void)
     CHECK(nodekey_open(s_nk_priv, other_id, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
     CHECK(nodekey_gen(priv2, pub2, test_rng, NULL));
     CHECK(nodekey_open(priv2, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
-    /* Altered anywhere (E, the password, the tag): refused. */
+    /* Altered anywhere (E, the password, the tag): refused; an E off the curve before any
+     * use of the key (an invalid-curve point). */
     size_t at[] = { 1, NODEKEY_PUB_LEN + 1, n - 1 };
     for (size_t i = 0; i < 3; i++) {
         blob[at[i]] ^= 1;
         const char *why = nodekey_open(s_nk_priv, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL);
-        CHECK(why && !pw[0]);
+        CHECK(why && !pw[0] && (i > 0 || strstr(why, "bad key point")));
         blob[at[i]] ^= 1;
     }
     CHECK(nodekey_open(s_nk_priv, V_NODE, blob, NODEKEY_PUB_LEN + 7 + NODEKEY_TAG_LEN, pw, sizeof(pw), test_rng, NULL));

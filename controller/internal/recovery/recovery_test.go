@@ -2,10 +2,12 @@ package recovery
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -105,7 +107,12 @@ func TestRecover(t *testing.T) {
 		return map[string]any{"state": "on", "seq": 9, "sha256": hash,
 			"zones": []map[string]any{{"name": "home.example", "serial": serial, "records": 3}}}
 	}
-	a := node(t, status("02:00:00:00:00:51", fp, "dns2", "node", hz(2026100301, bundleHash(t, zoneText))), &changes)
+	// dns2 has a node key (a Wi-Fi node), dns3 none (a wired one).
+	nk, _ := ecdh.P256().GenerateKey(rand.Reader)
+	nkey := base64.StdEncoding.EncodeToString(nk.PublicKey().Bytes())
+	sa := status("02:00:00:00:00:51", fp, "dns2", "node", hz(2026100301, bundleHash(t, zoneText)))
+	sa["node_key"] = nkey
+	a := node(t, sa, &changes)
 	b := node(t, status("02:00:00:00:00:52", fp, "dns3", "node", hz(2026100302, strings.Repeat("ab", 32))), &changes)
 	foreign := node(t, status("02:00:00:00:00:53", ofp, "x", "node", nil), &changes)
 	fresh := node(t, status("02:00:00:00:00:54", fp, "", "defaults", nil), &changes)
@@ -165,6 +172,13 @@ func TestRecover(t *testing.T) {
 		if got != id || (id == "") != errors.Is(err, pins.ErrNotPinned) || by[h].Pinned != (id != "") {
 			t.Errorf("%s pinned to %q (%v), reported %v", h, got, err, by[h].Pinned)
 		}
+	}
+	// With the node key each reports, as adopting them did.
+	if k, err := l.NodeKey("02:00:00:00:00:51"); err != nil || k != nkey {
+		t.Errorf("dns2's node key %q %v", k, err)
+	}
+	if k, err := l.NodeKey("02:00:00:00:00:52"); err != nil || k != "" {
+		t.Errorf("dns3's node key %q %v", k, err)
 	}
 	// One pinned to another node here already (a board replaced since) is left so, and said.
 	if _, err := l.Pin("02:00:00:00:00:99", b); err != nil {

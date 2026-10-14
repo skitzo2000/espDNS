@@ -357,11 +357,11 @@ What to do:
 A Wi-Fi node's first Wi-Fi setup is over USB (Improv). After that, a config can change its
 Wi-Fi network, and its password then goes over the network, but never in plain text:
 
-- At its first boot, each node makes a P-256 key pair, its node key. The private key stays
-  in the node's NVS and is never sent, logged or shown; `/status` reports the public key as
-  `node_key`.
+- At its first boot, each Wi-Fi node makes a P-256 key pair, its node key. The private key
+  stays in the node's NVS and is never sent, logged or shown; `/status` reports the public
+  key as `node_key`. A wired-only node (P4) has none: its firmware leaves the code out.
 - When the controller adopts a node, it pins the `node_key` the node reports with its ID
-  (trust on first use, as the ID). `espdns pin` records it too.
+  (trust on first use, as the ID). `espdns pin` and `espdns recover` record it too.
 - The controller sends a config's password as `wifi.sealed`, sealed to the pinned key and
   the node's ID: a one-time key, ECDH, HKDF-SHA256 and AES-256-GCM. Only that node can open
   it. The node keeps it sealed in the signed config and opens it when it reads the config.
@@ -371,8 +371,9 @@ Wi-Fi network, and its password then goes over the network, but never in plain t
   reports a different key than the pinned one. A node installed again over USB makes a new
   key: adopt it again, or pin it with `espdns pin`.
 
-The password is still in plain text in the config files on the controller, and on the
-node's flash once opened: there is no flash encryption.
+The password is still in plain text in the config files on the controller. On the node,
+the private key, and a password set over USB, are in NVS without flash encryption: anyone
+holding the board can read them.
 
 ## What is not protected yet
 

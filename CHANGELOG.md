@@ -141,8 +141,8 @@ Update the controller as usual, then install each node from it with **Install ov
 
 ### Security
 
-- The Wi-Fi password no longer crosses the network in plain text. Each node makes a key
-  pair at its first boot (the private key never leaves it) and reports the public key in
+- The Wi-Fi password no longer crosses the network in plain text. Each Wi-Fi node makes a
+  key pair at its first boot (the private key never leaves it) and reports the public key in
   `/status` as `node_key`; the controller pins it when it adopts the node, and sends a
   config's Wi-Fi password only sealed to that key (`wifi.sealed`: ECDH P-256, HKDF-SHA256,
   AES-256-GCM). A node refuses a config release with a plain `wifi.password`. The controller

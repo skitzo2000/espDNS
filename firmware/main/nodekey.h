@@ -18,7 +18,7 @@
  * 44 bytes out, the key (32) then the nonce (12). No associated data. A fresh E per seal
  * gives every seal its own key and nonce. The blob is kept as it came, in the signed config,
  * and opened each time the config is read. The controller's release.Seal makes the same
- * bytes (tests/nodekey_vector.h checks both).
+ * bytes (tests/nodekey_vectors.json checks both).
  */
 #pragma once
 

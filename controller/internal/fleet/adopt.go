@@ -456,7 +456,7 @@ func (c *Client) pinAdopted(id, host, key string) error {
 	}
 	c.logf("   node %s pinned to %s: releases are signed for it there", id, host)
 	if key == "" {
-		c.logf("   it has no node key (firmware from before it): no Wi-Fi password is sent to it")
+		c.logf("   it has no node key (a wired-only node, or firmware from before it): no Wi-Fi password is sent to it")
 	}
 	return nil
 }

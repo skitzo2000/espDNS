@@ -222,7 +222,6 @@ func (n *Node) Events() []string {
 	return slices.Clone(n.events)
 }
 
-// ID is its node ID, as /status says it.
 // NodeKey is its /status "node_key": its node key's public point, base64; "" with NoNodeKey.
 func (n *Node) NodeKey() string {
 	if n.NoNodeKey {
@@ -256,6 +255,7 @@ func (n *Node) openWifi(c *nodecfg.Config) error {
 	return nil
 }
 
+// ID is its node ID, as /status says it.
 func (n *Node) ID() string {
 	m := n.MAC
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
