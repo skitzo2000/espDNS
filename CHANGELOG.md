@@ -132,6 +132,14 @@ Update the controller as usual, then install each node from it with **Install ov
 - A refused NOTIFY counts as refused too: in `/status` `queries.refused` and `/metrics`
   `espdns_queries_total{result="refused"}`.
 
+### Security
+
+- Forged upstream replies are harder to slip in: a node asks its forwarders with the
+  name's letters in random case and takes only a reply that names it in that very case
+  (a forwarder that doesn't keep case is asked once more without it). The SOA check of a
+  copied zone now asks from a random port and takes only a reply to the question it asked.
+  Clients still see the name in their own case.
+
 ## [0.0.2] - 2026-10-11
 
 ### Added

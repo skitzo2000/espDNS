@@ -19,6 +19,7 @@
 #include "axfr.h"
 #include "cJSON.h"
 #include "dns_wire.h"
+#include "forward.h"
 #include "registry.h"
 #include "zone.h"
 #include "zread.h"
@@ -409,7 +410,8 @@ typedef enum {
     P_REFUSE,   /* REFUSED */
     P_ENDLESS,  /* SOA, then class CH records (they take no memory) forever, never the closing SOA */
     P_STRAYS,   /* UDP: a stray datagram from another port every 20 ms, never the answer */
-    P_SOA,      /* UDP: a stray first, then the answer (an authoritative SOA, serial 7) */
+    P_SOA,      /* UDP: a stray first, then answers with the query's ID to another name and to
+                 * another type (serial 9), then the answer (an authoritative SOA, serial 7) */
 } pmode_t;
 
 typedef struct {
@@ -417,6 +419,7 @@ typedef struct {
     uint32_t addr;
     int records;
     int tcp, udp, stray;
+    uint16_t asker_port; /* P_SOA: the last query's source port */
     volatile bool stop;
     pthread_t th;
 } primary_t;
@@ -532,18 +535,26 @@ static void *primary_run(void *arg)
             ssize_t n = recvfrom(pr->udp, q, sizeof(q), 0, (struct sockaddr *)&from, &fl);
             if (n < DNS_HDR_LEN)
                 continue;
+            pr->asker_port = ntohs(from.sin_port);
             uint8_t junk[DNS_HDR_LEN] = { 0 };
             sendto(pr->stray, junk, sizeof(junk), 0, (struct sockaddr *)&from, fl);
-            /* The question only (the query's OPT dropped), then the SOA. */
+            /* The question only (the query's OPT dropped), then the SOA: first to another
+             * name, then to another type, then the answer. */
             size_t qend = DNS_HDR_LEN;
             dns_name_skip(q, (size_t)n, &qend);
             qend += 4;
-            size_t p = msg_start(m, q, qend, 0) - 2;
-            memmove(m, m + 2, p);
-            int al = N(APEX, apex), sl = soa_rdata(rd, 7);
-            p = put_rr(m, p, apex, al, DNS_T_SOA, DNS_C_IN, rd, sl);
-            wr16(m + 6, 1);
-            sendto(pr->udp, m, p, 0, (struct sockaddr *)&from, fl);
+            for (int i = 0; i < 3; i++) {
+                size_t p = msg_start(m, q, qend, 0) - 2;
+                memmove(m, m + 2, p);
+                if (i == 0)
+                    m[DNS_HDR_LEN + 1] ^= 1; /* the first label's first letter */
+                if (i == 1)
+                    wr16(m + qend - 4, DNS_T_A);
+                int al = N(APEX, apex), sl = soa_rdata(rd, i < 2 ? 9 : 7);
+                p = put_rr(m, p, apex, al, DNS_T_SOA, DNS_C_IN, rd, sl);
+                wr16(m + 6, 1);
+                sendto(pr->udp, m, p, 0, (struct sockaddr *)&from, fl);
+            }
         }
         return NULL;
     }
@@ -696,9 +707,15 @@ static void test_soa_deadline(void)
     CHECK(ms >= 250 && ms < 1500);
     primary_stop(&pr);
 
-    /* The answer, after a stray. */
+    /* The answer, after a stray and answers to other questions with its ID; asked from a
+     * random port (fwd_bind_random's draw, after the ID's). */
     primary_start(&pr, P_SOA, 38, 0);
+    srandom(4242);
+    dns2_random();
+    uint16_t want = fwd_random_port();
+    srandom(4242);
     CHECK(axfr_soa_serial(loopback(38), PRIMARY_PORT, apex, al, 2000, &serial) && serial == 7);
+    CHECK(pr.asker_port == want);
     primary_stop(&pr);
 }
 

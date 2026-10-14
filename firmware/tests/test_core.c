@@ -1,5 +1,6 @@
 /* Host tests for the portable DNS core: gcc + ASan/UBSan, no hardware. */
 #include <assert.h>
+#include <ctype.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -1078,6 +1079,7 @@ typedef enum {
     FAKE_SERVFAIL,  /* answers SERVFAIL */
     FAKE_WRONG_ID,  /* answers from the right address and port, with another ID */
     FAKE_RECORD,    /* answers with an A record (192.0.2.1, TTL 300): an answer to cache */
+    FAKE_LOWER,     /* answers with the question in lowercase: a server that doesn't keep case */
 } fake_fwd_mode_t;
 
 typedef struct {
@@ -1086,6 +1088,7 @@ typedef struct {
     int udp, tcp, stray;
     bool stop;
     int queries, tcp_queries;
+    int cased; /* queries whose name has a capital (0x20) */
     size_t tcp_len; /* FAKE_TCP, FAKE_UDP_BIG: the TCP answer's length, padded (at least the query's) */
     bool tcp_wrong_name; /* FAKE_TCP: the TCP answer's question names another name */
     pthread_t th;
@@ -1152,6 +1155,15 @@ static void *fake_fwd_run(void *p)
         ssize_t n = recvfrom(f->udp, m, sizeof(m), 0, (struct sockaddr *)&from, &fl);
         if (n >= DNS_HDR_LEN) {
             __atomic_add_fetch(&f->queries, 1, __ATOMIC_RELAXED);
+            /* The name's letters (a length byte, at most 63, is never one). */
+            bool cap = false;
+            for (size_t i = DNS_HDR_LEN; i < (size_t)n && m[i]; i++) {
+                cap |= isupper(m[i]) != 0;
+                if (f->mode == FAKE_LOWER)
+                    m[i] = (uint8_t)tolower(m[i]);
+            }
+            if (cap)
+                __atomic_add_fetch(&f->cased, 1, __ATOMIC_RELAXED);
             asker = from;
             asked = true;
             last = mono_ms();
@@ -1971,6 +1983,56 @@ static void test_fwd_random_port(void)
     CHECK(seq <= 1);
     for (int i = 0; i < 32; i++)
         fwd_up_close(&u[i]);
+}
+
+/* 0x20: each upstream query's name in random letter case, and only an answer naming it in
+ * that very case is taken. One off only in case (a server that doesn't keep case, or a
+ * forger) is no answer: the name is asked once more as is, and that answer taken in any case. */
+static void test_fwd_0x20(void)
+{
+    fake_fwd_t ok, low;
+    fake_fwd_start(&ok, FAKE_ANSWER, 41);
+    fake_fwd_start(&low, FAKE_LOWER, 42);
+    srandom(4242);
+    uint32_t ms;
+    for (int i = 0; i < 8; i++)
+        CHECK(ask_up(&ok.addr, 1, 300, &ms) > 0);
+    CHECK(cnt(&ok.queries) == 8 && cnt(&ok.cased) == 8);
+    /* The answer taken names its question as asked, not in the case sent upstream: names
+     * compressed against it (a CNAME's target) keep their own case. */
+    uint8_t pn[256], pa[1232];
+    int pl = N("popular.example.org", pn);
+    CHECK(fwd_query(&ok.addr, 1, pn, pl, DNS_T_A, DNS_C_IN, false, pa, sizeof(pa), 300) > 0 &&
+          memcmp(pa + DNS_HDR_LEN, pn, (size_t)pl) == 0);
+    CHECK(ask_up(&low.addr, 1, 300, &ms) > 0 && cnt(&low.queries) == 2 && cnt(&low.cased) == 1);
+    /* Asked in capitals by its client (a resolver that uses 0x20 itself): the second answer,
+     * in lowercase, is taken all the same. */
+    uint8_t cn[256], ca[1232];
+    int cl = N("POPULAR.Example.ORG", cn);
+    CHECK(fwd_query(&low.addr, 1, cn, cl, DNS_T_A, DNS_C_IN, false, ca, sizeof(ca), 300) > 0 &&
+          cnt(&low.queries) == 4);
+    fake_fwd_stop(&ok);
+    fake_fwd_stop(&low);
+
+    /* The client's answer names its question in its own case, whatever case upstream's. */
+    uint8_t m[512], qb[512], out[512], name[DNS_MAX_NAME];
+    size_t len = make_query(m, "wWw.ExAMple.oRg", DNS_T_A, false);
+    static const uint8_t rr[] = { 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 1, 44, 0, 4, 192, 0, 2, 1 };
+    memcpy(m + len, rr, sizeof(rr));
+    len += sizeof(rr);
+    wr16(m + 2, DNS_F_QR | DNS_F_RD | DNS_F_RA);
+    wr16(m + 6, 1);
+    dns_query_t q;
+    size_t ql = make_query(qb, "WWW.example.ORG", DNS_T_A, false);
+    CHECK(dns_query_parse(qb, ql, &q) == 0);
+    dns_builder_t b;
+    dnsb_init(&b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    CHECK(dnsb_relay(&b, m, len, 0, false, false) == 0);
+    size_t ol = dnsb_finish(&b), pos = DNS_HDR_LEN;
+    CHECK(dns_name_read(out, ol, &pos, name) == q.qname_len && !memcmp(name, q.qname, (size_t)q.qname_len));
+    pos += 4;
+    CHECK(rd16(out + 6) == 1 && dns_name_read(out, ol, &pos, name) == q.qname_len &&
+          !memcmp(name, q.qname, (size_t)q.qname_len));
 }
 
 /* select() failing at once, again and again: the loop backs off instead of spinning, and goes
@@ -6158,6 +6220,7 @@ int main(void)
     test_fwdq_alive();
     test_fwdq_load();
     test_fwd_random_port();
+    test_fwd_0x20();
     test_fwdq_select_backoff();
     test_health_upstream();
     test_load();
