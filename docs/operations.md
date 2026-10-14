@@ -99,7 +99,7 @@ imported):
 
 | State | Meaning |
 | --- | --- |
-| `available` | The node runs an older version: "Update available: 0.0.1 → 0.0.2". |
+| `available` | The node runs an older version: "Update available: 0.0.3 → 0.0.4". |
 | `current` | The node runs the newest version. |
 | `newer` | The node runs a newer version than the newest release. |
 | `unknown` | The controller hasn't read the node yet, its firmware is from before version numbers, no release is known yet, or the node's firmware and the controller don't fit together (it says which protocol each speaks; update the controller first). |
@@ -126,8 +126,8 @@ release still vouches for the app it sends.
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data
   ```
 
-  It downloads the newest firmware release (`-version 0.0.2` for another), checks the
-  project's signature and every file, and imports it as "project release v0.0.2". It gets
+  It downloads the newest firmware release (`-version 0.0.3` for another), checks the
+  project's signature and every file, and imports it as "project release v0.0.3". It gets
   only the chip images needed: in Install over USB, that board's; otherwise what your nodes
   need (`-image esp32p4-rev1` names one).
 - Your own build: build, package, sign and import as in
@@ -164,7 +164,7 @@ Edits and firmware updates queue as *pending changes*. Nothing reaches a node un
 apply.
 
 1. Open the controller, `http://127.0.0.1:8480`. On **Nodes**, a node with an update has an
-   amber dot and an **Update 0.0.2 → 0.0.3** button in its row. **Update all** sits by
+   amber dot and an **Update 0.0.3 → 0.0.4** button in its row. **Update all** sits by
    **+ Add node** while two or more nodes have one.
 2. Click the button (or **Update all**), check the from and to versions, and confirm.
 3. Open the orange chip in the top bar ("2 changes to apply"). It lists each change, what it

@@ -121,10 +121,10 @@ what it writes. The repository needs:
 
 ## Checking a release
 
-Download all of a release's files into one directory, e.g. `espdns-0.0.2/`, and run:
+Download all of a release's files into one directory, e.g. `espdns-0.0.3/`, and run:
 
 ```sh
-docker run --rm -v "$PWD/espdns-0.0.2:/release:ro" --network none \
+docker run --rm -v "$PWD/espdns-0.0.3:/release:ro" --network none \
   --entrypoint /espdns espdns-controller:sign release verify -dir /release -pub /keys/project.pub
 ```
 
@@ -148,7 +148,7 @@ Before every firmware update (Nodes page or `espdns rollout`) the controller che
 chain again, including that the app it sends is the one in the tarball, and only then signs
 the update with your release key. If the chain doesn't check, nothing is sent.
 
-The pages label each firmware **project release v0.0.2**, **your build v0.0.2** (a release
+The pages label each firmware **project release v0.0.3**, **your build v0.0.3** (a release
 you signed yourself) or **your build** (no release behind it).
 
 - The controller's image is `ghcr.io/skitzo2000/espdns-controller:<version>`, and
@@ -176,7 +176,7 @@ you signed yourself) or **your build** (no release behind it).
   (`-image esp32s3-eth` names a chip image):
 
   ```sh
-  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.2
+  docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.3
   ```
 
   For another GitHub repository (a fork's), add `-url https://github.com/<owner>/espdns`,
@@ -184,7 +184,7 @@ you signed yourself) or **your build** (no release behind it).
   imported like this, after the same checks as `release verify`:
 
   ```sh
-  docker compose run --rm -T -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns \
+  docker compose run --rm -T -v "$PWD/../espdns-0.0.3:/release:ro" --entrypoint /espdns \
     espdns-controller release import -dir /release -data /data
   ```
 
@@ -199,7 +199,7 @@ you signed yourself) or **your build** (no release behind it).
 - For a release of your own, build the chip images from the source, package them with
   `release build`, sign `SHA256SUMS` with your own release key (`release sign -pub` your
   `release.pub`, the key from the controller's data directory on standard input), then run
-  `release import` with no `-pub`. It's labelled "your build v0.0.2" and checked before
+  `release import` with no `-pub`. It's labelled "your build v0.0.3" and checked before
   every update like a project release. The commands are in
   [Build your own firmware](developer.md#build-your-own-firmware); the build itself is
   [Building a release by hand](#building-a-release-by-hand).
