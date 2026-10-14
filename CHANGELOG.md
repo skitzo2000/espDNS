@@ -131,6 +131,9 @@ Update the controller as usual, then install each node from it with **Install ov
 - `/metrics` counts a forwarder's SERVFAIL, passed on, as `servfail`, not `forwarded`.
 - A refused NOTIFY counts as refused too: in `/status` `queries.refused` and `/metrics`
   `espdns_queries_total{result="refused"}`.
+- One slow name no longer takes every place for queries waiting on an upstream answer: the
+  repeats of one question wait in at most a quarter of them (8 of 32), and past that are
+  answered SERVFAIL at once, so repeats of other names still wait for theirs.
 
 ## [0.0.2] - 2026-10-11
 
