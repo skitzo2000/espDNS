@@ -1134,10 +1134,9 @@ static void fake_fwd_tcp(fake_fwd_t *f)
     if (c < 0)
         return;
     fcntl(c, F_SETFL, fcntl(c, F_GETFL, 0) & ~O_NONBLOCK);
-    struct timeval tv = { .tv_sec = 1 };
-    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    int64_t end = fwd_now_us() + 1000000;
     uint8_t *m = malloc(2 + 65535), lp[2];
-    if (m && tcp_read_full(c, lp, 2) && rd16(lp) >= DNS_HDR_LEN && tcp_read_full(c, m + 2, rd16(lp))) {
+    if (m && tcp_io_by(c, lp, 2, false, end) && rd16(lp) >= DNS_HDR_LEN && tcp_io_by(c, m + 2, rd16(lp), false, end)) {
         size_t n = rd16(lp), want = __atomic_load_n(&f->tcp_len, __ATOMIC_RELAXED), len = want > n ? want : n;
         memset(m + 2 + n, 0, len - n);
         wr16(m + 4, (uint16_t)(DNS_F_QR | DNS_F_RD | DNS_F_RA));
@@ -1145,7 +1144,7 @@ static void fake_fwd_tcp(fake_fwd_t *f)
             m[2 + DNS_HDR_LEN + 1] ^= 1; /* the first label's first letter */
         wr16(m, (uint16_t)len);
         __atomic_add_fetch(&f->tcp_queries, 1, __ATOMIC_RELAXED);
-        tcp_write_full(c, m, len + 2);
+        tcp_io_by(c, m, len + 2, true, fwd_now_us() + 1000000);
     }
     free(m);
     close(c);

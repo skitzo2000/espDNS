@@ -175,10 +175,10 @@ Counters since boot: `total`, `udp`, `tcp`, `auth` (answered authoritatively, fr
 answered), `refused_source` (dropped unanswered, or the TCP connection closed: not from a
 private address nor one in the config's [`allow`](node-config.md#allow); not counted in
 `total`, `udp` or `tcp`), `tcp_closed` (TCP connections the node closed: no query within
-2 s of connecting, a query not all there within 3 s of its first byte, idle 10 s (or at
-once while other connections wait), or one client holding its share of the connections).
-`servfail` counts a forwarder's SERVFAIL passed on too, and `refused` a refused NOTIFY
-(counted in `notifies` as well).
+2 s of connecting or idle 10 s (either sooner while other connections wait), a query not all
+there within 3 s of its first byte, a reply not taken within 10 s, or one client holding its
+share of the connections). `servfail` counts a forwarder's SERVFAIL passed on too, and
+`refused` a refused NOTIFY (counted in `notifies` as well).
 
 ### net
 
@@ -301,7 +301,7 @@ Prometheus text format (`text/plain; version=0.0.4`). Open to anyone, like `/hea
 | `espdns_queries_received_total` | counter | `transport` (`udp`, `tcp`) | DNS messages received. |
 | `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. A forwarder's SERVFAIL, passed on, is `servfail`; a refused NOTIFY counts as `notify` and `refused`; `error` is FORMERR, NOTIMP or BADVERS (an EDNS version other than 0). |
 | `espdns_queries_refused_source_total` | counter | | Queries dropped unanswered (UDP) or connections closed (TCP): not from a private address nor one in the config's `allow`. |
-| `espdns_tcp_closed_total` | counter | | TCP connections the node closed: no query in time, a query too slow, idle, or one client holding its share of the connections (`/status` `queries.tcp_closed`). |
+| `espdns_tcp_closed_total` | counter | | TCP connections the node closed: no query in time, a query or reply too slow, idle, or one client holding its share of the connections (`/status` `queries.tcp_closed`). |
 | `espdns_responses_total` | counter | `rcode` (`NOERROR`, `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, and others once seen) | Responses by rcode. NOTIFY replies not included. |
 | `espdns_query_duration_seconds` | histogram | | Time to answer a query, forwarders included. |
 | `espdns_upstream_queries_total` | counter | `upstream` (an address, or `other`) | Attempts at each forwarder. |

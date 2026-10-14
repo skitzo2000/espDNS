@@ -163,8 +163,6 @@ int fwd_query_tcp(uint32_t server, const uint8_t *query, size_t qlen, uint8_t *o
 
 /* Connect with a timeout; returns a blocking socket with SO_RCVTIMEO/SO_SNDTIMEO set, or -1. */
 int tcp_connect_timeout(uint32_t server, uint16_t port, int timeout_ms);
-bool tcp_read_full(int s, uint8_t *buf, size_t n);
-bool tcp_write_full(int s, const uint8_t *buf, size_t n);
 /* The clock tcp_io_by's deadlines are on: µs since boot (CLOCK_MONOTONIC). */
 int64_t fwd_now_us(void);
 /* Sends (wr) or reads n bytes of s by end_us (fwd_now_us), each call waiting at most what

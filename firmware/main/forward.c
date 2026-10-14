@@ -90,30 +90,6 @@ int tcp_connect_timeout(uint32_t server, uint16_t port, int timeout_ms)
     return s;
 }
 
-bool tcp_read_full(int s, uint8_t *buf, size_t n)
-{
-    while (n) {
-        ssize_t r = recv(s, buf, n, 0);
-        if (r <= 0)
-            return false;
-        buf += r;
-        n -= (size_t)r;
-    }
-    return true;
-}
-
-bool tcp_write_full(int s, const uint8_t *buf, size_t n)
-{
-    while (n) {
-        ssize_t r = send(s, buf, n, 0);
-        if (r <= 0)
-            return false;
-        buf += r;
-        n -= (size_t)r;
-    }
-    return true;
-}
-
 int64_t fwd_now_us(void)
 {
     struct timespec ts;

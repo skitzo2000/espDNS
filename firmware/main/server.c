@@ -39,10 +39,10 @@ static const char *TAG = "server";
 
 /* Sizes and counts are the dns service's share of the memory plan (memplan.h). */
 #define UDP_MAX_QUERY 1500
-/* A TCP client has TCP_FIRST_MS for its first message to begin, and TCP_MSG_MS for each
- * message, from its first byte; between messages it may idle TCP_IDLE_MS, but not while
- * another connection waits for a worker (RFC 7766 §6.2.3), which an idle one looks for every
- * TCP_POLL_MS. One client holds at most TCP_PER_CLIENT of the workers and places in the queue. */
+/* A TCP client has TCP_FIRST_MS for its first message to begin, TCP_MSG_MS for each message,
+ * from its first byte, and TCP_IDLE_MS to take each reply; between messages it may idle
+ * TCP_IDLE_MS, but not while another connection waits for a worker (RFC 7766 §6.2.3), which
+ * an idle one looks for every TCP_POLL_MS. One client holds at most TCP_PER_CLIENT of the workers and places in the queue. */
 #define TCP_FIRST_MS   2000
 #define TCP_MSG_MS     3000
 #define TCP_IDLE_MS    10000
@@ -598,6 +598,9 @@ static bool tcp_next(int c, int ms)
     return false;
 }
 
+/* The last tcp_io_by ran out of time. */
+static bool too_slow(void) { return errno == EAGAIN || errno == EWOULDBLOCK; }
+
 static void tcp_worker(void *arg)
 {
     worker_t *w = arg;
@@ -618,8 +621,8 @@ static void tcp_worker(void *arg)
             errno = 0;
             size_t len = tcp_io_by(c, lp, 2, false, end) ? rd16(lp) : 0;
             if (!len || !tcp_io_by(c, w->in, len, false, end)) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    STAT(tcp_closed); /* too slow */
+                if (too_slow())
+                    STAT(tcp_closed);
                 break;
             }
             STAT(tcp);
@@ -628,10 +631,14 @@ static void tcp_worker(void *arg)
             size_t n = server_handle(w->in, len, src, true, w->out + 2, MP_TCP_MSG, w->scratch, MP_SCRATCH, w->b);
             if (n)
                 wr16(w->out, (uint16_t)n);
+            errno = 0;
             bool sent = n && tcp_io_by(c, w->out, n + 2, true, fwd_now_us() + TCP_IDLE_MS * 1000LL);
             power_release(POWER_DNS);
-            if (!sent)
+            if (!sent) {
+                if (n && too_slow())
+                    STAT(tcp_closed);
                 break;
+            }
         }
         close(c);
         __atomic_store_n(&s_tcp_held[t.slot], 0, __ATOMIC_RELAXED);

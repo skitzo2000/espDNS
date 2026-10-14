@@ -126,7 +126,7 @@ static void queries(mx_t *w)
               "nor one in the node config's allow list.");
     mx_u64(w, "espdns_queries_refused_source_total", "", s.refused_source);
     mx_family(w, "espdns_tcp_closed_total", "counter",
-              "TCP connections the node closed: no query in time, a query too slow, idle, or one client "
+              "TCP connections the node closed: no query in time, a query or reply too slow, idle, or one client "
               "holding its share of the connections.");
     mx_u64(w, "espdns_tcp_closed_total", "", s.tcp_closed);
     mx_family(w, "espdns_responses_total", "counter", "Responses by rcode (NOTIFY replies not included).");
