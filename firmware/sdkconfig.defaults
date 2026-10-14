@@ -71,3 +71,7 @@ CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=n
 CONFIG_RMT_ENCODER_FUNC_IN_IRAM=n
 CONFIG_RMT_TX_ISR_HANDLER_IN_IRAM=n
 CONFIG_RMT_RX_ISR_HANDLER_IN_IRAM=n
+
+# HKDF for the node key (nodekey.h): a Wi-Fi password sealed to it is opened with an
+# AES key and nonce derived by HKDF-SHA256.
+CONFIG_MBEDTLS_HKDF_C=y

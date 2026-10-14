@@ -32,6 +32,7 @@
 #include "led.h"
 #include "mbedtls/sha256.h"
 #include "net.h"
+#include "nodekey_node.h"
 #include "nvs.h"
 #include "metrics_node.h"
 #include "power.h"
@@ -750,7 +751,7 @@ static esp_err_t status_get(httpd_req_t *req)
         "\"slot\":\"%s\",\"ota_state\":\"%s\",\"uptime_s\":%lld,\"ip\":\"" IPSTR "\","
         "\"node_id\":\"" MACSTR "\",\"board\":\"%s\",\"image\":\"%s\",\"board_source\":\"%s\","
         "\"board_error\":\"%s\",\"fallback_board\":\"%s\",\"keys\":[\"%s\",\"%s\"],"
-        "\"keys_retired\":%s,\"keys_source\":\"%s\",\"keys_gen\":%s,\"keys_error\":\"%s\","
+        "\"keys_retired\":%s,\"keys_source\":\"%s\",\"keys_gen\":%s,\"keys_error\":\"%s\",\"node_key\":\"%s\","
         "\"seq\":{\"firmware\":%llu,\"config\":%llu,\"zones\":%llu,\"blocklist\":%llu,\"overrides\":%llu,\"control\":%llu,"
         "\"keys\":%llu},"
         "\"degraded\":%s,\"heap_free\":%u,\"psram_free\":%u,"
@@ -760,6 +761,7 @@ static esp_err_t status_get(httpd_req_t *req)
         e_proj, e_ver, sha, e_built, e_idf, run->label, state_name(st),
         esp_timer_get_time() / 1000000, IP2STR((esp_ip4_addr_t *)&ip), MAC2STR(s_trust.node_id), e_board,
         e_image, e_src, e_err, e_fb, keys_node_fp(0), keys_node_fp(1), kret, keys_node_source(), kgen, e_kerr,
+        nodekey_node_pub(),
         (unsigned long long)seq_get(REL_FIRMWARE),
         (unsigned long long)seq_get(REL_CONFIG), (unsigned long long)seq_get(REL_ZONES), (unsigned long long)seq_get(REL_BLOCKLIST), (unsigned long long)seq_get(REL_OVERRIDES),
         (unsigned long long)seq_get(REL_CONTROL), (unsigned long long)last_seq(REL_KEYS), (h.reasons & HR_DEGRADED_MASK) ? "true" : "false",
