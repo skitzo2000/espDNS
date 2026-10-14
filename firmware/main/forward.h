@@ -61,9 +61,11 @@ uint32_t fwd_now_ms(void);
  * comes. Each try is FWD_TRIES_PER_SERVER times a server in turn, waiting at most
  * timeout_ms, all within fwd_budget_ms from the start; strays (from elsewhere, or not
  * answering the question) are dropped and never end or restart a try's wait. One socket and
- * one random ID for the whole query, its source port random too (fwd_bind_random), against
- * spoofing. Each try is reported to the observer (fwd_set_observer). Not thread-safe: one
- * owner at a time drives a query (the loop, or the TCP task while it retries). */
+ * one random ID for the whole query, its source port random too (fwd_bind_random), and its
+ * name's letter case (0x20: an answer must name it in that very case), against spoofing. An
+ * answer off only in case is asked once more without it, for servers that don't keep case.
+ * Each try is reported to the observer (fwd_set_observer). Not thread-safe: one owner at a
+ * time drives a query (the loop, or the TCP task while it retries). */
 
 /* The question asked: the name (wire format) stays where it is while the query runs. */
 typedef struct {
@@ -78,6 +80,7 @@ typedef struct {
     uint8_t nservers;
     uint8_t attempt;     /* the try under way: servers[attempt % nservers] */
     uint16_t id;
+    uint32_t caps;       /* the name's letter case as asked (0x20): bit n flips the n-th letter's */
     int timeout_ms;      /* each try's */
     int sock;            /* -1: none */
     uint32_t try_end_ms; /* the try's deadline (fwd_now_ms) */
@@ -101,7 +104,7 @@ void fwd_up_init(fwd_up_t *u, const uint32_t *servers, int n, int timeout_ms);
 fwd_step_t fwd_up_start(fwd_up_t *u, const fwd_q_t *q, uint32_t now_ms);
 
 /* The socket is readable: reads what is there into buf (cap: a datagram's room, 1500),
- * dropping strays. Returns the length of the answer to the try under way (it may be
+ * dropping strays (the first off only in case asks again without 0x20). Returns the length of the answer to the try under way (it may be
  * truncated, DNS_F_TC: then fwd_up_tcp), or 0: nothing for it yet. */
 int fwd_up_recv(fwd_up_t *u, const fwd_q_t *q, uint8_t *buf, size_t cap);
 

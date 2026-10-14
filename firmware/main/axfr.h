@@ -21,7 +21,8 @@
 #define AXFR_CONNECT_MS     5000
 
 /* The primary's serial for apex (an authoritative SOA), asked of primary:port (network
- * order address) over UDP; false without one within timeout_ms. */
+ * order address) over UDP from a random port (fwd_bind_random); only a response with the
+ * query's ID and question counts. False without one within timeout_ms. */
 bool axfr_soa_serial(uint32_t primary, uint16_t port, const uint8_t *apex, int apex_len, int timeout_ms,
                      uint32_t *serial);
 

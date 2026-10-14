@@ -61,6 +61,10 @@ bool axfr_soa_serial(uint32_t primary, uint16_t port, const uint8_t *apex, int a
     if (!qn || timeout_ms <= 0)
         return false;
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s >= 0 && !fwd_bind_random(s)) { /* a random source port, as a forwarder query's */
+        close(s);
+        s = -1;
+    }
     if (s < 0)
         return false;
     int64_t end = mono_us() + (int64_t)timeout_ms * 1000;
@@ -76,13 +80,15 @@ bool axfr_soa_serial(uint32_t primary, uint16_t port, const uint8_t *apex, int a
             if (n < 0)
                 break;
             dns_hdr_t h;
-            if (from.sin_addr.s_addr != primary || from.sin_port != htons(port) || !dns_hdr_parse(r, (size_t)n, &h) ||
-                h.id != rd16(q))
-                continue; /* stray: keep waiting, as long as the check has left */
-            if (!(h.flags & DNS_F_AA) || DNS_RCODE(h.flags) != DNS_R_NOERROR)
-                break;
             size_t pos = DNS_HDR_LEN;
-            if (dns_name_skip(r, (size_t)n, &pos) < 0)
+            uint8_t qn[DNS_MAX_NAME];
+            int ql;
+            if (from.sin_addr.s_addr != primary || from.sin_port != htons(port) || !dns_hdr_parse(r, (size_t)n, &h) ||
+                h.id != rd16(q) || !(h.flags & DNS_F_QR) || h.qd != 1 ||
+                (ql = dns_name_read(r, (size_t)n, &pos, qn)) < 0 || pos + 4 > (size_t)n ||
+                !dns_name_eq(qn, ql, apex, apex_len) || rd16(r + pos) != DNS_T_SOA || rd16(r + pos + 2) != DNS_C_IN)
+                continue; /* stray, or another question: keep waiting, as long as the check has left */
+            if (!(h.flags & DNS_F_AA) || DNS_RCODE(h.flags) != DNS_R_NOERROR)
                 break;
             pos += 4;
             for (int i = 0; i < h.an; i++) {

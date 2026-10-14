@@ -168,18 +168,30 @@ int fwd_query_tcp(uint32_t server, const uint8_t *query, size_t qlen, uint8_t *o
     return ret;
 }
 
-/* resp answers q exactly: its ID, a response, one question, the name (any case), type and
- * class asked. */
-static bool matches(const uint8_t *resp, size_t rlen, uint16_t id, const fwd_q_t *q)
+/* A name's byte c as asked with caps (0x20): the k-th letter's case flipped where bit k % 32
+ * of caps is set (k counts letters; a length byte, at most 63, is never one). */
+static uint8_t cased(uint8_t c, uint32_t caps, int *k)
 {
-    if (rlen < DNS_HDR_LEN || rd16(resp) != id || !(rd16(resp + 2) & DNS_F_QR) || rd16(resp + 4) != 1)
-        return false;
+    bool letter = (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+    return letter && (caps >> ((*k)++ % 32) & 1) ? c ^ 0x20 : c;
+}
+
+/* resp answers q as u asked it: its ID, a response, one question, the type and class asked
+ * and the name in the very case sent (0x20). 1: it does; -1: all but the name's case; 0: not. */
+static int matches(const uint8_t *resp, size_t rlen, const fwd_up_t *u, const fwd_q_t *q)
+{
+    if (rlen < DNS_HDR_LEN || rd16(resp) != u->id || !(rd16(resp + 2) & DNS_F_QR) || rd16(resp + 4) != 1)
+        return 0;
     size_t pos = DNS_HDR_LEN;
     uint8_t name[DNS_MAX_NAME];
     int n = dns_name_read(resp, rlen, &pos, name);
-    if (n < 0 || pos + 4 > rlen)
-        return false;
-    return dns_name_eq(name, n, q->qname, q->qlen) && rd16(resp + pos) == q->qtype && rd16(resp + pos + 2) == q->qclass;
+    if (n < 0 || pos + 4 > rlen || !dns_name_eq(name, n, q->qname, q->qlen) || rd16(resp + pos) != q->qtype ||
+        rd16(resp + pos + 2) != q->qclass)
+        return 0;
+    for (int i = 0, k = 0; i < n; i++)
+        if (name[i] != cased(q->qname[i], u->caps, &k))
+            return -1;
+    return 1;
 }
 
 static void (*volatile s_observer)(uint32_t server, fwd_try_t how, uint32_t us);
@@ -201,10 +213,13 @@ uint32_t fwd_now_ms(void) { return (uint32_t)(mono_us() / 1000); }
 /* now has reached deadline, across the wrap of a ms counter. */
 static bool due(uint32_t now_ms, uint32_t deadline_ms) { return (int32_t)(now_ms - deadline_ms) >= 0; }
 
-/* The query as sent: with DO, RD and the question's CD. */
+/* The query as sent: with DO, RD and the question's CD, its name cased as u's (0x20). */
 static size_t build(const fwd_up_t *u, const fwd_q_t *q, uint8_t *out, size_t cap)
 {
-    return fwd_build_query(out, cap, u->id, q->qname, q->qlen, q->qtype, q->qclass, true, q->cd, true);
+    size_t n = fwd_build_query(out, cap, u->id, q->qname, q->qlen, q->qtype, q->qclass, true, q->cd, true);
+    for (int i = 0, k = 0; n && i < q->qlen; i++)
+        out[DNS_HDR_LEN + i] = cased(q->qname[i], u->caps, &k);
+    return n;
 }
 
 #define FWD_QUERY_MAX (DNS_HDR_LEN + DNS_MAX_NAME + 4 + 11)
@@ -262,6 +277,7 @@ static fwd_step_t send_try(fwd_up_t *u, const fwd_q_t *q, uint32_t now_ms)
 fwd_step_t fwd_up_start(fwd_up_t *u, const fwd_q_t *q, uint32_t now_ms)
 {
     u->id = (uint16_t)dns2_random();
+    u->caps = dns2_random();
     u->attempt = 0;
     u->end_ms = now_ms + fwd_budget_ms(u->nservers, u->timeout_ms);
     if (!u->nservers || q->qlen <= 0 || q->qlen > DNS_MAX_NAME)
@@ -288,9 +304,19 @@ int fwd_up_recv(fwd_up_t *u, const fwd_q_t *q, uint8_t *buf, size_t cap)
         ssize_t r = recvfrom(u->sock, buf, cap, 0, (struct sockaddr *)&from, &fl);
         if (r < 0)
             return 0; /* nothing more now */
-        if (from.sin_addr.s_addr != srv || from.sin_port != htons(DNS2_FWD_PORT) || !matches(buf, (size_t)r, u->id, q))
+        if (from.sin_addr.s_addr != srv || from.sin_port != htons(DNS2_FWD_PORT))
             continue; /* stray or spoofed: dropped, the try's wait goes on */
-        return (int)r;
+        int m = matches(buf, (size_t)r, u, q);
+        if (m < 0 && u->caps) {
+            /* Only the case differs: a server that doesn't keep it, or a forger. Asked once
+             * more, as is, within the try (Unbound's fallback), from buf: the reply is dropped. */
+            u->caps = 0;
+            size_t n = build(u, q, buf, cap);
+            if (n)
+                sendto(u->sock, buf, n, 0, (struct sockaddr *)&from, fl);
+        }
+        if (m > 0)
+            return (int)r;
     }
 }
 
@@ -327,7 +353,7 @@ int fwd_up_tcp(fwd_up_t *u, const fwd_q_t *q, uint8_t *out, size_t cap, uint32_t
     uint32_t tcp_ms = (uint32_t)u->timeout_ms * FWD_TCP_TIMEOUT_MUL, left = u->end_ms - now_ms;
     int len = n ? fwd_query_tcp(fwd_up_server(u), m, n, out, cap, (int)(tcp_ms < left ? tcp_ms : left)) : -1;
     /* It must answer the question asked, as a datagram must (fwd_up_recv). */
-    return len > 0 && matches(out, (size_t)len, u->id, q) ? len : -1;
+    return len > 0 && matches(out, (size_t)len, u, q) > 0 ? len : -1;
 }
 
 void fwd_up_close(fwd_up_t *u)
