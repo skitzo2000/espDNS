@@ -87,15 +87,14 @@ class KeysReleaseTest(unittest.TestCase):
             rot = os.path.join(d, "rotation")
             tool = [sys.executable, os.path.join(TOOLS, "release.py")]
 
-            def prepare(*extra, node="30:ed:a0:00:00:01"):
-                return subprocess.run(tool + ["keys-prepare", "--node", node, "--image", "test-board",
-                                              "--release", rel_pub, "--recovery", rec_pub, "--dir", rot,
-                                              *extra], capture_output=True)
+            def prepare(*extra):
+                return subprocess.run(tool + ["keys-prepare", "--node", "30:ed:a0:00:00:01", "--image",
+                                              "test-board", "--release", rel_pub, "--recovery", rec_pub,
+                                              "--dir", rot, *extra], capture_output=True)
 
             def sign(k):
                 return subprocess.run(tool + ["keys-sign", "--dir", rot, "--key", k], capture_output=True)
 
-            self.assertNotEqual(prepare(node="ff:ff:ff:ff:ff:ff").returncode, 0)  # any node: refused
             r = prepare("--keep-retired", "--current-recovery", fp, "--seq", "4000", "--last-seq", "10")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(rd(os.path.join(rot, "payload.bin")), V["V_KEYS_PAYLOAD"])

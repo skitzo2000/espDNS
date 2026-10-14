@@ -551,7 +551,7 @@ static bool release_head(httpd_req_t *req, rjob_t *j)
         why = rel_verify(j->hdr, &s_trust, last_seq(kind), limit, &j->m);
     /* KEYS: the recovery key, this node by its ID, keys from the keys partition */
     if (!why && kind == REL_KEYS)
-        why = rel_keys_check(&j->m, &s_trust);
+        why = rel_keys_check(&j->m);
     if (!why && kind == REL_KEYS && j->m.payload_len != KEYS_REL_LEN)
         why = "a keys release's payload is 138 bytes";
     uint32_t gen;

@@ -30,7 +30,9 @@ def arr(name, b):
 fw_payload = b"hello firmware"
 fw = release.header(K0, "firmware", 0, NODE, BOARD, 1000, fw_payload)
 bl_payload = b"blocklist bytes"
-bl = release.header(K1, "blocklist", 1, release.ANY_NODE, BOARD, 2000, bl_payload)
+bl = release.header(K1, "blocklist", 1, NODE, BOARD, 2000, bl_payload)
+# A release for ff:ff:ff:ff:ff:ff, validly signed: a node takes only its own node ID.
+bcast = release.header(K0, "blocklist", 0, b"\xff" * 6, BOARD, 2001, bl_payload)
 m = bytearray(release.manifest("firmware", 0, NODE, BOARD, 1001, fw_payload))
 m[100] = 1  # reserved byte set, validly signed
 rsv = bytes(m) + release.sign(K0, bytes(m))
@@ -39,14 +41,13 @@ cfg = release.header(K0, "config", 0, NODE, BOARD, 3000, cfg_payload)
 
 
 # KEYS releases (main/keys.h): new keys K2 (release) and K3 (recovery) for NODE, signed with
-# the recovery key K1 as a node takes them, and the two ways a node refuses one before its
-# payload: signed with the release key, addressed to any node.
+# the recovery key K1 as a node takes them, and one a node refuses before its payload:
+# signed with the release key.
 K2 = ec.derive_private_key(0x5EED0003 << 200 | 0xF00D, ec.SECP256R1())
 K3 = ec.derive_private_key(0x5EED0004 << 200 | 0xCAFE, ec.SECP256R1())
 keys_payload = release.keys_payload(release.public_raw(K2), release.public_raw(K3), True)
 keys = release.header(K1, "keys", 1, NODE, BOARD, 4000, keys_payload)
 keys_rel0 = release.header(K0, "keys", 0, NODE, BOARD, 4001, keys_payload)
-keys_any = release.header(K1, "keys", 1, release.ANY_NODE, BOARD, 4002, keys_payload)
 # A firmware release signed with the new release key, after the rotation
 fw_k2 = release.header(K2, "firmware", 0, NODE, BOARD, 5000, fw_payload)
 
@@ -60,7 +61,7 @@ def keys_vectors():
     """The lines for the KEYS vectors alone (appended to an existing file)."""
     return [arr("V_KEY2", release.public_raw(K2)), arr("V_KEY3", release.public_raw(K3)),
             arr("V_KEYS", keys), arr("V_KEYS_PAYLOAD", keys_payload), arr("V_KEYS_REL0", keys_rel0),
-            arr("V_KEYS_ANY", keys_any), arr("V_FW_K2", fw_k2)]
+            arr("V_FW_K2", fw_k2)]
 
 
 out = []
@@ -75,6 +76,7 @@ out.append(arr("V_FW", fw))
 out.append(arr("V_FW_PAYLOAD", fw_payload))
 out.append(arr("V_BL", bl))
 out.append(arr("V_BL_PAYLOAD", bl_payload))
+out.append(arr("V_BCAST", bcast))
 out.append(arr("V_RESERVED", rsv))
 out.extend(vectors())
 out.extend(keys_vectors())

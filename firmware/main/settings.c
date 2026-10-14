@@ -298,8 +298,6 @@ const char *settings_store(const uint8_t hdr[REL_HEADER_LEN], const rel_manifest
     } else if (!share_check(c, err, sizeof(err))) {
         snprintf(s_reply, sizeof(s_reply), "config refused: memory plan: %s", err);
         why = s_reply;
-    } else if (memcmp(m->target, ota_trust()->node_id, 6) != 0) {
-        why = "a config is for one node, not any node";
     } else if (cfg_net_changed(s_run, c) && !state_set(KEY_TRIAL, m->seq)) {
         /* The trial is armed before the slot is written: whatever cuts this push short, a
          * config with a new address never boots without it. */
