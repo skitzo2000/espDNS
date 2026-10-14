@@ -756,7 +756,7 @@ static esp_err_t status_get(httpd_req_t *req)
         "\"degraded\":%s,\"heap_free\":%u,\"psram_free\":%u,"
         "\"queries\":{\"total\":%lu,\"udp\":%lu,\"tcp\":%lu,\"auth\":%lu,\"forwarded\":%lu,\"cache_hits\":%lu,"
         "\"nxdomain\":%lu,\"servfail\":%lu,\"refused\":%lu,\"notifies\":%lu,\"dropped\":%lu,"
-        "\"refused_source\":%lu},",
+        "\"refused_source\":%lu,\"tcp_closed\":%lu},",
         e_proj, e_ver, sha, e_built, e_idf, run->label, state_name(st),
         esp_timer_get_time() / 1000000, IP2STR((esp_ip4_addr_t *)&ip), MAC2STR(s_trust.node_id), e_board,
         e_image, e_src, e_err, e_fb, keys_node_fp(0), keys_node_fp(1), kret, keys_node_source(), kgen, e_kerr,
@@ -767,7 +767,7 @@ static esp_err_t status_get(httpd_req_t *req)
         (unsigned long)s.queries, (unsigned long)s.udp, (unsigned long)s.tcp, (unsigned long)s.auth,
         (unsigned long)s.forwarded, (unsigned long)s.cache_hits, (unsigned long)s.nxdomain,
         (unsigned long)s.servfail, (unsigned long)s.refused, (unsigned long)s.notifies, (unsigned long)s.dropped,
-        (unsigned long)s.refused_source);
+        (unsigned long)s.refused_source, (unsigned long)s.tcp_closed);
     /* Boot timing in ms since the app started; null for a step that hasn't finished. */
     /* The MAC of the interface it uses (Ethernet or Wi-Fi), what a DHCP reservation or a
      * static address is set by; "" before the interface is up. */

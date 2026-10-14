@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -6224,6 +6225,54 @@ static void test_sup(void)
     CHECK(!sup_stall_settled(SUP_STALL_WINDOW_MS - 1) && sup_stall_settled(SUP_STALL_WINDOW_MS));
 }
 
+/* A client sending a byte every 50 ms: each recv would wait well within a per-recv timeout. */
+static void *trickle(void *arg)
+{
+    int s = *(int *)arg;
+    for (int i = 0; i < 20 && send(s, "x", 1, MSG_NOSIGNAL) == 1; i++)
+        usleep(50000);
+    return NULL;
+}
+
+/* A slow TCP/53 client: the whole message by its deadline, not each recv (server.c). */
+static void test_tcp_deadline(void)
+{
+    int sv[2];
+    uint8_t buf[32];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    CHECK(send(sv[1], "ab", 2, 0) == 2);
+    CHECK(tcp_io_by(sv[0], buf, 2, false, fwd_now_us() + 200000) && !memcmp(buf, "ab", 2));
+    pthread_t th;
+    pthread_create(&th, NULL, trickle, &sv[1]);
+    int64_t t0 = fwd_now_us();
+    errno = 0;
+    CHECK(!tcp_io_by(sv[0], buf, 20, false, t0 + 300000) && errno == EAGAIN);
+    int64_t took = fwd_now_us() - t0;
+    CHECK(took >= 290000 && took < 600000);
+    pthread_join(th, NULL);
+    errno = 0;
+    CHECK(!tcp_io_by(sv[0], buf, 1, false, t0) && errno == EAGAIN); /* already past */
+    close(sv[1]);
+    errno = 0;
+    while (tcp_io_by(sv[0], buf, 1, false, fwd_now_us() + 200000))
+        ; /* what the trickle left, then the end */
+    CHECK(errno != EAGAIN); /* ended, not slow */
+    close(sv[0]);
+
+    uint32_t held[6] = { 0 };
+    for (int i = 0; i < 3; i++) {
+        int k = tcp_slot(held, 6, 7, 3);
+        CHECK(k == i);
+        held[k] = 7;
+    }
+    CHECK(tcp_slot(held, 6, 7, 3) == TCP_SLOT_CAP);
+    CHECK(tcp_slot(held, 6, 8, 3) == 3);
+    held[1] = 0;
+    CHECK(tcp_slot(held, 6, 7, 3) == 1);
+    held[1] = 9, held[3] = 9, held[4] = 9, held[5] = 9;
+    CHECK(tcp_slot(held, 6, 8, 3) == TCP_SLOT_FULL);
+}
+
 int main(void)
 {
     g_zone = make_zone();
@@ -6244,6 +6293,7 @@ int main(void)
     test_flights_threads();
     test_flights_retry();
     test_fwd_fd_setsize();
+    test_tcp_deadline();
     test_fwdq_complete();
     test_fwdq_failover();
     test_fwdq_tcp();

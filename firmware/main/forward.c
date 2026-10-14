@@ -114,28 +114,29 @@ bool tcp_write_full(int s, const uint8_t *buf, size_t n)
     return true;
 }
 
-static int64_t mono_us(void)
+int64_t fwd_now_us(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-/* ms left until end_us (mono_us), rounded up: 0 once it has come. */
+/* ms left until end_us (fwd_now_us), rounded up: 0 once it has come. */
 static int left_ms(int64_t end_us)
 {
-    int64_t l = (end_us - mono_us() + 999) / 1000;
+    int64_t l = (end_us - fwd_now_us() + 999) / 1000;
     return l <= 0 ? 0 : l > INT_MAX ? INT_MAX : (int)l;
 }
 
-/* Sends or reads n bytes by end_us: each call waits at most what is left (a socket timeout
- * of 0 would be no timeout, so it is never set). */
-static bool tcp_io_by(int s, uint8_t *buf, size_t n, bool wr, int64_t end_us)
+/* A socket timeout of 0 would be no timeout, so it is never set. */
+bool tcp_io_by(int s, uint8_t *buf, size_t n, bool wr, int64_t end_us)
 {
     while (n) {
         int left = left_ms(end_us);
-        if (!left)
+        if (!left) {
+            errno = EAGAIN; /* as the socket's own timeout */
             return false;
+        }
         set_timeouts(s, left);
         ssize_t r = wr ? send(s, buf, n, 0) : recv(s, buf, n, 0);
         if (r <= 0)
@@ -151,7 +152,7 @@ int fwd_query_tcp(uint32_t server, const uint8_t *query, size_t qlen, uint8_t *o
 {
     if (timeout_ms <= 0)
         return -1;
-    int64_t end = mono_us() + (int64_t)timeout_ms * 1000;
+    int64_t end = fwd_now_us() + (int64_t)timeout_ms * 1000;
     int s = tcp_connect_timeout(server, DNS2_FWD_PORT, timeout_ms);
     if (s < 0)
         return -1;
@@ -202,17 +203,29 @@ static void (*volatile s_observer)(uint32_t server, fwd_try_t how, uint32_t us);
 
 void fwd_set_observer(void (*fn)(uint32_t server, fwd_try_t how, uint32_t us)) { s_observer = fn; }
 
-/* One attempt at server, begun at t0 (mono_us), is over. */
+/* One attempt at server, begun at t0 (fwd_now_us), is over. */
 static void observe(uint32_t server, fwd_try_t how, int64_t t0)
 {
     void (*fn)(uint32_t, fwd_try_t, uint32_t) = s_observer;
     if (fn) {
-        int64_t us = mono_us() - t0;
+        int64_t us = fwd_now_us() - t0;
         fn(server, how, us < 0 ? 0 : us > UINT32_MAX ? UINT32_MAX : (uint32_t)us);
     }
 }
 
-uint32_t fwd_now_ms(void) { return (uint32_t)(mono_us() / 1000); }
+int tcp_slot(const uint32_t *held, int n, uint32_t src, int cap)
+{
+    int slot = TCP_SLOT_FULL, mine = 0;
+    for (int i = 0; i < n; i++) {
+        if (!held[i])
+            slot = slot < 0 ? i : slot;
+        else
+            mine += held[i] == src;
+    }
+    return mine >= cap ? TCP_SLOT_CAP : slot;
+}
+
+uint32_t fwd_now_ms(void) { return (uint32_t)(fwd_now_us() / 1000); }
 
 /* now has reached deadline, across the wrap of a ms counter. */
 static bool due(uint32_t now_ms, uint32_t deadline_ms) { return (int32_t)(now_ms - deadline_ms) >= 0; }
@@ -266,7 +279,7 @@ static fwd_step_t send_try(fwd_up_t *u, const fwd_q_t *q, uint32_t now_ms)
     for (; u->attempt < FWD_TRIES_PER_SERVER * u->nservers && !due(now_ms, u->end_ms); u->attempt++) {
         uint32_t srv = fwd_up_server(u);
         struct sockaddr_in sa = { .sin_family = AF_INET, .sin_port = htons(DNS2_FWD_PORT), .sin_addr.s_addr = srv };
-        u->try_t0_us = mono_us();
+        u->try_t0_us = fwd_now_us();
         /* now_ms is the ms under way: a ms more, so the try never ends short of its timeout. */
         u->try_end_ms = now_ms + (uint32_t)u->timeout_ms + 1;
         if (!due(u->end_ms, u->try_end_ms)) /* the budget ends first */

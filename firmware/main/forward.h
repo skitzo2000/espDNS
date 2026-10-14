@@ -165,3 +165,15 @@ int fwd_query_tcp(uint32_t server, const uint8_t *query, size_t qlen, uint8_t *o
 int tcp_connect_timeout(uint32_t server, uint16_t port, int timeout_ms);
 bool tcp_read_full(int s, uint8_t *buf, size_t n);
 bool tcp_write_full(int s, const uint8_t *buf, size_t n);
+/* The clock tcp_io_by's deadlines are on: µs since boot (CLOCK_MONOTONIC). */
+int64_t fwd_now_us(void);
+/* Sends (wr) or reads n bytes of s by end_us (fwd_now_us), each call waiting at most what
+ * is left. False if the connection ends or fails, or the time runs out (errno EAGAIN). */
+bool tcp_io_by(int s, uint8_t *buf, size_t n, bool wr, int64_t end_us);
+
+/* A connection from src takes a free slot of held's n (each a connection's client, 0 for a
+ * free slot): its index, TCP_SLOT_FULL if none is free, TCP_SLOT_CAP if src holds cap of
+ * them already. */
+#define TCP_SLOT_FULL (-1)
+#define TCP_SLOT_CAP  (-2)
+int tcp_slot(const uint32_t *held, int n, uint32_t src, int cap);

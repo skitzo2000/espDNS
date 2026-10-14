@@ -21,6 +21,7 @@ typedef struct {
     uint32_t auth, forwarded, cache_hits;
     uint32_t nxdomain, servfail, refused, formerr, notifies, dropped;
     uint32_t refused_source; /* dropped unanswered: not from an address it answers (cfg_src_allowed) */
+    uint32_t tcp_closed;     /* TCP connections the node closed: too slow, idle, or over the per-client cap */
 } server_stats_t;
 
 /* Takes the dns service's memory (the cache, the workers' buffers: share.h) and opens the
