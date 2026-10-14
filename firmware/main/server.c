@@ -227,8 +227,10 @@ static size_t handle_notify(const dns_query_t *q, uint32_t src, uint8_t *out, si
 {
     STAT(notifies);
     NOTE(notify, true);
-    if (src != settings()->primary || q->qtype != DNS_T_SOA)
+    if (src != settings()->primary || q->qtype != DNS_T_SOA) {
+        STAT(refused);
         return dns_make_error(q, out, cap, DNS_R_REFUSED, 0);
+    }
     reg_rdlock();
     route_t r = reg_route(q->qname, q->qname_len);
     bool ours = (r.kind == ROUTE_AUTH || r.kind == ROUTE_AUTH_FAIL) && !r.hosted &&
@@ -259,6 +261,10 @@ static size_t handle(const uint8_t *m, size_t mlen, uint32_t src, bool tcp, uint
         q.qname_len = 0;
         return dns_make_error(&q, out, cap, DNS_R_FORMERR, 0);
     }
+    /* An EDNS version it doesn't speak: BADVERS, with its own, 0 (RFC 6891, 6.1.3). Logged as
+     * an error (not parsed, for the query log). */
+    if (q.has_edns && q.edns_version > 0)
+        return dns_make_error(&q, out, cap, DNS_R_BADVERS, 0);
     ql_note_t *note = querylog_note();
     if (note) {
         note->parsed = true;

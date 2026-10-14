@@ -52,8 +52,9 @@ void querylog_query(const ql_note_t *n, uint32_t src, bool tcp, const uint8_t *o
 {
     int rcode = len >= DNS_HDR_LEN ? DNS_RCODE(rd16(out + 2)) : -1;
     ql_result_t r = ql_result(n, rcode, len);
-    /* NOTIFYs and drops have their counters in server.c already: /metrics reads them there. */
-    if (r != QR_NOTIFY && r != QR_DROPPED)
+    /* NOTIFYs and drops have their counters in server.c already: /metrics reads them there
+     * (st_query counts a refused NOTIFY as refused). */
+    if (r != QR_DROPPED)
         st_query(&s_st, r, rcode, us);
     if (!s_on || !len)
         return;

@@ -33,8 +33,8 @@ typedef enum {
     QR_BLOCKED,    /* blocked by the blocklist (the name, or a CNAME target in the answer) */
     QR_OVERRIDDEN, /* blocked by the overrides */
     QR_REFUSED,    /* refused: not recursion for this client, forwarding off, AXFR, a class not IN */
-    QR_SERVFAIL,   /* the forwarders gave no answer, or a secondary zone expired */
-    QR_ERROR,      /* malformed (FORMERR), or an opcode not implemented (NOTIMP) */
+    QR_SERVFAIL,   /* SERVFAIL: the forwarders gave no answer or answered SERVFAIL, or a secondary zone expired */
+    QR_ERROR,      /* malformed (FORMERR), an opcode not implemented (NOTIMP), or an EDNS version (BADVERS) */
     QR_NOTIFY,     /* a NOTIFY from the primary */
     QR_DROPPED,    /* never answered: garbage, a response, or no worker free */
     QR_N

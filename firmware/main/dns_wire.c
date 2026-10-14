@@ -167,16 +167,18 @@ bool dns_rr_parse(const uint8_t *msg, size_t len, size_t *off, dns_rr_view_t *rr
     return true;
 }
 
-/* Decompress one name from rdata into out; advances *in and *o. */
+/* Decompress one name from rdata into out; advances *in and *o. *o counts past cap (what
+ * would not fit is not written). */
 static bool expand_name(const uint8_t *msg, size_t len, size_t *in, size_t end,
                         uint8_t *out, size_t cap, size_t *o)
 {
     uint8_t name[DNS_MAX_NAME];
     size_t p = *in;
     int n = dns_name_read(msg, len, &p, name);
-    if (n < 0 || p > end || *o + (size_t)n > cap)
+    if (n < 0 || p > end)
         return false;
-    memcpy(out + *o, name, (size_t)n);
+    if (*o + (size_t)n <= cap)
+        memcpy(out + *o, name, (size_t)n);
     *o += (size_t)n;
     *in = p;
     return true;
@@ -185,16 +187,19 @@ static bool expand_name(const uint8_t *msg, size_t len, size_t *in, size_t end,
 static bool copy_raw(const uint8_t *msg, size_t *in, size_t end, size_t n,
                      uint8_t *out, size_t cap, size_t *o)
 {
-    if (*in + n > end || *o + n > cap)
+    if (*in + n > end)
         return false;
-    memcpy(out + *o, msg + *in, n);
+    if (*o + n <= cap)
+        memcpy(out + *o, msg + *in, n);
     *in += n;
     *o += n;
     return true;
 }
 
-int dns_rdata_expand(const uint8_t *msg, size_t len, const dns_rr_view_t *rr,
-                     uint8_t *out, size_t cap)
+/* As dns_rdata_expand, but returns the length the rdata needs even past cap (out then
+ * holds only part of it). */
+static int rdata_expand(const uint8_t *msg, size_t len, const dns_rr_view_t *rr,
+                        uint8_t *out, size_t cap)
 {
     size_t in = rr->rdata_off;
     size_t end = rr->rdata_off + rr->rdlen;
@@ -230,6 +235,13 @@ int dns_rdata_expand(const uint8_t *msg, size_t len, const dns_rr_view_t *rr,
     return (int)o;
 }
 
+int dns_rdata_expand(const uint8_t *msg, size_t len, const dns_rr_view_t *rr,
+                     uint8_t *out, size_t cap)
+{
+    int n = rdata_expand(msg, len, rr, out, cap);
+    return n >= 0 && (size_t)n <= cap ? n : -1;
+}
+
 int dns_query_parse(const uint8_t *m, size_t len, dns_query_t *q)
 {
     dns_hdr_t h;
@@ -250,13 +262,14 @@ int dns_query_parse(const uint8_t *m, size_t len, dns_query_t *q)
     pos += 4;
     q->q_end = pos;
 
-    /* Skip answer/authority, look for OPT in additional. */
+    /* Skip answer/authority, look for OPT in additional: at most one, and only there
+     * (RFC 6891, 6.1.1). */
     for (int i = 0; i < h.an + h.ns + h.ar; i++) {
         dns_rr_view_t rr;
         if (!dns_rr_parse(m, len, &pos, &rr))
             return DNS_R_FORMERR;
-        if (i >= h.an + h.ns && rr.type == DNS_T_OPT) {
-            if (q->has_edns || rr.name_len != 1)
+        if (rr.type == DNS_T_OPT) {
+            if (i < h.an + h.ns || q->has_edns || rr.name_len != 1)
                 return DNS_R_FORMERR;
             q->has_edns = true;
             q->edns_size = rr.cls < 512 ? 512 : rr.cls;
@@ -349,34 +362,54 @@ void dnsb_init(dns_builder_t *b, uint8_t *buf, size_t cap, size_t limit,
     b->q_end = b->len;
 }
 
-bool dnsb_rr(dns_builder_t *b, int section, const uint8_t *owner, int owner_len,
-             uint16_t type, uint16_t cls, uint32_t ttl, const uint8_t *rdata, uint16_t rdlen)
+/* Where the reply's RRs must end: the limit, less the OPT's room. */
+static size_t rr_end(const dns_builder_t *b) { return b->limit - (b->opt_size ? OPT_RR_LEN : 0); }
+
+/* Whether an RR with rdlen bytes of rdata fits (if not, marks truncated); *rd_at receives
+ * where its rdata goes. */
+static bool rr_fits(dns_builder_t *b, int section, const uint8_t *owner, int owner_len, size_t rdlen,
+                    size_t *rd_at)
 {
     if (b->truncated || section < b->section)
         return false;
     int ptr_at;
     uint16_t ptr;
-    size_t need = (size_t)name_plan(b, owner, owner_len, &ptr_at, &ptr) + 10 + rdlen;
-    size_t reserve = b->opt_size ? OPT_RR_LEN : 0;
-    if (b->len + need + reserve > b->limit) {
+    size_t at = b->len + (size_t)name_plan(b, owner, owner_len, &ptr_at, &ptr) + 10;
+    if (at + rdlen > rr_end(b)) {
         b->truncated = true;
         return false;
     }
+    *rd_at = at;
+    return true;
+}
+
+/* Writes an RR's owner and fixed fields in front of its rdata, already in place (rr_fits). */
+static void rr_put(dns_builder_t *b, int section, const uint8_t *owner, int owner_len,
+                   uint16_t type, uint16_t cls, uint32_t ttl, uint16_t rdlen)
+{
     b->section = section;
     name_put(b, owner, owner_len);
     wr16(b->buf + b->len, type);
     wr16(b->buf + b->len + 2, cls);
     wr32(b->buf + b->len + 4, ttl);
     wr16(b->buf + b->len + 8, rdlen);
-    b->len += 10;
-    memcpy(b->buf + b->len, rdata, rdlen);
-    b->len += rdlen;
+    b->len += 10 + (size_t)rdlen;
     if (section == DNSB_ANSWER)
         b->an++;
     else if (section == DNSB_AUTHORITY)
         b->ns++;
     else
         b->ar++;
+}
+
+bool dnsb_rr(dns_builder_t *b, int section, const uint8_t *owner, int owner_len,
+             uint16_t type, uint16_t cls, uint32_t ttl, const uint8_t *rdata, uint16_t rdlen)
+{
+    size_t at;
+    if (!rr_fits(b, section, owner, owner_len, rdlen, &at))
+        return false;
+    memcpy(b->buf + at, rdata, rdlen);
+    rr_put(b, section, owner, owner_len, type, cls, ttl, rdlen);
     return true;
 }
 
@@ -390,6 +423,7 @@ void dnsb_set_rcode(dns_builder_t *b, int rcode)
 {
     uint16_t f = rd16(b->buf + 2);
     wr16(b->buf + 2, (uint16_t)((f & ~0xF) | (rcode & 0xF)));
+    b->opt_ercode = (uint8_t)(rcode >> 4);
 }
 
 void dnsb_set_flags(dns_builder_t *b, uint16_t set, uint16_t clear)
@@ -411,7 +445,7 @@ size_t dnsb_finish(dns_builder_t *b)
         p[0] = 0;
         wr16(p + 1, DNS_T_OPT);
         wr16(p + 3, b->opt_size);
-        wr32(p + 5, b->opt_do ? 0x8000 : 0);
+        wr32(p + 5, (uint32_t)b->opt_ercode << 24 | (b->opt_do ? 0x8000 : 0)); /* version 0 */
         wr16(p + 9, 0);
         b->len += OPT_RR_LEN;
         b->ar++;
@@ -438,6 +472,7 @@ size_t dns_make_error(const dns_query_t *q, uint8_t *out, size_t cap, int rcode,
               (uint16_t)(DNS_F_QR | (q->flags & (DNS_F_RD | 0x7800)) | extra_flags | (rcode & 0xF)));
     if (q->has_edns)
         dnsb_opt(&b, DNS_EDNS_SIZE, q->do_bit);
+    dnsb_set_rcode(&b, rcode); /* an extended one's upper bits go in the OPT */
     return dnsb_finish(&b);
 }
 
@@ -447,8 +482,11 @@ int dnsb_relay(dns_builder_t *b, const uint8_t *m, size_t len, uint32_t age, boo
 {
     dns_hdr_t h;
     size_t pos = DNS_HDR_LEN;
-    uint8_t rdata[1024];
     uint16_t qtype = 0;
+    /* What b held before: a malformed message leaves nothing of it behind. */
+    size_t len0 = b->len, pool0 = b->pool_len;
+    uint16_t an0 = b->an, ns0 = b->ns, ar0 = b->ar;
+    int section0 = b->section, nctab0 = b->nctab;
 
     if (!dns_hdr_parse(m, len, &h))
         return -1;
@@ -461,20 +499,37 @@ int dnsb_relay(dns_builder_t *b, const uint8_t *m, size_t len, uint32_t age, boo
     for (int i = 0; i < h.an + h.ns + h.ar; i++) {
         dns_rr_view_t rr;
         if (!dns_rr_parse(m, len, &pos, &rr))
-            return -1;
+            goto malformed;
         if (rr.type == DNS_T_OPT || (answers_only && i >= h.an))
             continue;
         if (!dnssec && dnssec_type(rr.type) && rr.type != qtype && qtype != DNS_T_ANY)
             continue;
         int section = i < h.an ? DNSB_ANSWER : i < h.an + h.ns ? DNSB_AUTHORITY : DNSB_ADDITIONAL;
-        int rdlen = dns_rdata_expand(m, len, &rr, rdata, sizeof(rdata));
-        if (rdlen < 0)
-            return -1;
-        uint32_t ttl = rr.ttl > age ? rr.ttl - age : 0;
-        if (!dnsb_rr(b, section, rr.name, rr.name_len, rr.type, rr.cls, ttl, rdata, (uint16_t)rdlen))
+        /* The rdata is expanded straight into the reply, as far as the reply's limit. */
+        size_t at;
+        if (!rr_fits(b, section, rr.name, rr.name_len, 0, &at))
             break; /* truncated; dnsb_finish sets TC */
+        int rdlen = rdata_expand(m, len, &rr, b->buf + at, rr_end(b) - at);
+        if (rdlen < 0)
+            goto malformed;
+        if ((size_t)rdlen > rr_end(b) - at) {
+            b->truncated = true;
+            break;
+        }
+        uint32_t ttl = rr.ttl > age ? rr.ttl - age : 0;
+        rr_put(b, section, rr.name, rr.name_len, rr.type, rr.cls, ttl, (uint16_t)rdlen);
     }
     return DNS_RCODE(h.flags);
+
+malformed:
+    b->len = len0;
+    b->pool_len = pool0;
+    b->an = an0;
+    b->ns = ns0;
+    b->ar = ar0;
+    b->section = section0;
+    b->nctab = nctab0;
+    return -1;
 }
 
 uint32_t dns_resp_ttl(const uint8_t *m, size_t len)
