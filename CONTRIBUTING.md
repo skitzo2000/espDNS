@@ -84,8 +84,8 @@ and pull request:
   build file, the board catalog, an example, a test or a fixture. Use documentation
   addresses instead.
 
-A developer guide for running the firmware's host tests and the browser tests locally will
-follow.
+The [developer guide](docs/developer.md#tests) covers running the firmware's host tests
+and the browser tests locally.
 
 ## Pull requests
 
