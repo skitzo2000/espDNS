@@ -163,6 +163,7 @@ this order.
 | `keys_retired` | Fingerprint of the retired release key a KEYS release kept, or `null` ([Release kinds](#release-kinds)). It verifies only what the node stored before; never a push. |
 | `keys_gen` | The keys partition slot's generation, or `null` when the keys aren't from it. A KEYS release moves it on. |
 | `keys_error` | What is wrong with the keys, or `""`. |
+| `node_key` | The node key's public key, base64 of the 65-byte P-256 point; `""` if the node has none. Made at the first boot; its private key never leaves the node. The controller pins it at adoption and seals a config's Wi-Fi password to it ([Security](../security.md#the-wi-fi-password)). |
 | `seq` | The highest release sequence number applied, per kind: `firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`, `keys`. |
 | `degraded` | `true` while any degrading reason applies. |
 | `heap_free` | Free internal RAM, bytes. |

@@ -141,6 +141,15 @@ Update the controller as usual, then install each node from it with **Install ov
 
 ### Security
 
+- The Wi-Fi password no longer crosses the network in plain text. Each node makes a key
+  pair at its first boot (the private key never leaves it) and reports the public key in
+  `/status` as `node_key`; the controller pins it when it adopts the node, and sends a
+  config's Wi-Fi password only sealed to that key (`wifi.sealed`: ECDH P-256, HKDF-SHA256,
+  AES-256-GCM). A node refuses a config release with a plain `wifi.password`. The controller
+  refuses to send a Wi-Fi password to a node with no node key pinned (adopt it again) or
+  one that reports a different key (reinstalled: adopt it again, or `espdns pin`). Config
+  files on the controller still hold the password as before; USB and Improv setup are
+  unchanged. See [docs/security.md](docs/security.md#the-wi-fi-password).
 - Forged upstream replies are harder to slip in: a node asks its forwarders with the
   name's letters in random case and takes only a reply that names it in that very case
   (a forwarder that doesn't keep case is asked once more without it). The SOA check of a
