@@ -28,7 +28,7 @@ var ErrNotSupported = errors.New("not supported by the node's firmware (update i
 // Most a /metrics or /querylog reply may be; a node's are far smaller.
 const observeMax = 8 << 20
 
-// fetch reads path from the node: its body, or ErrNotSupported for a 404.
+// fetch reads path from the node: its body, ErrNotSupported for a 404, errChanged for a 409.
 func (c *Client) fetch(ctx context.Context, host, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+path, nil)
 	if err != nil {
@@ -53,6 +53,8 @@ func (c *Client) fetch(ctx context.Context, host, path string) ([]byte, error) {
 		return body, nil
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%s%s: %w", host, path, ErrNotSupported)
+	case http.StatusConflict:
+		return nil, fmt.Errorf("%s%s: %w", host, path, errChanged)
 	default:
 		return nil, fmt.Errorf("%s%s: %s: %s", host, path, resp.Status, strings.TrimSpace(string(body)))
 	}

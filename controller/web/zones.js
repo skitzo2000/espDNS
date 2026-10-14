@@ -572,7 +572,7 @@ function readFailed(e, primary, copied) {
 function secondaryBody(z) {
   const body = zoneCtx.body;
   const primary = z.primary || primaryAddr();
-  const recs = h("div", { class: "stack" }, h("p", { class: "hint" }, z.pending === "add" ? "Its records show here after Apply, once your nodes copy it." : "Reading its records from your primary…"));
+  const recs = h("div", { class: "stack" }, h("p", { class: "hint" }, z.pending === "add" ? "Its records show here after Apply, once your nodes copy it." : "Reading its records…"));
   const again = h("button", { class: "btn small", type: "button" }, "Read again");
   const stop = h("button", { class: "btn danger", type: "button", id: "remove-zone", disabled: !data.canWrite || z.pending === "remove" }, "Stop copying this zone");
   const msg = h("span", { class: "hint bad", role: "status" });
@@ -584,7 +584,8 @@ function secondaryBody(z) {
     try {
       const r = await getJSON(`api/zone-records?name=${enc(z.name)}`);
       const list = arr(r.records);
-      recs.replaceChildren(list.length ? recTable(byName(list, z.name)) : h("p", { class: "hint" }, "No records."),
+      recs.replaceChildren(h("p", { class: "hint", id: "records-from" }, r.node ? `Read from ${r.node}'s copy.` : `Read from your primary DNS server (${str(r.primary)}).`),
+        list.length ? recTable(byName(list, z.name)) : h("p", { class: "hint" }, "No records."),
         r.more ? h("p", { class: "hint" }, `And ${r.more} more: see them at your primary.`) : "");
     } catch (e) {
       recs.replaceChildren(...readFailed(e, primary, !!z.serial && !["expired", "waiting"].includes(z.state)));

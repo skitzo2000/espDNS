@@ -70,6 +70,8 @@ type NodeStatus struct {
 		Records int    `json:"records"`
 		Expired bool   `json:"expired"`
 	} `json:"zones"`
+	// Reads are what the node hands over: "zone" when it serves its copies (GET /zone).
+	Reads []string `json:"reads"`
 	// ForwardZones are the node's forward zones (conditional forwarders) as it runs them (its
 	// config's as of its last boot), each {"name", "forwarder"}.
 	ForwardZones ForwardZoneList `json:"forward_zones"`
