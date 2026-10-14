@@ -194,3 +194,29 @@ func TestUnpinned(t *testing.T) {
 		t.Fatalf("pinned elsewhere: %v", err)
 	}
 }
+
+// A node's key is kept with its record, and through a move to another address.
+func TestNodeKey(t *testing.T) {
+	l := Open(t.TempDir())
+	if err := l.SetNodeKey("30:ed:a0:00:00:01", "BKEY"); !errors.Is(err, ErrNotPinned) {
+		t.Fatal(err)
+	}
+	if _, err := l.Pin("30:ed:a0:00:00:01", "192.0.2.53"); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := l.NodeKey("30:ed:a0:00:00:01"); err != nil || k != "" {
+		t.Fatal(k, err)
+	}
+	if err := l.SetNodeKey("30:ED:A0:00:00:01", "BKEY"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Pin("30:ed:a0:00:00:01", "192.0.2.54"); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := l.NodeKey("30:ed:a0:00:00:01"); err != nil || k != "BKEY" {
+		t.Fatal(k, err)
+	}
+	if _, err := l.NodeKey("30:ed:a0:00:00:02"); !errors.Is(err, ErrNotPinned) {
+		t.Fatal(err)
+	}
+}

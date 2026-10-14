@@ -168,6 +168,10 @@ func TestAdoptNewAddress(t *testing.T) {
 	if seq, _ := l.Seq(e.node.ID(), "config"); seq != r.Seq {
 		t.Fatalf("recorded config seq %d, pushed %d", seq, r.Seq)
 	}
+	// Its node key pinned with it, as its /status gave it at adoption.
+	if k, err := l.NodeKey(e.node.ID()); err != nil || k == "" || k != e.node.NodeKey() {
+		t.Fatal("node key:", k, err)
+	}
 	// Two adopted: the clients' DNS list.
 	if !slices.Equal(r.Servers, []string{"203.0.113.60", "203.0.113.51"}) {
 		t.Fatal(r.Servers)

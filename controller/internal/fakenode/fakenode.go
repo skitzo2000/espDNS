@@ -13,7 +13,10 @@ package fakenode
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -112,11 +115,16 @@ type Node struct {
 	KeysGen         uint32
 	KeysError       string
 	NoKeysPartition bool
+	// NoNodeKey: firmware from before the node key (firmware/main/nodekey.h): its /status
+	// says none, and it opens no sealed Wi-Fi password.
+	NoNodeKey bool
 	// Prefix and Gateway go with its address in /status config (default 24 and 127.0.0.1).
 	Prefix  int
 	Gateway string
 
 	mu       sync.Mutex
+	nkey     *ecdh.PrivateKey // its node key, made once (NodeKey)
+	nkeyOnce sync.Once
 	boot     time.Time
 	down     time.Time // down until
 	trialEnd time.Time
@@ -219,6 +227,39 @@ func (n *Node) Events() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return slices.Clone(n.events)
+}
+
+// NodeKey is its /status "node_key": its node key's public point, base64; "" with NoNodeKey.
+func (n *Node) NodeKey() string {
+	if n.NoNodeKey {
+		return ""
+	}
+	n.nkeyOnce.Do(func() { n.nkey, _ = ecdh.P256().GenerateKey(rand.Reader) })
+	return base64.StdEncoding.EncodeToString(n.nkey.PublicKey().Bytes())
+}
+
+// openWifi takes a config's Wi-Fi password as the firmware does (cfg.c): sealed to its
+// node key, never in plain text; kept opened, as the node runs it. Locked.
+func (n *Node) openWifi(c *nodecfg.Config) error {
+	w := c.Wifi
+	switch {
+	case w == nil || w.Password == nil && w.Sealed == nil:
+		return nil
+	case w.Password != nil:
+		return errors.New("config refused: wifi.password: never in plain text; only sealed to the node key (wifi.sealed)")
+	case n.NodeKey() == "":
+		return errors.New("config refused: wifi.sealed: this node has no node key")
+	}
+	b, err := base64.StdEncoding.DecodeString(*w.Sealed)
+	if err == nil {
+		b, err = release.Open(n.nkey, n.MAC, b)
+	}
+	if err != nil {
+		return fmt.Errorf("config refused: wifi.sealed: %w", err)
+	}
+	pw := string(b)
+	w.Password, w.Sealed = &pw, nil
+	return nil
 }
 
 // ID is its node ID, as /status says it.
@@ -327,7 +368,7 @@ func (n *Node) status() map[string]any {
 	st := map[string]any{"project": "espdns", "proto": 1, "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
 		"slot": n.Slot, "ota_state": n.otaState(), "uptime_s": int64(time.Since(n.boot).Seconds()), "node_id": n.ID(),
 		"board": n.Board, "image": n.Image, "boot_ms": 2100, "ip": n.Addr,
-		"keys": n.keys(), "seq": n.seq,
+		"keys": n.keys(), "seq": n.seq, "node_key": n.NodeKey(),
 		"net":    map[string]any{"kind": "ethernet", "mac": n.ID(), "link": true, "hostname": n.Name + ".local"},
 		"health": map[string]any{"state": n.state, "answering": n.answering(), "reasons": reasons},
 		"reboot": map[string]any{"pending": len(n.pending) > 0, "reasons": pending, "since_s": 3},
@@ -573,6 +614,9 @@ func (n *Node) release(b []byte, ota, later bool) (map[string]any, error) {
 		return map[string]any{"ok": true, "message": "rebooting", "rebooting": true}, nil
 	case release.Config:
 		c, err := nodecfg.Parse(p)
+		if err == nil {
+			err = n.openWifi(c)
+		}
 		if err == nil {
 			err = n.observeConfig(c)
 		}

@@ -37,8 +37,13 @@
 #include "reboot.h"
 #include "hzone.h"
 #include "keys.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/ecp.h"
+#include "mbedtls/gcm.h"
+#include "mbedtls/hkdf.h"
 #include "mbedtls/sha256.h"
 #include "memplan.h"
+#include "nodekey.h"
 #include "release.h"
 #include "release_vectors.h"
 #include "sup.h"
@@ -3870,6 +3875,43 @@ static char *read_file(const char *path, size_t *len)
     return buf;
 }
 
+/* ---- the node key (nodekey.c): setup ---- */
+
+static int test_rng(void *ctx, unsigned char *out, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        out[i] = (unsigned char)rand();
+    return 0;
+}
+
+/* tests/nodekey_vectors.json, sealed by the controller (internal/release, TestSealVector) for
+ * V_NODE; its node key opens the sealed passwords in the config tests. */
+static cJSON *s_nk_vec;
+static uint8_t s_nk_priv[NODEKEY_PRIV_LEN], s_nk_pub[NODEKEY_PUB_LEN];
+
+static const char *nk_field(const char *k) { return cJSON_GetObjectItem(s_nk_vec, k)->valuestring; }
+
+static const char *test_unseal(const uint8_t *blob, size_t n, char *out, size_t cap)
+{
+    return nodekey_open(s_nk_priv, V_NODE, blob, n, out, cap, test_rng, NULL);
+}
+
+static void nodekey_setup(void)
+{
+    size_t len, n = 0;
+    char *text = read_file("nodekey_vectors.json", &len);
+    CHECK(text);
+    s_nk_vec = cJSON_ParseWithLength(text, len);
+    free(text);
+    CHECK(s_nk_vec && !strcmp(nk_field("node_id"), "30:ed:a0:00:00:01"));
+    for (int i = 0; i < NODEKEY_PRIV_LEN; i++)
+        sscanf(nk_field("node_priv") + 2 * i, "%2hhx", &s_nk_priv[i]);
+    const char *pub = nk_field("node_key");
+    CHECK(mbedtls_base64_decode(s_nk_pub, sizeof(s_nk_pub), &n, (const unsigned char *)pub, strlen(pub)) == 0 &&
+          n == NODEKEY_PUB_LEN);
+    cfg_set_unseal(test_unseal);
+}
+
 static uint32_t ip4(const char *s);
 
 static bool parse(const char *json, board_desc_t *b, char *err)
@@ -4777,19 +4819,21 @@ static void test_config(void)
     CHECK(!strcmp(cfg_addr_kind(&d), "none") && !strcmp(cfg_addr_from(&d), "none"));
 
     /* A full node config: what it gives replaces the lower layers, what it leaves out stays. */
-    CHECK(cfg_try(&c,
+    static char full[1024];
+    snprintf(full, sizeof(full),
                   "{\"format\":1,\"name\":\"dns-a\",\"network\":{\"address\":\"203.0.113.53/24\",\"gateway\":\"203.0.113.1\"},"
-                  "\"wifi\":{\"ssid\":\"home\",\"password\":\"secret123\",\"power_save\":true},"
+                  "\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\",\"power_save\":true},"
                   "\"forwarders\":[\"1.1.1.1\",\"9.9.9.9\"],\"upstream_timeout_ms\":900,"
                   "\"forward_zones\":[{\"zone\":\"Corp.Example.\",\"forwarder\":\"203.0.113.2\"}],"
                   "\"secondary\":{\"zones\":[\"example.com\"],\"soa_poll_s\":120},"
                   "\"time\":{\"ntp\":[\"pool.ntp.org\",\"203.0.113.1\"],\"tz\":\"EST5EDT,M3.2.0,M11.1.0\"},"
-                  "\"blocking\":{\"answer\":\"nxdomain\",\"ttl\":30}}", err));
+                  "\"blocking\":{\"answer\":\"nxdomain\",\"ttl\":30}}", nk_field("sealed"));
+    CHECK(cfg_try(&c, full, err));
     if (err[0])
         fprintf(stderr, "config: %s\n", err);
     CHECK(!strcmp(c.name, "dns-a") && c.ip == ip4("203.0.113.53") && c.netmask == ip4("255.255.255.0") &&
           c.gateway == ip4("203.0.113.1"));
-    CHECK(!strcmp(c.wifi_ssid, "home") && !strcmp(c.wifi_pass, "secret123") && c.wifi_power_save);
+    CHECK(!strcmp(c.wifi_ssid, "home") && !strcmp(c.wifi_pass, nk_field("password")) && c.wifi_power_save);
     CHECK(c.nfwd == 2 && c.fwd[1] == ip4("9.9.9.9") && c.upstream_timeout_ms == 900);
     CHECK(c.nfzones == 1 && !strcmp(c.fzones[0].zone, "corp.example")); /* lowercased, no trailing dot */
     CHECK(c.nzones == 1 && !strcmp(c.zones[0], "example.com") && c.primary == ip4("192.0.2.254"));
@@ -4862,8 +4906,11 @@ static void test_config(void)
         { "{\"secondary\":{\"zones\":[\"x.com\",\"X.com.\"]}}", "x.com twice" },
         { "{\"forward_zones\":[{\"zone\":\"local\",\"forwarder\":\"1.1.1.1\"}]}", "both a secondary zone and a forward zone" },
         { "{\"forward_zones\":[{\"zone\":\"x.com\"}]}", "forwarder: required" },
-        { "{\"wifi\":{\"password\":\"12345678\"}}", "only with wifi.ssid" },
-        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"short\"}}", "at least 8" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"12345678\"}}", "never in plain text" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"\"}}", "never in plain text" },
+        { "{\"wifi\":{\"sealed\":\"AAAA\"}}", "only with wifi.ssid" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"sealed\":\"!!!!\"}}", "not base64" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"sealed\":\"AAAA\"}}", "wrong length" },
         { "{\"wifi\":{\"tx_power_dbm\":21}}", "from 2 to 20" },
         { "{\"time\":{\"tz\":\"5EST\"}}", "POSIX TZ" },
         /* Only the characters POSIX TZ uses: nothing that could break /status */
@@ -5718,6 +5765,108 @@ static bool in_list(const cJSON *a, const char *name)
     return false;
 }
 
+/* ---- the node key (nodekey.c) ---- */
+
+/* Seals pw to the node key pub for node as the controller does (release.Seal), base64 into
+ * out: for the round trip, and the configs in the tests. */
+static const char *seal_pw(const uint8_t pub[NODEKEY_PUB_LEN], const uint8_t node[6], const char *pw, char *out,
+                           size_t cap)
+{
+    uint8_t e[NODEKEY_PRIV_LEN], blob[NODEKEY_PUB_LEN + 64 + NODEKEY_TAG_LEN], z[NODEKEY_PUB_LEN], okm[44];
+    uint8_t info[sizeof(NODEKEY_INFO) - 1 + 6];
+    size_t len = strlen(pw), n = 0;
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point q, p;
+    mbedtls_mpi d;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&q);
+    mbedtls_ecp_point_init(&p);
+    mbedtls_mpi_init(&d);
+    CHECK(len < 64 && nodekey_gen(e, blob, test_rng, NULL)); /* the one-time key E, first */
+    CHECK(mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) == 0 && mbedtls_mpi_read_binary(&d, e, sizeof(e)) == 0 &&
+          mbedtls_ecp_point_read_binary(&grp, &q, pub, NODEKEY_PUB_LEN) == 0 &&
+          mbedtls_ecp_mul(&grp, &p, &d, &q, test_rng, NULL) == 0 &&
+          mbedtls_ecp_point_write_binary(&grp, &p, MBEDTLS_ECP_PF_UNCOMPRESSED, &n, z, sizeof(z)) == 0);
+    mbedtls_mpi_free(&d);
+    mbedtls_ecp_point_free(&p);
+    mbedtls_ecp_point_free(&q);
+    mbedtls_ecp_group_free(&grp);
+    memcpy(info, NODEKEY_INFO, sizeof(NODEKEY_INFO) - 1);
+    memcpy(info + sizeof(NODEKEY_INFO) - 1, node, 6);
+    CHECK(mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), NULL, 0, z + 1, 32, info, sizeof(info), okm,
+                       sizeof(okm)) == 0);
+    mbedtls_gcm_context g;
+    mbedtls_gcm_init(&g);
+    CHECK(mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, okm, 256) == 0 &&
+          mbedtls_gcm_crypt_and_tag(&g, MBEDTLS_GCM_ENCRYPT, len, okm + 32, 12, NULL, 0, (const uint8_t *)pw,
+                                    blob + NODEKEY_PUB_LEN, NODEKEY_TAG_LEN, blob + NODEKEY_PUB_LEN + len) == 0);
+    mbedtls_gcm_free(&g);
+    CHECK(mbedtls_base64_encode((unsigned char *)out, cap, &n, blob, NODEKEY_PUB_LEN + len + NODEKEY_TAG_LEN) == 0);
+    return out;
+}
+
+/* A config's wifi.password as the controller sends it: sealed to the test node key (an empty
+ * one left out). */
+static void seal_wifi(cJSON *cfg)
+{
+    cJSON *w = cJSON_GetObjectItem(cfg, "wifi"), *pw = w ? cJSON_GetObjectItem(w, "password") : NULL;
+    char b64[256];
+    if (pw && pw->valuestring[0])
+        cJSON_AddStringToObject(w, "sealed", seal_pw(s_nk_pub, V_NODE, pw->valuestring, b64, sizeof(b64)));
+    if (pw)
+        cJSON_DeleteItemFromObject(w, "password");
+}
+
+static void test_nodekey(void)
+{
+    static const uint8_t other_id[6] = { 0x30, 0xed, 0xa0, 0x00, 0x00, 0x02 };
+    static cfg_t c;
+    uint8_t blob[200], priv2[NODEKEY_PRIV_LEN], pub2[NODEKEY_PUB_LEN];
+    char pw[64], b64[256], json[512], err[160];
+    size_t n = 0;
+    const char *sealed = nk_field("sealed"), *want = nk_field("password");
+
+    /* The controller's seal opens here, with this node's key and ID alone. */
+    CHECK(mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)sealed, strlen(sealed)) == 0);
+    CHECK(!nodekey_open(s_nk_priv, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !strcmp(pw, want));
+    CHECK(nodekey_open(s_nk_priv, other_id, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
+    CHECK(nodekey_gen(priv2, pub2, test_rng, NULL));
+    CHECK(nodekey_open(priv2, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
+    /* Altered anywhere (E, the password, the tag): refused; an E off the curve before any
+     * use of the key (an invalid-curve point). */
+    size_t at[] = { 1, NODEKEY_PUB_LEN + 1, n - 1 };
+    for (size_t i = 0; i < 3; i++) {
+        blob[at[i]] ^= 1;
+        const char *why = nodekey_open(s_nk_priv, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL);
+        CHECK(why && !pw[0] && (i > 0 || strstr(why, "bad key point")));
+        blob[at[i]] ^= 1;
+    }
+    CHECK(nodekey_open(s_nk_priv, V_NODE, blob, NODEKEY_PUB_LEN + 7 + NODEKEY_TAG_LEN, pw, sizeof(pw), test_rng, NULL));
+    CHECK(nodekey_open(s_nk_priv, V_NODE, blob, n, pw, 8, test_rng, NULL)); /* no room */
+
+    /* Round trip: sealed here to a new key, opened with it, a 63-byte password too. */
+    const char *long_pw = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!";
+    seal_pw(pub2, V_NODE, long_pw, b64, sizeof(b64));
+    CHECK(mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)b64, strlen(b64)) == 0);
+    CHECK(!nodekey_open(priv2, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !strcmp(pw, long_pw));
+
+    /* In a config: opened into the Wi-Fi password; sealed to another node's key, refused. */
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", sealed);
+    CHECK(cfg_try(&c, json, err) && !strcmp(c.wifi_pass, want));
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", b64);
+    CHECK(!cfg_try(&c, json, err) && strstr(err, "wifi.sealed: does not open") && !c.wifi_pass[0]);
+    /* Plain text: refused, whatever else is right. */
+    CHECK(!cfg_try(&c, "{\"wifi\":{\"ssid\":\"home\",\"password\":\"secret123\"}}", err) &&
+          strstr(err, "wifi.password: never in plain text") && !c.wifi_pass[0]);
+    /* No password: an open network. */
+    CHECK(cfg_try(&c, "{\"wifi\":{\"ssid\":\"cafe\"}}", err) && !strcmp(c.wifi_ssid, "cafe") && !c.wifi_pass[0]);
+    /* A node without a key (none set) refuses a sealed password. */
+    cfg_set_unseal(NULL);
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", sealed);
+    CHECK(!cfg_try(&c, json, err) && strstr(err, "no node key"));
+    cfg_set_unseal(test_unseal);
+}
+
 static void test_cfg_reboot_vectors(void)
 {
     /* The controller's classification (controller/internal/nodecfg, Compare) on the same
@@ -5733,6 +5882,8 @@ static void test_cfg_reboot_vectors(void)
     cJSON_ArrayForEach(v, vec)
     {
         const char *name = cJSON_GetObjectItem(v, "name")->valuestring;
+        seal_wifi(cJSON_GetObjectItem(v, "from"));
+        seal_wifi(cJSON_GetObjectItem(v, "to"));
         char *from = cJSON_PrintUnformatted(cJSON_GetObjectItem(v, "from"));
         char *to = cJSON_PrintUnformatted(cJSON_GetObjectItem(v, "to"));
         char err[160];
@@ -6274,6 +6425,7 @@ static void test_tcp_deadline(void)
 
 int main(void)
 {
+    nodekey_setup();
     g_zone = make_zone();
     CHECK(g_zone->n == 13); /* 14 in-zone adds, 1 duplicate dropped */
     test_names();
@@ -6322,6 +6474,7 @@ int main(void)
     test_place();
     test_cpuplan();
     test_cfg_reboot_vectors();
+    test_nodekey();
     test_keys();
     test_keys_decide();
     test_keys_release();

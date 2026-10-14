@@ -292,8 +292,8 @@ Adoption, from the web UI or the CLI:
 5. **Confirm.** A config that changes the address or Wi-Fi network boots *on trial*. It's
    kept once a DNS query reaches the new address; if none arrives within 90 seconds, the node
    homes back to its previous config.
-6. **Pin.** The controller records the node's ID against its address (see
-   [pins](#signed-releases-and-pins)).
+6. **Pin.** The controller records the node's ID against its address, with its node key
+   (see [pins](#signed-releases-and-pins)).
 
 Once two nodes are adopted, give both addresses to your router as the clients' DNS servers.
 
@@ -366,7 +366,9 @@ format is in `firmware/main/release.h`:
   more than 24 hours past its own clock.
 - Pins. Anything answering on a node's address could claim to be it, so the controller
   keeps its own record (`pins/<node-id>.json` in the data directory): each node's ID, pinned
-  to its address at adoption, and the last sequence number signed per kind. It signs only
+  to its address at adoption, the last sequence number signed per kind, and the node key
+  its `/status` gave then, which a config's Wi-Fi password is sealed to
+  ([security.md](security.md#the-wi-fi-password)). It signs only
   for the pinned ID, and nothing for an unpinned address except an *identify* during
   adoption. To pin a replaced board, or a node adopted before pins, from `controller/`:
 
@@ -480,7 +482,7 @@ files, no database. Directories are mode 0700, files 0600.
 | `boards/` | Your own board definitions, saved from Install over USB |
 | `firmware/images/` | Imported chip images, for Install over USB and firmware updates, each with its `provenance/` (the signed `SHA256SUMS`, its signature, the tarball, who signed it) |
 | `firmware/latest` | The newest firmware release's version, as the controller last heard it |
-| `pins/<node-id>.json` | Each node's pinned ID and last signed sequence numbers |
+| `pins/<node-id>.json` | Each node's pinned ID, last signed sequence numbers and node key |
 | `changes/` | Pending changes not yet applied |
 | `log/actions.jsonl` | The action log: every fleet change, by the CLI or the web UI |
 | `log/jobs/` | Each job's record and progress log |

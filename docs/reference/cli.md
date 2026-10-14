@@ -185,7 +185,8 @@ One of `-host` or `-all` is required. Also takes the [fleet flags](#fleet-flags)
 
 ## adopt
 
-Gives an unadopted node its node config and address, and pins its ID to that address. The
+Gives an unadopted node its node config and address, and pins its ID to that address, with
+its node key (a Wi-Fi password is sealed to it: [security.md](../security.md#the-wi-fi-password)). The
 node is found at its current address; a new address is kept only once the node answers
 there.
 
@@ -577,7 +578,9 @@ docker compose run --rm --entrypoint /espdns espdns-controller recover -data /da
 
 Releases are signed only for the node ID pinned to an address, never for the ID a node
 reports. Adoption and `recover` pin nodes; use `pin` for the rest: a node adopted before pins
-existed, or a replacement board at an adopted node's address.
+existed, a replacement board at an adopted node's address, or a node installed again over
+USB, which has a new node key. `pin` also records the node key the node reports, which a
+config's Wi-Fi password is sealed to.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data

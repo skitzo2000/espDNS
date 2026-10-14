@@ -19,7 +19,10 @@
  *                 (or { "address": "dhcp" }, for a network with a DHCP server; without it
  *                  the board's address, else the firmware's. A node with none of them has
  *                  no address: it never asks DHCP on its own)
- *     "wifi": { "ssid": "home", "password": "...", "tx_power_dbm": 11, "power_save": false },
+ *     "wifi": { "ssid": "home", "sealed": "<base64>", "tx_power_dbm": 11, "power_save": false },
+ *                 (sealed: the password, sealed to the node key by the controller (nodekey.h);
+ *                  never "password" in plain text, which is refused. No password: an open
+ *                  network)
  *     "forwarders": [ "9.9.9.9", "1.1.1.1" ],              (0-4; [] turns forwarding off)
  *     "upstream_timeout_ms": 1500,
  *     "forward_zones": [ { "zone": "corp.example", "forwarder": "198.51.100.53" } ],
@@ -163,6 +166,12 @@ typedef struct {
  * config (json NULL: none). False with a reason in err if the node config is malformed or
  * fails a check; c is then the defaults and board only. */
 bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, char *err, size_t errlen);
+
+/* Opens a wifi.sealed blob (n bytes, base64-decoded) into out (cap bytes, NUL-terminated):
+ * NULL, or a reason. The node's (nodekey_node.c) is set once at boot; until one is, a
+ * sealed password is refused. */
+typedef const char *(*cfg_unseal_fn)(const uint8_t *blob, size_t n, char *out, size_t cap);
+void cfg_set_unseal(cfg_unseal_fn fn);
 
 /* True if going from a to b needs a reboot (a setting that can't change live differs). */
 bool cfg_needs_reboot(const cfg_t *a, const cfg_t *b);

@@ -198,7 +198,8 @@ What they can do today:
   source address, which on your LAN means anyone. Set `"querylog": {"client": "subnet"}` or
   `"hidden"` in the node config to store less, or `"enabled": false` to turn it off.
 - Watch controller-to-node traffic. It's plain HTTP: configs, zone bundles and lists
-  can be read in transit, and a Wi-Fi node's config holds its Wi-Fi password.
+  can be read in transit. A Wi-Fi password in a config is sealed to the node's own key
+  ([The Wi-Fi password](#the-wi-fi-password)), so it can't be read.
 - Change forwarded answers on the path. Queries to your forwarders are plain DNS (no DNS
   over TLS), and the node doesn't validate DNSSEC itself.
 - Copy your secondary zones. Your primary allows zone transfers by network, with no
@@ -351,12 +352,35 @@ What to do:
 | Container hardening | Non-root, no capabilities, `no-new-privileges`, read-only root, `noexec` `/tmp`, memory and process limits. |
 | Secrets in, never out | The password, release key and backup passphrase are read from standard input or a file, never from arguments; never logged or shown. |
 
+## The Wi-Fi password
+
+A Wi-Fi node's first Wi-Fi setup is over USB (Improv). After that, a config can change its
+Wi-Fi network, and its password then goes over the network, but never in plain text:
+
+- At its first boot, each Wi-Fi node makes a P-256 key pair, its node key. The private key
+  stays in the node's NVS and is never sent, logged or shown; `/status` reports the public
+  key as `node_key`. A wired-only node (P4) has none: its firmware leaves the code out.
+- When the controller adopts a node, it pins the `node_key` the node reports with its ID
+  (trust on first use, as the ID). `espdns pin` and `espdns recover` record it too.
+- The controller sends a config's password as `wifi.sealed`, sealed to the pinned key and
+  the node's ID: a one-time key, ECDH, HKDF-SHA256 and AES-256-GCM. Only that node can open
+  it. The node keeps it sealed in the signed config and opens it when it reads the config.
+- A node refuses a config release with a plain `wifi.password`.
+- The controller refuses to send a password to a node with no node key pinned (adopt it
+  again; firmware from before the node key needs an update first), or to a node that
+  reports a different key than the pinned one. A node installed again over USB makes a new
+  key: adopt it again, or pin it with `espdns pin`.
+
+The password is still in plain text in the config files on the controller. On the node,
+the private key, and a password set over USB, are in NVS without flash encryption: anyone
+holding the board can read them.
+
 ## What is not protected yet
 
 Known gaps in the 0.0.x alpha:
 
 - Controller-to-node traffic is plain HTTP. Signed, so it can't be changed, but readable
-  on the path, including a Wi-Fi node's password in its config (wired nodes have none).
+  on the path, except a Wi-Fi password, which is sealed to the node's key.
   Signed reads of `/status` and `/querylog` are planned but not built.
 - No DNS over TLS. Nodes speak plain DNS on port 53, to clients and to forwarders.
 - Responses can be larger than queries, and there is no rate limit. A node answers only
@@ -380,7 +404,7 @@ Known gaps in the 0.0.x alpha:
 - Do not expose the nodes to the internet. Keep port 53 and port 80 on your LAN.
 - Put the nodes and the controller on a trusted network segment if you can, since
   controller-to-node traffic is not encrypted.
-- Prefer wired nodes. Then no Wi-Fi password is in any config.
+- Prefer wired nodes. Then no Wi-Fi password is in any config, or on any node.
 - Use `"querylog": {"client": "subnet"}` or `"hidden"` if you don't need full client
   addresses, or turn the query log off.
 - Back up the data directory with `espdns backup`, and store the backup away from the

@@ -97,6 +97,9 @@ func newRollEnv(t *testing.T, n int) *rollEnv {
 		if _, err := pins.Open(e.dir).Pin(fn.ID(), fn.Addr); err != nil { // adopted
 			t.Fatal(err)
 		}
+		if err := pins.Open(e.dir).SetNodeKey(fn.ID(), fn.NodeKey()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: e.addrs}); err != nil {
 		t.Fatal(err)

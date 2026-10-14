@@ -33,11 +33,14 @@ idf_build_get_property(image ESPDNS_IMAGE)
 idf_build_get_property(image_sibling ESPDNS_IMAGE_SIBLING)
 idf_build_get_property(fallback ESPDNS_FALLBACK)
 idf_build_get_property(fallback_json ESPDNS_FALLBACK_JSON)
-# Wi-Fi only on the S3; the P4 is wired only.
+# Wi-Fi only on the S3; the P4 is wired only. The node key (nodekey.h) is for a Wi-Fi
+# password alone: a wired-only image leaves it out.
 idf_build_get_property(target IDF_TARGET)
 set(wifi "")
+set(wifi_srcs "")
 if(target STREQUAL "esp32s3")
-    set(wifi esp_wifi)
+    set(wifi esp_wifi bootloader_support)
+    set(wifi_srcs "nodekey.c" "nodekey_node.c")
 endif()
 # A transitional image carries its catalog board as the fallback definition.
 if(fallback_json)
@@ -46,6 +49,7 @@ if(fallback_json)
 endif()
 
 set(srcs "main.c" "boot.c" "board.c" "board_def.c" "net.c" "improv.c" "server.c" "xfr.c" "forward.c" "registry.c" "ota.c" "release.c" "keys.c" "keys_node.c"
+         ${wifi_srcs}
          "dns_wire.c" "zone.c" "axfr.c" "answer.c" "cache.c" "flight.c" "fwdq.c" "upq.c" "load.c" "blocklist.c" "block.c" "blocking.c"
          "hzone.c" "hosted.c"
          "sd.c" "health.c" "health_node.c" "led.c" "cfg.c" "settings.c" "clock.c" "reboot.c"

@@ -10,7 +10,9 @@
 #include "cJSON.h"
 #include "config.h"
 #include "dns_wire.h"
+#include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
+#include "nodekey.h"
 #include "qlog.h"
 #include "reboot.h"
 
@@ -400,20 +402,40 @@ static void parse_network(ctx_t *c, cfg_t *cf, const cJSON *net)
         set_net(cf, &n, CFG_ADDR_CONFIG);
 }
 
+/* The node's opener for wifi.sealed (cfg_set_unseal), NULL until it is set. */
+static cfg_unseal_fn s_unseal;
+
+void cfg_set_unseal(cfg_unseal_fn fn) { s_unseal = fn; }
+
+static void unseal(ctx_t *c, cfg_t *cf, const char *b64)
+{
+    uint8_t blob[NODEKEY_PUB_LEN + 63 + NODEKEY_TAG_LEN];
+    size_t n = 0;
+    const char *why = mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)b64, strlen(b64))
+                          ? "not base64, or too long"
+                      : !s_unseal ? "this node has no node key"
+                                  : s_unseal(blob, n, cf->wifi_pass, sizeof(cf->wifi_pass));
+    if (why)
+        fail(c, "wifi.sealed: %s", why);
+}
+
 static void parse_wifi(ctx_t *c, cfg_t *cf, const cJSON *w)
 {
-    static const char *const keys[] = { "ssid", "password", "tx_power_dbm", "power_save", NULL };
+    static const char *const keys[] = { "ssid", "sealed", "tx_power_dbm", "power_save", NULL };
+    /* Never in plain text: the controller seals it to this node's key (nodekey.h). */
+    if (member(w, "password"))
+        fail(c, "wifi.password: never in plain text; only sealed to the node key (wifi.sealed)");
     only(c, w, "wifi", keys);
     const char *ssid = string(c, w, "ssid", 1, sizeof(cf->wifi_ssid));
-    const char *pass = string(c, w, "password", 0, sizeof(cf->wifi_pass));
-    if (pass && !ssid)
-        fail(c, "wifi.password: only with wifi.ssid");
-    if (pass && pass[0] && strlen(pass) < 8)
-        fail(c, "wifi.password: at least 8 characters, or empty for an open network");
+    const char *sealed = string(c, w, "sealed", 1, 256);
+    if (sealed && !ssid)
+        fail(c, "wifi.sealed: only with wifi.ssid");
     if (ssid) {
         strcpy(cf->wifi_ssid, ssid);
-        strcpy(cf->wifi_pass, pass ? pass : "");
+        cf->wifi_pass[0] = 0; /* none: an open network */
     }
+    if (sealed && !c->failed)
+        unseal(c, cf, sealed);
     integer(c, w, "tx_power_dbm", 2, 20, &cf->wifi_tx_dbm);
     boolean(c, w, "power_save", &cf->wifi_power_save);
 }

@@ -100,12 +100,19 @@ gives `"dhcp"` to a node on a network in `settings.json` `no_dhcp` (see
 | Key | Meaning | Checks | Applies |
 |-----|---------|--------|---------|
 | `ssid` | The Wi-Fi network's name. Left out: the network saved over USB when the node was set up. | 1 to 32 characters. | reboot |
-| `password` | The Wi-Fi password. `""` for an open network. | Only with `ssid`. 8 to 63 characters, or empty. | reboot |
+| `password` | The Wi-Fi password. `""` for an open network. The controller never sends it as it is: see below. | Only with `ssid`. 8 to 63 characters, or empty. | reboot |
 | `tx_power_dbm` | Transmit power in dBm. Left out: the board's cap, else the chip's default. | 2 to 20. | live |
 | `power_save` | Wi-Fi power saving. | `true` or `false`. Default `false`. | live |
 
 The dashboard never shows the Wi-Fi password unless you ask to reveal it and enter your
 password again.
+
+The password goes to the node sealed to its node key (`/status` `node_key`, pinned when the
+node was adopted): the controller replaces `password` with `"sealed": "<base64>"` in what it
+sends, and an empty one (an open network) with nothing. A node refuses a config with a plain
+`password`, and the controller refuses to send one to a node without a pinned node key, or
+one that reports another key. See [Security, The Wi-Fi
+password](../security.md#the-wi-fi-password).
 
 ### forward_zones
 
@@ -252,8 +259,8 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
   config -data /data -check -file dns-a.json
 ```
 
-It prints `ok` with the size, then the payload the node would get. The payload includes the
-Wi-Fi password, so mind where the output goes.
+It prints `ok` with the size, then the payload. It includes the Wi-Fi password as written
+(a push seals it to the node's key), so mind where the output goes.
 
 Add `-host <address>` to also check it against that node (read only), or
 `-board <catalog board>` to check its memory plan on a catalog board ([cli.md](cli.md#config)).

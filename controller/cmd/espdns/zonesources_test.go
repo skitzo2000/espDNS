@@ -42,6 +42,9 @@ func TestRolloutZoneSourcesAndDrops(t *testing.T) {
 		if _, err := pins.Open(data).Pin(n.ID(), n.Addr); err != nil { // adopted
 			t.Fatal(err)
 		}
+		if err := pins.Open(data).SetNodeKey(n.ID(), n.NodeKey()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	a, b := hosts[0], hosts[1]
 	if err := settings.Save(settings.Path(data), settings.Settings{Nodes: hosts, NoDHCP: []string{"127.0.0.0/8"}}); err != nil {
