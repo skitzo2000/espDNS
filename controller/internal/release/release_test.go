@@ -65,7 +65,7 @@ func TestMatchesPython(t *testing.T) {
 		seq                uint64
 	}{
 		{"V_FW", "V_FW_PAYLOAD", "V_KEY0", Firmware, KeyRelease, node, 1000},
-		{"V_BL", "V_BL_PAYLOAD", "V_KEY1", Blocklist, KeyRecovery, AnyNode, 2000},
+		{"V_BL", "V_BL_PAYLOAD", "V_KEY1", Blocklist, KeyRecovery, node, 2000},
 		{"V_CFG", "V_CFG_PAYLOAD", "V_KEY0", Config, KeyRelease, node, 3000},
 	} {
 		m, err := Manifest(c.kind, c.keyID, c.target, "test-board", c.seq, v[c.payload])
@@ -95,7 +95,8 @@ func testKey(t *testing.T) *ecdsa.PrivateKey {
 func TestSignAndLoad(t *testing.T) {
 	k := testKey(t)
 	payload := []byte("ESPDNSBL and the rest")
-	h, err := Header(k, Overrides, KeyRelease, AnyNode, "esp32p4-rev1", 42, payload)
+	node, _ := ParseMAC("30:ed:a0:00:00:01")
+	h, err := Header(k, Overrides, KeyRelease, node, "esp32p4-rev1", 42, payload)
 	if err != nil || len(h) != HeaderLen {
 		t.Fatal(len(h), err)
 	}
@@ -113,7 +114,7 @@ func TestSignAndLoad(t *testing.T) {
 	if h[8] != 5 || string(h[16:28]) != "esp32p4-rev1" || binary.LittleEndian.Uint64(h[32:]) != 42 {
 		t.Errorf("manifest fields: %x", h[:48])
 	}
-	if _, err := Manifest(Blocklist, 0, AnyNode, "a-name-too-long-for-it", 1, nil); err == nil {
+	if _, err := Manifest(Blocklist, 0, node, "a-name-too-long-for-it", 1, nil); err == nil {
 		t.Error("long image name accepted")
 	}
 

@@ -36,7 +36,6 @@ import keyspart  # noqa: E402
 MAGIC = b"ESPDNS1\0"
 KINDS = {"firmware": 1, "config": 2, "zones": 3, "blocklist": 4, "overrides": 5, "control": 6, "keys": 7}
 KEY_RELEASE, KEY_RECOVERY = 0, 1
-ANY_NODE = b"\xff" * 6
 MANIFEST_LEN, SIG_LEN = 128, 64
 
 
@@ -157,8 +156,6 @@ def _mac(b):
 
 def keys_prepare(a):
     node = parse_mac(a.node)
-    if node == ANY_NODE:
-        raise ValueError("a keys release is for one node: give its node ID, not ff:ff:ff:ff:ff:ff")
     rel, rec = keyspart.load_key(a.release), keyspart.load_key(a.recovery)
     payload = keys_payload(rel, rec, a.keep_retired)
     seq = a.seq if a.seq is not None else next_seq(a.last_seq)
@@ -193,8 +190,6 @@ def keys_sign(a):
     seq, plen = struct.unpack_from("<QQ", m, 32)
     if m[8] != KINDS["keys"] or m[9] != KEY_RECOVERY:
         raise ValueError("manifest.bin is not a KEYS release for the recovery key")
-    if target == ANY_NODE:
-        raise ValueError("manifest.bin is addressed to any node: a keys release is for one node")
     if plen != len(payload) or hashlib.sha256(payload).digest() != m[48:80]:
         raise ValueError("payload.bin does not match the manifest")
     rel, rec, keep = parse_keys_payload(payload)

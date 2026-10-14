@@ -27,7 +27,7 @@ Rules for every request:
 - `/querylog`, `/zone`, `/ota` and `/release` answer `403` unless the client's
   address is in a private IPv4 range (RFC 1918) or the shared address space (RFC 6598).
 - `/ota` and `/release` take only releases signed with a key the node
-  trusts, bound to the node's ID. Send them with the controller or the [espdns CLI](cli.md),
+  trusts, addressed to the node's own ID. Send them with the controller or the [espdns CLI](cli.md),
   never by hand. How they're signed and checked:
   [Architecture](../architecture.md#signed-releases-and-pins). A node with no keys (setup
   mode, health reason `no keys`) answers both `403` *this node has no keys: install it with
@@ -35,20 +35,22 @@ Rules for every request:
 
 ### Release kinds
 
-| Kind | Name | Endpoint | Signed with | Target |
-|---|---|---|---|---|
-| 1 | firmware | `/ota` | release key | this node, or any node |
-| 2 | config | `/release` | release key | this node only |
-| 3 | zones | `/release` | release key | this node, or any node |
-| 4 | blocklist | `/release` | release key | this node, or any node |
-| 5 | overrides | `/release` | release key | this node, or any node |
-| 6 | control | `/release` | release key | this node, or any node |
-| 7 | keys | `/release` | recovery key only | this node only |
+| Kind | Name | Endpoint | Signed with |
+|---|---|---|---|
+| 1 | firmware | `/ota` | release key |
+| 2 | config | `/release` | release key |
+| 3 | zones | `/release` | release key |
+| 4 | blocklist | `/release` | release key |
+| 5 | overrides | `/release` | release key |
+| 6 | control | `/release` | release key |
+| 7 | keys | `/release` | recovery key only |
+
+Every kind names one node by its ID. A release for any other ID is refused.
 
 A KEYS release (kind 7) rewrites the keys the node trusts ([Security, Key
 rotation](../security.md#key-rotation)).
 
-- Refused `403`: one signed with the release key, addressed to any node, or with a seq not
+- Refused `403`: one signed with the release key, or with a seq not
   above the last KEYS one; and any KEYS release on a node whose keys aren't from its keys
   partition (`keys_source` other than `partition` or `seeded`).
 - Payload, 138 bytes: `EDKR`, version 1, flags (bit 0: keep the old release key as the

@@ -838,8 +838,6 @@ const char *cfg_slot_check(const uint8_t hdr[REL_HEADER_LEN], const uint8_t *pay
         return why;
     if (m->kind != REL_CONFIG)
         return "not a config release";
-    if (memcmp(m->target, t->node_id, 6) != 0)
-        return "a config is for one node, not any node"; /* its address would be every node's */
     if (m->payload_len == 0 || m->payload_len > avail)
         return "payload length out of range";
     uint8_t sha[32];

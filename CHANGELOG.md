@@ -115,6 +115,10 @@ Update the controller as usual, then install each node from it with **Install ov
   releases: `make key-restore`, `secrets/ota.key` and `tools/ota_push.py --legacy-key`.
   `make ota` now refuses such a node; install it over USB.
 
+- Releases for any node: a node no longer takes a release addressed to
+  `ff:ff:ff:ff:ff:ff`. Every release must name the node's own ID, whatever its kind.
+  Nothing signed such a release.
+
 ## [0.0.2] - 2026-10-11
 
 ### Added

@@ -58,7 +58,7 @@ Over the network, a node's keys change only through a KEYS release (`/release`, 
 
 - It must be signed with the node's current recovery key. One signed with the release
   key is refused, however valid its signature.
-- It must name this node by its ID (never "any node"), its chip image, and a sequence
+- It must name this node by its ID, its chip image, and a sequence
   number above the last KEYS release it took, so it can't be replayed or sent to another
   node.
 - It carries a new release key and a new recovery key (either may stay the same). The node
@@ -366,8 +366,6 @@ Known gaps in the 0.0.x alpha:
 - No flash encryption, secure boot or anti-rollback on the boards.
 - Zone transfers are not authenticated (no TSIG). Your primary allows the nodes by
   network.
-- A release may target "any node". The controller signs for one node each time, but a
-  node accepts an any-node release for every kind except config.
 - Off-path spoofing of forwarder and SOA replies is limited by the random ID and source
   port. More hardening is planned.
 - A compromise rotation needs the controller's copies of what each node stores, and

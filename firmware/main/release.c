@@ -8,7 +8,6 @@
 #include "mbedtls/sha256.h"
 
 static const uint8_t MAGIC[8] = "ESPDNS1";
-static const uint8_t ANY_NODE[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 static uint64_t rd64le(const uint8_t *p)
 {
@@ -74,7 +73,7 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
     m->payload_len = rd64le(hdr + 40);
     memcpy(m->sha256, hdr + 48, 32);
 
-    if (memcmp(m->target, t->node_id, 6) != 0 && memcmp(m->target, ANY_NODE, 6) != 0)
+    if (memcmp(m->target, t->node_id, 6) != 0)
         return "release is for another node";
     if (strcmp(m->board, t->board) != 0 && !(t->board_alt && strcmp(m->board, t->board_alt) == 0) &&
         !(t->sibling && strcmp(m->board, t->sibling) == 0))
@@ -86,14 +85,12 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
     return NULL;
 }
 
-const char *rel_keys_check(const rel_manifest_t *m, const rel_trust_t *t)
+const char *rel_keys_check(const rel_manifest_t *m)
 {
     if (m->kind != REL_KEYS)
         return "not a keys release";
     if (m->key_id != 1)
         return "a keys release must be signed with the recovery key";
-    if (memcmp(m->target, t->node_id, 6) != 0)
-        return "a keys release is for one node, not any node";
     return NULL;
 }
 

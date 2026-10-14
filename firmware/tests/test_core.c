@@ -3215,11 +3215,15 @@ static void test_release(void)
     other.sibling = "test-boar";
     CHECK(rel_verify(V_FW, &other, 0, UINT64_MAX, &m) != NULL);
 
-    /* recovery key, addressed to any node, so it also passes on another node */
+    /* recovery key, for this node alone */
     CHECK(rel_verify(V_BL, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_BLOCKLIST && m.key_id == 1);
     other = t;
     other.node_id[0] = 0x02;
-    CHECK(rel_verify(V_BL, &other, 0, UINT64_MAX, &m) == NULL);
+    why = rel_verify(V_BL, &other, 0, UINT64_MAX, &m);
+    CHECK(why && strstr(why, "another node"));
+    /* a release for ff:ff:ff:ff:ff:ff is for no node: refused */
+    why = rel_verify(V_BCAST, &t, 0, UINT64_MAX, &m);
+    CHECK(why && strstr(why, "another node"));
     /* ... but not when that key slot is empty, or the wrong key is in it */
     other = t;
     other.keys[1] = NULL;
@@ -5739,16 +5743,12 @@ static void test_keys_release(void)
 
     /* signed with the recovery key for this node: taken */
     CHECK(rel_verify(V_KEYS, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_KEYS && m.key_id == 1);
-    CHECK(rel_keys_check(&m, &t) == NULL && m.payload_len == KEYS_REL_LEN && m.seq == 4000);
+    CHECK(rel_keys_check(&m) == NULL && m.payload_len == KEYS_REL_LEN && m.seq == 4000);
     CHECK(strcmp(rel_kind_name(REL_KEYS), "keys") == 0 && REL_KEYS == 7);
     /* with the release key: a valid signature, but never for KEYS */
     CHECK(rel_verify(V_KEYS_REL0, &t, 0, UINT64_MAX, &m) == NULL && m.key_id == 0);
-    why = rel_keys_check(&m, &t);
+    why = rel_keys_check(&m);
     CHECK(why && strstr(why, "recovery key"));
-    /* addressed to any node: refused */
-    CHECK(rel_verify(V_KEYS_ANY, &t, 0, UINT64_MAX, &m) == NULL);
-    why = rel_keys_check(&m, &t);
-    CHECK(why && strstr(why, "one node"));
     /* another node, another chip image */
     rel_trust_t other = t;
     other.node_id[5] ^= 1;
@@ -5764,7 +5764,7 @@ static void test_keys_release(void)
     CHECK(rel_verify(V_KEYS, &t, 3999, UINT64_MAX, &m) == NULL);
     /* not a KEYS release */
     CHECK(rel_verify(V_FW, &t, 0, UINT64_MAX, &m) == NULL);
-    CHECK(rel_keys_check(&m, &t) != NULL);
+    CHECK(rel_keys_check(&m) != NULL);
 
     /* the payload: the bytes tools/release.py made, and every malformed one refused */
     keys_rel_t r, r2;

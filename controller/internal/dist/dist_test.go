@@ -263,7 +263,7 @@ func TestSignVerify(t *testing.T) {
 // a manifest never makes a release verify.
 func TestManifestSignatureIsNotASumsSignature(t *testing.T) {
 	k := testKey(t)
-	h, err := release.Header(k, release.Firmware, release.KeyRelease, release.AnyNode, "esp32s3-octal", 1, []byte("x"))
+	h, err := release.Header(k, release.Firmware, release.KeyRelease, [6]byte{0x30, 0xed, 0xa0, 0, 0, 1}, "esp32s3-octal", 1, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
