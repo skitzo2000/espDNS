@@ -109,6 +109,12 @@ Update the controller as usual, then install each node from it with **Install ov
   signature is still checked first, and other imported chip images stay as they are. The
   `fetch-release` job takes `"images"`, and `release fetch` takes `-image`.
 
+### Removed
+
+- The old HMAC key for firmware updates, used only by nodes on firmware from before signed
+  releases: `make key-restore`, `secrets/ota.key` and `tools/ota_push.py --legacy-key`.
+  `make ota` now refuses such a node; install it over USB.
+
 ## [0.0.2] - 2026-10-11
 
 ### Added

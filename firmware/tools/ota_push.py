@@ -1,9 +1,7 @@
 """Push a firmware build to a node over the network and confirm it took over.
 
 Sends a signed firmware release (main/release.h): a manifest naming this node, the board
-and a new seq, signed with secrets/release.pem, followed by the image. A node still on
-pre-manifest firmware (no "keys" in /status) gets the image signed the old way, with
-HMAC-SHA256(secrets/ota.key); that is the one-time migration.
+and a new seq, signed with secrets/release.pem, followed by the image.
 
 Three steps, each its own process (and, from the Makefile, its own container), so the key
 is read only by the one that needs no network:
@@ -29,7 +27,6 @@ can get anything but this build signed, or choose the key.
 """
 import argparse
 import hashlib
-import hmac
 import ipaddress
 import json
 import os
@@ -189,24 +186,21 @@ def prepare(a):
             "image_sha256": hashlib.sha256(image).hexdigest(), "elf_sha256": new["elf_sha256"],
             "zone": a.zone, "trial": a.trial}
     if "keys" not in cur:
-        print("board runs pre-manifest firmware: this push is signed with the legacy HMAC key")
-        plan["legacy"] = True
+        sys.exit("node runs firmware without signed releases: install it over USB")
+    # The name the node checks: its chip image; or, on firmware from before board
+    # definitions, the board it was built for (only a transitional image for that board fits).
+    if "image" in cur:
+        if cur["image"] != a.image_name and SIBLINGS.get(cur["image"]) != a.image_name:
+            sys.exit(f"node runs chip image {cur['image']}, this is {a.image_name}")
+        if cur["image"] != a.image_name:
+            print(f"node runs chip image {cur['image']}: moving it to its sibling {a.image_name}")
+        name = cur["image"]
     else:
-        # The name the node checks: its chip image; or, on firmware from before board
-        # definitions, the board it was built for (only a transitional image for that board fits).
-        if "image" in cur:
-            if cur["image"] != a.image_name and SIBLINGS.get(cur["image"]) != a.image_name:
-                sys.exit(f"node runs chip image {cur['image']}, this is {a.image_name}")
-            if cur["image"] != a.image_name:
-                print(f"node runs chip image {cur['image']}: moving it to its sibling {a.image_name}")
-            name = cur["image"]
-        else:
-            if cur.get("board") != a.board:
-                sys.exit(f"node runs firmware from before board definitions, built for board "
-                         f"{cur.get('board')}: push a transitional image for it (BOARD={cur.get('board')})")
-            name = a.board
-        plan.update(legacy=False, keys=cur["keys"], node_id=cur["node_id"], name=name,
-                    last_seq=cur["seq"]["firmware"])
+        if cur.get("board") != a.board:
+            sys.exit(f"node runs firmware from before board definitions, built for board "
+                     f"{cur.get('board')}: push a transitional image for it (BOARD={cur.get('board')})")
+        name = a.board
+    plan.update(keys=cur["keys"], node_id=cur["node_id"], name=name, last_seq=cur["seq"]["firmware"])
     write(a.dir, PLAN, json.dumps(plan, indent=2).encode())
 
 
@@ -220,32 +214,27 @@ def sign(a):
     if hashlib.sha256(image).hexdigest() != plan["image_sha256"]:
         sys.exit(f"{a.image} changed since it was checked against the node: push again")
     headers = {"Content-Type": "application/octet-stream"}
-    if plan["legacy"]:
-        key = read(a.legacy_key)
-        headers["X-OTA-HMAC"] = hmac.new(key, image, hashlib.sha256).hexdigest()
-        body = image
-    else:
-        # The name the node checks is the chip image this was built as or its sibling, or, on
-        # firmware from before board definitions, the board it was built for: nothing else
-        if plan["name"] not in (a.image_name, SIBLINGS.get(a.image_name), a.board or a.image_name):
-            sys.exit(f"the plan names {plan['name']!r}, and this is chip image {a.image_name}"
-                     f"{f' for board {a.board}' if a.board else ''}: push again")
-        key_id = release.KEY_RECOVERY if a.recovery else release.KEY_RELEASE
-        pem = a.key or ("secrets/recovery.pem" if a.recovery else "secrets/release.pem")
-        keys = plan["keys"]
-        trusted = keys[key_id] if isinstance(keys, list) and len(keys) > key_id else None
-        priv = release.load_private(pem)
-        fp = release.fingerprint(release.public_raw(priv))
-        if trusted != fp:
-            sys.exit(f"{pem} (fingerprint {fp}) is not the key this board trusts in slot {key_id} "
-                     f"({trusted})")
-        try:
-            seq = release.next_seq(plan["last_seq"])
-        except ValueError as e:
-            sys.exit(f"refused: {e}")
-        body = release.header(priv, "firmware", key_id, release.parse_mac(plan["node_id"]), plan["name"],
-                              seq, image) + image
-        print(f"release: firmware seq {seq} for node {plan['node_id']}, {plan['name']}, key {fp}")
+    # The name the node checks is the chip image this was built as or its sibling, or, on
+    # firmware from before board definitions, the board it was built for: nothing else
+    if plan["name"] not in (a.image_name, SIBLINGS.get(a.image_name), a.board or a.image_name):
+        sys.exit(f"the plan names {plan['name']!r}, and this is chip image {a.image_name}"
+                 f"{f' for board {a.board}' if a.board else ''}: push again")
+    key_id = release.KEY_RECOVERY if a.recovery else release.KEY_RELEASE
+    pem = a.key or ("secrets/recovery.pem" if a.recovery else "secrets/release.pem")
+    keys = plan["keys"]
+    trusted = keys[key_id] if isinstance(keys, list) and len(keys) > key_id else None
+    priv = release.load_private(pem)
+    fp = release.fingerprint(release.public_raw(priv))
+    if trusted != fp:
+        sys.exit(f"{pem} (fingerprint {fp}) is not the key this board trusts in slot {key_id} "
+                 f"({trusted})")
+    try:
+        seq = release.next_seq(plan["last_seq"])
+    except ValueError as e:
+        sys.exit(f"refused: {e}")
+    body = release.header(priv, "firmware", key_id, release.parse_mac(plan["node_id"]), plan["name"],
+                          seq, image) + image
+    print(f"release: firmware seq {seq} for node {plan['node_id']}, {plan['name']}, key {fp}")
     write(a.dir, RELEASE, body)
     write(a.dir, HEADERS, json.dumps(headers).encode())
 
@@ -324,8 +313,6 @@ def main(argv=None):
                    help="sign with the offline recovery key (secrets/recovery.pem, key slot 1)")
     s.add_argument("--key", help="signing key (default secrets/release.pem, or secrets/recovery.pem "
                    "with --recovery)")
-    s.add_argument("--legacy-key", default="secrets/ota.key",
-                   help="HMAC key, only for a node still on pre-manifest firmware")
     u = steps.add_parser("push", help="upload the signed release and wait for it (network, no key)")
     u.add_argument("--wait", type=float, default=150, help="seconds to wait for the node to confirm it")
     for q in (p, s, u):

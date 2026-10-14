@@ -6,7 +6,6 @@ has the cryptography package.
 """
 import contextlib
 import hashlib
-import hmac
 import http.server
 import io
 import json
@@ -332,20 +331,11 @@ class OtaPushTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(last)):
                 release.next_seq(last, now)
 
-    def test_legacy_node_gets_the_hmac(self):
+    def test_a_node_without_keys_is_refused(self):
         self.node = Node(keys=None)
-        legacy = os.path.join(self.tmp.name, "ota.key")
-        with open(legacy, "wb") as f:
-            f.write(b"k" * 32)
-        self.assertIsNone(self.prepare()[0])
-        with no_network():
-            self.assertIsNone(self.sign("--legacy-key", legacy)[0])
-        err, out = run("push", "--dir", self.dir, "--wait", "10")
-        self.assertIsNone(err, out)
-        headers, body = self.node.uploads[0]
-        image = read(self.image)
-        self.assertEqual(body, image)
-        self.assertEqual(headers["x-ota-hmac"], hmac.new(b"k" * 32, image, hashlib.sha256).hexdigest())
+        err, _ = self.prepare()
+        self.assertIn("install it over USB", err)
+        self.assertEqual(self.sign("--key", self.pem)[1].strip(), "nothing to sign")
 
 
 if __name__ == "__main__":
