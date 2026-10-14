@@ -180,7 +180,7 @@ IDF    = idf.py -B $(BUILD) -DIMAGE=$(IMAGE) -DBOARD=$(BOARD) -DBOARDS_DIR=$(BOA
 FETCHED = build/.components-$(TARGET)
 DEVICE = --device $(PORT) --group-add $(shell stat -c %g $(PORT) 2>/dev/null || echo 0)
 
-.PHONY: need-host build components FORCE images export-images boards print-address print-idf-image factory flash ota status boottime keys key-restore release-key-restore enclosure monitor log menuconfig clean test bench-board bench-board-run bench-ota
+.PHONY: need-host build components FORCE images export-images boards print-address print-idf-image factory flash ota status boottime keys release-key-restore enclosure monitor log menuconfig clean test bench-board bench-board-run bench-ota
 
 need-host:
 	$(need_host)
@@ -282,15 +282,6 @@ release-key-restore:
 	mkdir -p secrets && chmod 700 secrets
 	$(call SECRET_RUN,ESPDNS_RELEASE_KEY) sh -c 'umask 077; printf %s "$$ESPDNS_RELEASE_KEY" | base64 -d > secrets/release.pem'
 	@head -1 secrets/release.pem | grep -q "BEGIN PRIVATE KEY" && echo "restored secrets/release.pem"
-
-# Legacy HMAC key, needed only to push the first signed-release build to a node still
-# running pre-manifest firmware (ota_push.py detects this). Recovered from $DNS2_OTA_KEY
-# (base64 of the key).
-key-restore:
-	@test ! -e secrets/ota.key || { echo "secrets/ota.key already exists"; exit 1; }
-	mkdir -p secrets && chmod 700 secrets
-	$(call SECRET_RUN,DNS2_OTA_KEY) sh -c 'umask 077; printf %s "$$DNS2_OTA_KEY" | base64 -d > secrets/ota.key'
-	@test "$$(stat -c %s secrets/ota.key)" = 32 && echo "restored secrets/ota.key"
 
 # The fleet lock (controller/internal/fleetlock): ota and bench-ota push to a node, so they
 # hold it as the controller's fleet-* targets and jobs do, and refuse to run while one of

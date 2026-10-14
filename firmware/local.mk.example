@@ -30,7 +30,7 @@ STATIC_GATEWAY      ?= 192.0.2.1
 # The text on the 3D-printed case's lid (make enclosure)
 #CASE_LABEL         ?= dns1 · 192.0.2.53
 
-# A password manager's command for make release-key-restore and key-restore, as
-# controller/local.mk.example has it: $(1) the variable names (ESPDNS_RELEASE_KEY,
-# DNS2_OTA_KEY). Empty: export them.
+# A password manager's command for make release-key-restore, as
+# controller/local.mk.example has it: $(1) the variable name (ESPDNS_RELEASE_KEY).
+# Empty: export it.
 #SECRET_RUN          = /path/to/secrets-tool exec $(1) --
