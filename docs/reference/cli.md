@@ -630,7 +630,7 @@ A release's files. See [releasing.md](../releasing.md) for the whole process.
 | `release sign` | Signs `SHA256SUMS` with a release key, read from standard input. Only the key that matches `-pub` is taken. |
 | `release verify` | Checks the signature with `-pub`, and every file against `SHA256SUMS`. |
 | `release import` | Takes a release signed by the project's key (`-pub`) or by the controller's own release key, and refuses any other; checks every file, then puts the release's chip images in `<data>/firmware/images`, each with its provenance, where the dashboard finds them. It says who signed it. |
-| `release fetch` | Downloads a published release's `SHA256SUMS` and its signature (GitHub, or a mirror), checks the signature with the project's key alone, then downloads only the chip images needed, checks each, and imports them as `release import` does. Needed: the ones named with `-image`, else the boards' images of the nodes in `settings.json` (each node's `/status` read now). If a node doesn't answer, it can't tell what that node needs, so it says so and gets the chip images already imported too. Other imported chip images stay as they are. With nothing needed, it says so and fetches nothing. The dashboard's Get firmware runs the same. |
+| `release fetch` | Downloads a published release's `SHA256SUMS` and its signature from GitHub, checks the signature with the project's key alone, then downloads only the chip images needed, checks each, and imports them as `release import` does. Needed: the ones named with `-image`, else the boards' images of the nodes in `settings.json` (each node's `/status` read now). If a node doesn't answer, it can't tell what that node needs, so it says so and gets the chip images already imported too. Other imported chip images stay as they are. With nothing needed, it says so and fetches nothing. The dashboard's Get firmware runs the same. |
 
 ```sh
 docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
@@ -657,7 +657,7 @@ provenance (your own export, or `firmware/builds/`) is your own build, sent as i
 | `-pub` | sign, verify (required); import, fetch | The public key of the key that signs the release, raw (65 bytes). For import and fetch: the project's, default `/keys/project.pub`; the controller's own release key is taken too by import, never by fetch. |
 | `-data` | import, fetch (required) | The data directory. |
 | `-version` | fetch | The firmware release: its version, `0.0.2`, or its tag, `firmware-v0.0.3` (`v0.0.2` and older: both parts together). Default: the newest published. |
-| `-url` | fetch | The repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
+| `-url` | fetch | The GitHub repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
 | `-image` | fetch | A chip image to get, `esp32s3-eth`. Comma-separated or repeat. Default: the ones needed (above). |
 | `-catalog` | fetch | The board catalog, for each node's board's chip image. Default `/catalog`. |
 

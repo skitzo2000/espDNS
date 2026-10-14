@@ -277,10 +277,9 @@ func TestUserComposeScript(t *testing.T) {
 	if out, err := script(t, t.TempDir(), nil, "user-compose.sh", "compose.yaml", ref); err == nil || !strings.Contains(out, "found 0") {
 		t.Errorf("compose.yaml, no placeholder: %v %q", err, out)
 	}
-	for _, wf := range []string{"../.github/workflows/release-controller.yml"} {
-		if w := read(t, wf); !strings.Contains(w, "scripts/release/user-compose.sh controller/compose.user.yaml") ||
-			!strings.Contains(w, "sha256sum compose.yaml \"$ref\" > SHA256SUMS") {
-			t.Errorf("%s: the release doesn't carry compose.yaml", wf)
-		}
+	wf := "../.github/workflows/release-controller.yml"
+	if w := read(t, wf); !strings.Contains(w, "scripts/release/user-compose.sh controller/compose.user.yaml") ||
+		!strings.Contains(w, "sha256sum compose.yaml \"$ref\" > SHA256SUMS") {
+		t.Errorf("%s: the release doesn't carry compose.yaml", wf)
 	}
 }

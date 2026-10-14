@@ -112,7 +112,7 @@ The browser's setup steps, from the command line:
 
   It gets the chip images your nodes need; `-image esp32p4-rev1` gets one you name.
 
-  For a mirror on another forge, use `-url`, or `"release_url"` in
+  For another GitHub repository (a fork's), use `-url`, or `"release_url"` in
   `settings.json` for the pages ([Settings](reference/settings.md)). Either way, only a
   release the project's key signed is taken.
 

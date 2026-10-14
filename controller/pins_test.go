@@ -59,7 +59,7 @@ func TestDockerfileImagesPinned(t *testing.T) {
 	}
 }
 
-// Every workflow: CI on every push, the release on a version tag.
+// Every workflow (.github/workflows/): CI on every push, the release on a version tag.
 func TestWorkflowPinned(t *testing.T) {
 	files, err := filepath.Glob("../.github/workflows/*.yml")
 	if err != nil || len(files) < 2 {

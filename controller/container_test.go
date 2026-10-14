@@ -143,10 +143,8 @@ func TestPublicKeysInImage(t *testing.T) {
 	if b, err := os.ReadFile("../keys/project.pub"); err != nil || len(b) != 65 || b[0] != 4 {
 		t.Errorf("keys/project.pub: not a raw P-256 public key (%v)", err)
 	}
-	for _, wf := range []string{"../.github/workflows/release-controller.yml"} {
-		if w := read(t, wf); !strings.Contains(w, "--build-context keys=keys ") || strings.Contains(w, "firmware/keys") {
-			t.Errorf("%s: the controller image isn't built with --build-context keys=keys", wf)
-		}
+	if w := read(t, "../.github/workflows/release-controller.yml"); !strings.Contains(w, "--build-context keys=keys ") || strings.Contains(w, "firmware/keys") {
+		t.Error(".github/workflows/release-controller.yml: the controller image isn't built with --build-context keys=keys")
 	}
 }
 

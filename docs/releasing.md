@@ -179,9 +179,8 @@ you signed yourself) or **your build** (no release behind it).
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.2
   ```
 
-  For a mirror of the repository on another forge, add
-  `-url https://git.example.com/<owner>/espdns`, or set
-  `"release_url"` in `settings.json` for the pages. A release you downloaded yourself is
+  For another GitHub repository (a fork's), add `-url https://github.com/<owner>/espdns`,
+  or set `"release_url"` in `settings.json` for the pages. A release you downloaded yourself is
   imported like this, after the same checks as `release verify`:
 
   ```sh

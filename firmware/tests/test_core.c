@@ -645,7 +645,7 @@ static void test_flights(void)
     sem_destroy(&t2.sem);
 }
 
-/* The caps (test 1): a group holds at most half the slots and half the parked
+/* The caps: a group holds at most half the slots and half the parked
  * queries, the forward zones together half as well, so a dead forwarder can't take the
  * table: past them, FULL (SERVFAIL at once). */
 static void test_flight_caps(void)
@@ -814,7 +814,7 @@ static void test_flight_counts(void)
 #undef OPEN
 }
 
-/* The budget expiring (test 6): at the flight's deadline it ends as failed, every
+/* The budget expiring: at the flight's deadline it ends as failed, every
  * waiter with it: the parked ones handed back for SERVFAIL, the TCP ones woken with none. */
 static void test_flight_expiry(void)
 {
@@ -877,7 +877,7 @@ static void test_flight_expiry(void)
     sem_destroy(&t.sem);
 }
 
-/* A TCP waiter giving up races cleanly with its flight ending (test 7): exactly
+/* A TCP waiter giving up races cleanly with its flight ending: exactly
  * one of them happens, and the table never touches the waiter after either. Each waiter is
  * on the heap and freed the moment its query is done with, so a late copy or wake into it is
  * a use after free under ASan. */
@@ -1557,7 +1557,7 @@ static void obs_reset(void)
     pthread_mutex_unlock(&s_obs.m);
 }
 
-/* Test 2: an answer completes its flight, to every query waiting on it. */
+/* An answer completes its flight, to every query waiting on it. */
 static void test_fwdq_complete(void)
 {
     fake_fwd_t up;
@@ -1610,7 +1610,7 @@ static void test_fwdq_complete(void)
     fake_fwd_stop(&up);
 }
 
-/* Test 3: from a forwarder that doesn't answer to one that does, within the budget;
+/* From a forwarder that doesn't answer to one that does, within the budget;
  * and a forwarder that doesn't answer holds up no other query. */
 static void test_fwdq_failover(void)
 {
@@ -1679,7 +1679,7 @@ static void test_fwdq_failover(void)
     fake_fwd_stop(&down2);
 }
 
-/* Test 4: a truncated answer is asked again over TCP, one at a time into the TCP
+/* A truncated answer is asked again over TCP, one at a time into the TCP
  * buffer, which a big answer holds until its slot is given back. */
 static void test_fwdq_tcp(void)
 {
@@ -1780,7 +1780,7 @@ static void test_fwdq_tcp_queue_budget(void)
     fake_fwd_stop(&quick);
 }
 
-/* Test 5: strays (from another port, or with another ID) neither end a try nor
+/* Strays (from another port, or with another ID) neither end a try nor
  * restart its wait. */
 static void test_fwdq_strays(void)
 {
@@ -1831,7 +1831,7 @@ static void test_fwdq_alive(void)
     fqh_stop(h);
 }
 
-/* Test 8: 200 queries for names a silent forwarder is asked, among 1,000 answered
+/* 200 queries for names a silent forwarder is asked, among 1,000 answered
  * from the cache, on four workers as server.c runs them: the cached ones are answered with no
  * wait, the silent ones past their group's half of the table SERVFAIL at once (shed), and
  * those asked fail by their budget. */
@@ -2195,7 +2195,7 @@ static bool cached(cache_t *c, const char *name)
     return cache_get(c, qn, ql, DNS_T_A, DNS_C_IN, false, 1000, out, sizeof(out), &n, &age);
 }
 
-/* Part 3: a flight's answer reaches every query waiting on it, the one that opened
+/* A flight's answer reaches every query waiting on it, the one that opened
  * it too; it is cached once (as its CNAMEs allow), counted once for the forwarders' health,
  * and a worker is woken once for any number of flights finished meanwhile. */
 static void test_upq(void)
@@ -2329,7 +2329,7 @@ static void test_upq(void)
     fake_fwd_stop(&down);
 }
 
-/* Part 3: the node's UDP path on four worker threads as server.c runs them (one
+/* The node's UDP path on four worker threads as server.c runs them (one
  * queue of received queries, a NULL on it to take the finished flights), with every forwarder
  * silent. The cached queries keep being answered at once while the uncached ones wait on
  * their flights off the workers: no worker ever waits on a forwarder. Each uncached query is
@@ -5572,7 +5572,7 @@ static void test_keys(void)
 }
 
 /* What a node does with its keys at boot (keys_decide), with and without a seed: a
- * key-neutral build falls back on nothing (setup mode); a seed build seeds them. */
+ * key-neutral build falls back on nothing (setup mode); a seed build falls back on its seed. */
 static void test_keys_decide(void)
 {
     static const struct {

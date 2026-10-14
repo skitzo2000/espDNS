@@ -214,7 +214,7 @@ static void test_exists_matches_scan(void)
     zone_free(z);
 }
 
-/* ---- A nonexistent long name costs O(labels x log n), not O(labels x n) ---- */
+/* ---- a nonexistent long name costs O(labels x log n), not O(labels x n) ---- */
 
 static zone_t *big_zone(int records)
 {
@@ -303,7 +303,7 @@ static void test_long_names_bounded(void)
     zone_free(large);
 }
 
-/* ---- A zone's memory limit ---- */
+/* ---- a zone's memory limit ---- */
 
 static void test_zone_limit(void)
 {

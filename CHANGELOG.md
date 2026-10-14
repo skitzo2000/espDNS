@@ -43,6 +43,11 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Changed
 
+- `release_url` (and `-release-url`, `espdns release fetch -url`) takes `https` only: an
+  `http` URL is refused. Releases were checked with the project's key anyway; https keeps
+  what is fetched, or held back, from the network between.
+- Releases come from GitHub only: `release_url` is a GitHub repository (a fork's, or one on
+  a GitHub Enterprise server).
 - Two versions: the firmware and the controller each have their own, in
   `firmware/VERSION` and `controller/VERSION` (the root `VERSION` is gone), and are
   released on their own tags: `firmware-v<version>` builds the chip images,
@@ -204,7 +209,7 @@ version may change anything. Write each change under Unreleased as it merges;
 - `espdns release fetch [-version v0.0.3] [-url <forge>]` and **Get firmware** (Install over
   USB, for a board whose chip image isn't there yet, and the account panel's Firmware): the
   newest published release's chip images, `SHA256SUMS` and its signature downloaded from
-  GitHub (or a mirror: `-url`, `settings.json`'s `release_url`, the
+  GitHub (or a copy elsewhere: `-url`, `settings.json`'s `release_url`, the
   controller's `-release-url`), checked with the project's key and imported, as a job. The
   pages label each chip image "project release v…", "your build v…" or "your build"
   (`GET /api/firmware`; the Update panel too).

@@ -101,14 +101,18 @@ func TestReleaseImportSigners(t *testing.T) {
 }
 
 // release fetch downloads the chip images named (-image) of a published release (here from
-// a test forge), checks them with the project's key, and imports them; with
+// a test forge, a GitHub Enterprise server's paths), checks them with the project's key, and imports them; with
 // none named, those settings.json's nodes need (by their /status), with those imported when
 // one doesn't answer; none, and nothing is fetched.
 func TestReleaseFetch(t *testing.T) {
 	projPEM, projPub := releaseKey(t)
 	out := signedBuild(t, "0.0.4", projPEM, projPub)
-	srv := httptest.NewServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.4/", http.FileServer(http.Dir(out))))
+	srv := httptest.NewTLSServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.4/", http.FileServer(http.Dir(out))))
 	defer srv.Close()
+	// The release URL is https only: the default transport trusts the test forge's certificate
+	old := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	defer func() { http.DefaultTransport = old }()
 	data := t.TempDir()
 	fetch := func(more ...string) (string, error) {
 		return runRelease(t, "", append([]string{"fetch", "-data", data, "-pub", projPub, "-url", srv.URL + "/owner/espdns",

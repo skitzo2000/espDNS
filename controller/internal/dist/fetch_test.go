@@ -16,7 +16,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
-// forge is a test forge (the /api/v1 API and download paths) serving releases from directories
+// forge is a test forge (a GitHub Enterprise server's API and download paths) serving releases from directories
 // by tag, for owner/espdns; it records what was asked for.
 type forge struct {
 	*httptest.Server
@@ -28,11 +28,11 @@ type forge struct {
 
 func newForge(t *testing.T) *forge {
 	f := &forge{rels: map[string]string{}}
-	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.got = append(f.got, r.URL.Path)
 		f.mu.Unlock()
-		if r.URL.Path == "/api/v1/repos/owner/espdns/releases" {
+		if r.URL.Path == "/api/v3/repos/owner/espdns/releases" {
 			json.NewEncoder(w).Encode(f.list)
 			return
 		}
@@ -66,7 +66,7 @@ func TestFetch(t *testing.T) {
 	work := t.TempDir()
 	images := filepath.Join(work, "images")
 	var log []string
-	imp, err := Fetch(context.Background(), FetchOptions{Forge: f.URL + "/owner/espdns", ProjectPub: pub, Images: catalogImages,
+	imp, err := Fetch(context.Background(), FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", ProjectPub: pub, Images: catalogImages,
 		Logf: func(s string, a ...any) { log = append(log, s) }}, work, images)
 	if err != nil || imp.Signer.Who != SignerProject || imp.Signer.Version != "0.0.4" || len(imp.Images) != len(catalogImages) ||
 		imp.Signer.From != f.URL+"/owner/espdns/releases/tag/v0.0.4" {
@@ -89,7 +89,7 @@ func TestFetch(t *testing.T) {
 	}
 	// A version asked for, with or without its v
 	for _, v := range []string{"v0.0.4", "0.0.4"} {
-		if _, err := Fetch(context.Background(), FetchOptions{Forge: f.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
+		if _, err := Fetch(context.Background(), FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
 			filepath.Join(t.TempDir(), "images")); err != nil {
 			t.Errorf("%s: %v", v, err)
 		}
@@ -98,17 +98,17 @@ func TestFetch(t *testing.T) {
 	g := newForge(t)
 	g.rels["firmware-v0.0.4"] = dir
 	g.list = []map[string]any{{"tag_name": "controller-v0.0.5"}, {"tag_name": "firmware-v0.0.4"}, {"tag_name": "v0.0.2"}}
-	if tag, err := Latest(context.Background(), http.DefaultClient, g.URL+"/owner/espdns"); err != nil || tag != "firmware-v0.0.4" {
+	if tag, err := Latest(context.Background(), g.Client(), g.URL+"/owner/espdns"); err != nil || tag != "firmware-v0.0.4" {
 		t.Errorf("latest %q %v", tag, err)
 	}
 	for _, v := range []string{"", "firmware-v0.0.4", "0.0.4"} {
-		imp, err := Fetch(context.Background(), FetchOptions{Forge: g.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
+		imp, err := Fetch(context.Background(), FetchOptions{Client: g.Client(), Forge: g.URL + "/owner/espdns", Version: v, ProjectPub: pub, Images: []string{"esp32p4"}}, work,
 			filepath.Join(t.TempDir(), "images"))
 		if err != nil || imp.Signer.Version != "0.0.4" || imp.Signer.From != g.URL+"/owner/espdns/releases/tag/firmware-v0.0.4" {
 			t.Errorf("%q: %+v %v", v, imp, err)
 		}
 	}
-	if _, err := Fetch(context.Background(), FetchOptions{Forge: g.URL + "/owner/espdns", Version: "0.0.3", ProjectPub: pub, Images: []string{"esp32p4"}}, work,
+	if _, err := Fetch(context.Background(), FetchOptions{Client: g.Client(), Forge: g.URL + "/owner/espdns", Version: "0.0.3", ProjectPub: pub, Images: []string{"esp32p4"}}, work,
 		filepath.Join(t.TempDir(), "images")); err == nil || !strings.Contains(err.Error(), "no published firmware release 0.0.3") {
 		t.Errorf("0.0.3: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestFetchRefuses(t *testing.T) {
 	f.rels["v0.0.4"] = dir
 	work := t.TempDir()
 	images := filepath.Join(work, "images")
-	opts := FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: project, Images: catalogImages}
+	opts := FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: project, Images: catalogImages}
 	if _, err := Fetch(context.Background(), opts, work, images); err == nil || !strings.Contains(err.Error(), "not the project's release key") {
 		t.Fatalf("another key's release: %v", err)
 	}
@@ -163,14 +163,14 @@ func TestFetchRefuses(t *testing.T) {
 		o    FetchOptions
 		want string
 	}{
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v9.9.9", ProjectPub: pub, Images: catalogImages}, "404"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", ProjectPub: pub, Images: catalogImages}, "no published release"},
-		{FetchOptions{Forge: f.URL + "/owner", ProjectPub: pub, Images: catalogImages}, "not a repository"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "v9.9.9", ProjectPub: pub, Images: catalogImages}, "404"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", ProjectPub: pub, Images: catalogImages}, "no published release"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner", ProjectPub: pub, Images: catalogImages}, "not a repository"},
 		{FetchOptions{Forge: "ftp://example.com/a/b", ProjectPub: pub, Images: catalogImages}, "not a repository"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "latest", ProjectPub: pub, Images: catalogImages}, "not vMAJOR"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Images: catalogImages}, "no project public key"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}, "no chip images asked for"},
-		{FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub, Images: []string{"../x"}}, "not one of the chip images"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "latest", ProjectPub: pub, Images: catalogImages}, "not vMAJOR"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Images: catalogImages}, "no project public key"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}, "no chip images asked for"},
+		{FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub, Images: []string{"../x"}}, "not one of the chip images"},
 	} {
 		if _, err := Fetch(context.Background(), c.o, work, images); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
@@ -188,7 +188,7 @@ func TestFetchOnly(t *testing.T) {
 	f.rels["v0.0.4"] = dir
 	work := t.TempDir()
 	images := filepath.Join(work, "images")
-	opts := FetchOptions{Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}
+	opts := FetchOptions{Client: f.Client(), Forge: f.URL + "/owner/espdns", Version: "v0.0.4", ProjectPub: pub}
 
 	// Two chip images first, from a full fetch of them
 	opts.Images = []string{"esp32p4-rev1", "esp32p4"}
@@ -277,7 +277,7 @@ func TestFetchOnly(t *testing.T) {
 	}
 }
 
-// The forge's URLs: GitHub's API, else /api/v1; downloads the same everywhere.
+// The forge's URLs: api.github.com, else a GitHub Enterprise server's /api/v3; downloads the same.
 func TestForgeURLs(t *testing.T) {
 	g, err := ParseForge(DefaultForge)
 	if err != nil || g.api() != "https://api.github.com/repos/skitzo2000/espdns/releases?per_page=30" ||
@@ -285,10 +285,10 @@ func TestForgeURLs(t *testing.T) {
 		t.Errorf("%+v %v %s", g, err, g.api())
 	}
 	m, err := ParseForge("https://git.example.com/owner/espdns.git/")
-	if err != nil || m.api() != "https://git.example.com/api/v1/repos/owner/espdns/releases?limit=30" || m.Base != "https://git.example.com/owner/espdns" {
+	if err != nil || m.api() != "https://git.example.com/api/v3/repos/owner/espdns/releases?per_page=30" || m.Base != "https://git.example.com/owner/espdns" {
 		t.Errorf("%+v %v", m, err)
 	}
-	for _, bad := range []string{"https://example.com/a", "https://example.com/a/b/c", "https://user@example.com/a/b", "file:///a/b", "https://example.com/a/b?x=1"} {
+	for _, bad := range []string{"https://example.com/a", "https://example.com/a/b/c", "https://user@example.com/a/b", "file:///a/b", "https://example.com/a/b?x=1", "http://example.com/a/b"} {
 		if _, err := ParseForge(bad); err == nil {
 			t.Errorf("%s taken", bad)
 		}

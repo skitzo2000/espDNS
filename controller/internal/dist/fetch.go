@@ -22,9 +22,9 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/secfile"
 )
 
-// DefaultForge is where the project's releases are published: its GitHub repository. A
-// mirror on another forge works the same way: settings.json's "release_url", or espdns
-// release fetch -url.
+// DefaultForge is where the project's releases are published: its GitHub repository.
+// Another (a fork's, or one on a GitHub Enterprise server) is settings.json's
+// "release_url", or espdns release fetch -url.
 const DefaultForge = "https://github.com/skitzo2000/espdns"
 
 // FetchOptions say which release Fetch gets, from where.
@@ -41,40 +41,39 @@ type FetchOptions struct {
 	Logf   func(string, ...any) // progress; nil: none
 }
 
-// Forge is a repository on GitHub or another forge, from its page's URL.
+// Forge is a GitHub repository (github.com, or a GitHub Enterprise server), from its page's URL.
 type Forge struct {
 	Base        string // https://<host>/<owner>/<repo>
 	host, owner string
 	repo        string
-	scheme      string
 }
 
 var forgeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 
-// ParseForge reads a repository's URL: http or https, a host, and /<owner>/<repo>.
+// ParseForge reads a repository's URL: https, a host, and /<owner>/<repo>.
 func ParseForge(s string) (Forge, error) {
 	u, err := url.Parse(strings.TrimSuffix(strings.TrimSpace(s), "/"))
 	if err != nil {
 		return Forge{}, fmt.Errorf("release URL %q: %v", s, err)
 	}
 	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
 		len(parts) != 2 || !forgeName.MatchString(parts[0]) || !forgeName.MatchString(parts[1]) {
 		return Forge{}, fmt.Errorf("release URL %q: not a repository's page, https://<host>/<owner>/<repo>", s)
 	}
 	repo := strings.TrimSuffix(parts[1], ".git")
-	return Forge{Base: u.Scheme + "://" + u.Host + "/" + parts[0] + "/" + repo, host: u.Host, owner: parts[0], repo: repo, scheme: u.Scheme}, nil
+	return Forge{Base: "https://" + u.Host + "/" + parts[0] + "/" + repo, host: u.Host, owner: parts[0], repo: repo}, nil
 }
 
-// api is the forge's releases API: GitHub's, else the /api/v1 one.
+// api is the forge's releases API: api.github.com, else the server's own (/api/v3).
 func (f Forge) api() string {
 	if strings.EqualFold(f.host, "github.com") {
 		return "https://api.github.com/repos/" + f.owner + "/" + f.repo + "/releases?per_page=30"
 	}
-	return f.scheme + "://" + f.host + "/api/v1/repos/" + f.owner + "/" + f.repo + "/releases?limit=30"
+	return "https://" + f.host + "/api/v3/repos/" + f.owner + "/" + f.repo + "/releases?per_page=30"
 }
 
-// Download is a release file's URL, the same on GitHub and the other forges.
+// Download is a release file's URL, the same on github.com and a GitHub Enterprise server.
 func (f Forge) Download(tag, file string) string {
 	return f.Base + "/releases/download/" + url.PathEscape(tag) + "/" + url.PathEscape(file)
 }

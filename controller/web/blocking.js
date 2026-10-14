@@ -150,8 +150,7 @@ function addListBox(box, primary) {
     open = false;
     box.replaceChildren(button);
   }
-  // A click elsewhere closes the box, or, with something typed in it, only its list:
-  // the list would otherwise stay over the page.
+  // A click elsewhere closes the box, or, with something typed in it, only its list: the list would otherwise stay over the page.
   document.addEventListener("mousedown", e => {
     if (!open || box.contains(e.target) || document.querySelector(".drawer")) return;
     if (!input.value.trim()) close();

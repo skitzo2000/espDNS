@@ -468,3 +468,17 @@ func TestInternalSources(t *testing.T) {
 		}
 	}
 }
+
+// release_url: https only.
+func TestReleaseURL(t *testing.T) {
+	for body, ok := range map[string]bool{
+		`{"release_url": "https://git.example.com/owner/espdns"}`: true,
+		`{"release_url": "http://git.example.com/owner/espdns"}`:  false,
+		`{"release_url": "https://git.example.com/owner"}`:        false,
+	} {
+		var fe *FieldError
+		if _, err := Parse([]byte(body)); ok != (err == nil) || (!ok && (!errors.As(err, &fe) || fe.Field != "release_url")) {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+}

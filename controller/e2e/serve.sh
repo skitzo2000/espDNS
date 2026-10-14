@@ -4,7 +4,8 @@
 # data directory is removed when Playwright stops it. No nodes: none listed, mDNS not browsed
 # (-browse-mdns=false) nor by a check (-check-mdns 0), so nothing is sent anywhere. Get
 # firmware fetches from a stand-in forge on 127.0.0.1:$E2E_FORGE_PORT (fakeforge: a release
-# signed by a throwaway key, the controller's -project-pub), never the project's.
+# signed by a throwaway key, the controller's -project-pub; over TLS, its certificate the
+# controller's SSL_CERT_FILE), never the project's.
 set -eu
 cd "$(dirname "$0")/.."
 work=$(mktemp -d)
@@ -23,9 +24,10 @@ CGO_ENABLED=0 go build -o "$work/fakeforge" ./e2e/fakeforge
 mkdir -m 0700 "$work/data"
 printf '%s\n' "$E2E_PASSWORD" | "$work/espdns" passwd -data "$work/data" -user "$E2E_USER" >/dev/null
 forge=127.0.0.1:${E2E_FORGE_PORT:-$((E2E_PORT + 1))}
-"$work/fakeforge" -listen "$forge" -pub "$work/project.pub" -dir "$work/release" &
+"$work/fakeforge" -listen "$forge" -pub "$work/project.pub" -dir "$work/release" -cert "$work/forge.pem" &
 fpid=$!
-"$work/espdns-controller" -data "$work/data" -catalog ../boards -listen "127.0.0.1:$E2E_PORT" -browse-mdns=false -check-mdns 0 \
-	-project-pub "$work/project.pub" -release-url "http://$forge/owner/espdns" &
+while [ ! -s "$work/forge.pem" ]; do kill -0 "$fpid"; sleep 0.1; done
+SSL_CERT_FILE="$work/forge.pem" "$work/espdns-controller" -data "$work/data" -catalog ../boards -listen "127.0.0.1:$E2E_PORT" -browse-mdns=false -check-mdns 0 \
+	-project-pub "$work/project.pub" -release-url "https://$forge/owner/espdns" &
 pid=$!
 wait "$pid"

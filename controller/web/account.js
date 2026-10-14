@@ -42,7 +42,7 @@ function row(title, val, ...body) {
   return h("details", { class: "ex" }, h("summary", {}, h("b", {}, title), val), h("div", { class: "exb" }, ...body));
 }
 
-// when is a time as the GUI says it: "Today 14:32", "Yesterday 18:19", "3 Oct 15:18".
+// when is a time in words: "Today 14:32", "Yesterday 18:19", "3 Oct 15:18".
 export function when(t, now = new Date()) {
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return "";

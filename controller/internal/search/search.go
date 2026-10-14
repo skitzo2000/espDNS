@@ -98,7 +98,7 @@ type Result struct {
 	// Where it lives in the GUI: its page, its key there (a node's ID or address, a zone's
 	// name, a record's owner, a client's address, a site's or a list's name, a change's ID)
 	// and the GUI's address for it (a node's or a zone's own page, #node-<key> and
-	// #zone-<name> as the GUI names them; else its page with a filter or a choice).
+	// #zone-<name>; else its page with a filter or a choice).
 	Page string `json:"page"`
 	Key  string `json:"key"`
 	Link string `json:"link"`
@@ -194,8 +194,7 @@ func link(page, param, value string) string {
 	return "#" + page + "?" + param + "=" + url.QueryEscape(value)
 }
 
-// item is the GUI's address of a node's or a zone's own page, as the GUI names them
-// (#node-<key>, #zone-<name>).
+// item is the GUI's address of a node's or a zone's own page (#node-<key>, #zone-<name>).
 func item(what, key string) string { return "#" + what + "-" + url.PathEscape(key) }
 
 // search is one search in progress.

@@ -34,8 +34,8 @@ import (
 // controller's image) or by your own (the controller's, in -data), refusing any other, and
 // every file, then puts the release's chip images in the data directory (firmware/images),
 // each with its provenance, where the builder and the Nodes page's updates find them. fetch
-// downloads chip images of a published release (from GitHub, or a mirror: -url, else
-// settings.json's "release_url"), checked with the project's key alone, and imports them:
+// downloads chip images of a published release (from its GitHub repository, or another: -url,
+// else settings.json's "release_url"), checked with the project's key alone, and imports them:
 // those named with -image, else those settings.json's nodes need (rolling.NeededImages).
 func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) < 1 {
@@ -135,7 +135,7 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 		fl.StringVar(&dir, "dir", "", "the release's files, with its SHA256SUMS and SHA256SUMS.sig (required)")
 	} else {
 		fl.StringVar(&ver, "version", "", "the firmware release, 0.0.3 or its tag firmware-v0.0.3 (default: the newest published)")
-		fl.StringVar(&forge, "url", "", "the repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
+		fl.StringVar(&forge, "url", "", "the GitHub repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
 		fl.Var(&imgs, "image", "a chip image to get, esp32s3-eth (comma-separated or repeat; default: those settings.json's nodes need)")
 		fl.StringVar(&catalog, "catalog", defaultCatalog, "the board catalog: the chip image each node's board runs")
 	}

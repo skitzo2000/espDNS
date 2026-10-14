@@ -35,7 +35,7 @@ func TestFetchReleaseJob(t *testing.T) {
 	if err := disttest.Release(rel, "0.0.9", k); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.9/", http.FileServer(http.Dir(rel))))
+	srv := httptest.NewTLSServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.9/", http.FileServer(http.Dir(rel))))
 	defer srv.Close()
 	proj := filepath.Join(t.TempDir(), "project.pub")
 	old := rolling.ProjectPub
@@ -44,7 +44,7 @@ func TestFetchReleaseJob(t *testing.T) {
 
 	dir := t.TempDir()
 	var listed []nodes.Node
-	fk := fetchKind{dataDir: dir, forge: srv.URL + "/owner/espdns", catalog: "../../../boards", nodes: func() []nodes.Node { return listed }}
+	fk := fetchKind{dataDir: dir, forge: srv.URL + "/owner/espdns", client: srv.Client(), catalog: "../../../boards", nodes: func() []nodes.Node { return listed }}
 	r := jobs.New(dir, map[string]jobs.Kind{"fetch-release": fk.kind})
 	r.Logf = t.Logf
 	runJobs(t, r)
@@ -152,8 +152,8 @@ func TestNewRelease(t *testing.T) {
 	tags := `[]`
 	mux := http.NewServeMux()
 	mux.Handle("/owner/espdns/releases/download/v0.0.9/", http.StripPrefix("/owner/espdns/releases/download/v0.0.9/", http.FileServer(http.Dir(rel))))
-	mux.HandleFunc("/api/v1/repos/owner/espdns/releases", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(tags)) })
-	srv := httptest.NewServer(mux)
+	mux.HandleFunc("/api/v3/repos/owner/espdns/releases", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(tags)) })
+	srv := httptest.NewTLSServer(mux)
 	defer srv.Close()
 	proj := filepath.Join(t.TempDir(), "project.pub")
 	os.WriteFile(proj, release.PublicRaw(k), 0o644)
@@ -165,7 +165,7 @@ func TestNewRelease(t *testing.T) {
 	images := filepath.Join(dir, "firmware", "images")
 	os.MkdirAll(filepath.Join(images, "esp32p4-rev1"), 0o755)
 	os.WriteFile(filepath.Join(images, "esp32p4-rev1", "image.json"), []byte(`{"image": "esp32p4-rev1", "version": "1"}`), 0o644)
-	fk := fetchKind{dataDir: dir, forge: srv.URL + "/owner/espdns"}
+	fk := fetchKind{dataDir: dir, forge: srv.URL + "/owner/espdns", client: srv.Client()}
 	check := func() []string {
 		var lines []string
 		newRelease(context.Background(), fk, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) })

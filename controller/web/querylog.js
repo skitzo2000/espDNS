@@ -28,8 +28,7 @@ const st = {
 };
 
 // ---- the filters, kept in the page's address ---------------------------------------------
-// A search result links here as ?name= or ?client= (or #query-log?client=, as the GUI
-// names the page): a name goes in the box, an address is that device.
+// A search result links here as ?name= or ?client= (or #query-log?client=): a name goes in the box, an address is that device.
 {
   const hash = location.hash.includes("?") ? location.hash.slice(location.hash.indexOf("?") + 1) : "";
   for (const p of [new URLSearchParams(location.search), new URLSearchParams(hash)]) {
