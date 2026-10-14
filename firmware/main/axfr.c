@@ -81,12 +81,12 @@ bool axfr_soa_serial(uint32_t primary, uint16_t port, const uint8_t *apex, int a
                 break;
             dns_hdr_t h;
             size_t pos = DNS_HDR_LEN;
-            uint8_t qn[DNS_MAX_NAME];
-            int ql;
+            uint8_t name[DNS_MAX_NAME];
+            int nl;
             if (from.sin_addr.s_addr != primary || from.sin_port != htons(port) || !dns_hdr_parse(r, (size_t)n, &h) ||
                 h.id != rd16(q) || !(h.flags & DNS_F_QR) || h.qd != 1 ||
-                (ql = dns_name_read(r, (size_t)n, &pos, qn)) < 0 || pos + 4 > (size_t)n ||
-                !dns_name_eq(qn, ql, apex, apex_len) || rd16(r + pos) != DNS_T_SOA || rd16(r + pos + 2) != DNS_C_IN)
+                (nl = dns_name_read(r, (size_t)n, &pos, name)) < 0 || pos + 4 > (size_t)n ||
+                !dns_name_eq(name, nl, apex, apex_len) || rd16(r + pos) != DNS_T_SOA || rd16(r + pos + 2) != DNS_C_IN)
                 continue; /* stray, or another question: keep waiting, as long as the check has left */
             if (!(h.flags & DNS_F_AA) || DNS_RCODE(h.flags) != DNS_R_NOERROR)
                 break;

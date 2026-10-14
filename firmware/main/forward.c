@@ -177,7 +177,8 @@ static uint8_t cased(uint8_t c, uint32_t caps, int *k)
 }
 
 /* resp answers q as u asked it: its ID, a response, one question, the type and class asked
- * and the name in the very case sent (0x20). 1: it does; -1: all but the name's case; 0: not. */
+ * and the name in the very case sent (0x20; any case once caps is 0). 1: it does; -1: all
+ * but the name's case; 0: not. */
 static int matches(const uint8_t *resp, size_t rlen, const fwd_up_t *u, const fwd_q_t *q)
 {
     if (rlen < DNS_HDR_LEN || rd16(resp) != u->id || !(rd16(resp + 2) & DNS_F_QR) || rd16(resp + 4) != 1)
@@ -188,7 +189,7 @@ static int matches(const uint8_t *resp, size_t rlen, const fwd_up_t *u, const fw
     if (n < 0 || pos + 4 > rlen || !dns_name_eq(name, n, q->qname, q->qlen) || rd16(resp + pos) != q->qtype ||
         rd16(resp + pos + 2) != q->qclass)
         return 0;
-    for (int i = 0, k = 0; i < n; i++)
+    for (int i = 0, k = 0; u->caps && i < n; i++)
         if (name[i] != cased(q->qname[i], u->caps, &k))
             return -1;
     return 1;
@@ -307,9 +308,10 @@ int fwd_up_recv(fwd_up_t *u, const fwd_q_t *q, uint8_t *buf, size_t cap)
         if (from.sin_addr.s_addr != srv || from.sin_port != htons(DNS2_FWD_PORT))
             continue; /* stray or spoofed: dropped, the try's wait goes on */
         int m = matches(buf, (size_t)r, u, q);
-        if (m < 0 && u->caps) {
+        if (m < 0) {
             /* Only the case differs: a server that doesn't keep it, or a forger. Asked once
-             * more, as is, within the try (Unbound's fallback), from buf: the reply is dropped. */
+             * more, as is, within the try (Unbound's fallback), from buf: the reply is dropped,
+             * and the next answer may name it in any case. */
             u->caps = 0;
             size_t n = build(u, q, buf, cap);
             if (n)

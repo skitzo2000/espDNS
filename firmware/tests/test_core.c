@@ -1080,7 +1080,6 @@ typedef enum {
     FAKE_WRONG_ID,  /* answers from the right address and port, with another ID */
     FAKE_RECORD,    /* answers with an A record (192.0.2.1, TTL 300): an answer to cache */
     FAKE_LOWER,     /* answers with the question in lowercase: a server that doesn't keep case */
-    FAKE_UPPER,     /* answers with the question in capitals: a forger that can't see the case */
 } fake_fwd_mode_t;
 
 typedef struct {
@@ -1160,8 +1159,8 @@ static void *fake_fwd_run(void *p)
             bool cap = false;
             for (size_t i = DNS_HDR_LEN; i < (size_t)n && m[i]; i++) {
                 cap |= isupper(m[i]) != 0;
-                if (f->mode == FAKE_LOWER || f->mode == FAKE_UPPER)
-                    m[i] = (uint8_t)(f->mode == FAKE_UPPER ? toupper(m[i]) : tolower(m[i]));
+                if (f->mode == FAKE_LOWER)
+                    m[i] = (uint8_t)tolower(m[i]);
             }
             if (cap)
                 __atomic_add_fetch(&f->cased, 1, __ATOMIC_RELAXED);
@@ -1987,24 +1986,27 @@ static void test_fwd_random_port(void)
 }
 
 /* 0x20: each upstream query's name in random letter case, and only an answer naming it in
- * that very case is taken. One off only in case is asked once more as is (a server that
- * doesn't keep case); a forger's, never right, is no answer. */
+ * that very case is taken. One off only in case (a server that doesn't keep case, or a
+ * forger) is no answer: the name is asked once more as is, and that answer taken in any case. */
 static void test_fwd_0x20(void)
 {
-    fake_fwd_t ok, low, up;
+    fake_fwd_t ok, low;
     fake_fwd_start(&ok, FAKE_ANSWER, 41);
     fake_fwd_start(&low, FAKE_LOWER, 42);
-    fake_fwd_start(&up, FAKE_UPPER, 43);
     srandom(4242);
     uint32_t ms;
     for (int i = 0; i < 8; i++)
         CHECK(ask_up(&ok.addr, 1, 300, &ms) > 0);
     CHECK(cnt(&ok.queries) == 8 && cnt(&ok.cased) == 8);
     CHECK(ask_up(&low.addr, 1, 300, &ms) > 0 && cnt(&low.queries) == 2 && cnt(&low.cased) == 1);
-    CHECK(ask_up(&up.addr, 1, 100, &ms) == -1 && cnt(&up.queries) == 3 && cnt(&up.cased) == 1);
+    /* Asked in capitals by its client (a resolver that uses 0x20 itself): the second answer,
+     * in lowercase, is taken all the same. */
+    uint8_t cn[256], ca[1232];
+    int cl = N("POPULAR.Example.ORG", cn);
+    CHECK(fwd_query(&low.addr, 1, cn, cl, DNS_T_A, DNS_C_IN, false, ca, sizeof(ca), 300) > 0 &&
+          cnt(&low.queries) == 4);
     fake_fwd_stop(&ok);
     fake_fwd_stop(&low);
-    fake_fwd_stop(&up);
 
     /* The client's answer names its question in its own case, whatever case upstream's. */
     uint8_t m[512], qb[512], out[512], name[DNS_MAX_NAME];
