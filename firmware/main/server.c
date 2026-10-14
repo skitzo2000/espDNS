@@ -39,7 +39,8 @@ static const char *TAG = "server";
 
 /* Sizes and counts are the dns service's share of the memory plan (memplan.h). */
 #define UDP_MAX_QUERY 1500
-/* A TCP client has TCP_FIRST_MS for its first message to begin, TCP_MSG_MS for each message,
+/* Once a worker takes a TCP connection (not at accept: it may wait in the queue first), its
+ * client has TCP_FIRST_MS for its first message to begin, TCP_MSG_MS for each message,
  * from its first byte, and TCP_IDLE_MS to take each reply; between messages it may idle
  * TCP_IDLE_MS, but not while another connection waits for a worker (RFC 7766 §6.2.3), which
  * an idle one looks for every TCP_POLL_MS. One client holds at most TCP_PER_CLIENT of the workers and places in the queue. */

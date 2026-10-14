@@ -175,10 +175,12 @@ Counters since boot: `total`, `udp`, `tcp`, `auth` (answered authoritatively, fr
 answered), `refused_source` (dropped unanswered, or the TCP connection closed: not from a
 private address nor one in the config's [`allow`](node-config.md#allow); not counted in
 `total`, `udp` or `tcp`), `tcp_closed` (TCP connections the node closed: no query within
-2 s of connecting or idle 10 s (either sooner while other connections wait), a query not all
-there within 3 s of its first byte, a reply not taken within 10 s, or one client holding its
-share of the connections). `servfail` counts a forwarder's SERVFAIL passed on too, and
-`refused` a refused NOTIFY (counted in `notifies` as well).
+2 s or idle 10 s (either sooner while other connections wait), a query not all there within
+3 s of its first byte, a reply not taken within 10 s, or one client holding its share, 3 of
+the 6 places). The node has 2 TCP workers and a queue of 4; these times start when a worker
+takes the connection, so a connection that waited in the queue may be held longer.
+`servfail` counts a forwarder's SERVFAIL passed on too, and `refused` a refused NOTIFY
+(counted in `notifies` as well).
 
 ### net
 
