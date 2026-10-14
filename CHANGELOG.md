@@ -11,6 +11,10 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+**Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.
+Update the controller as usual, then install each node from it with **Install over USB**
+(**+ Add node**, on Nodes).
+
 ### Added
 
 - Nodes answer DNS only from private addresses: UDP and TCP port 53 take queries from

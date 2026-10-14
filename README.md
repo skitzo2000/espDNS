@@ -10,6 +10,8 @@ controller, run with Docker Compose, sets them up and keeps them updated.
 
 > **Status: alpha (0.0.x).** It runs a real network today, but anything may change between
 > versions. Read the [changelog](CHANGELOG.md) before you update.
+>
+> 0.0.3 is a breaking change: nodes on 0.0.1 or 0.0.2 must be installed again over USB.
 
 ## Features
 
