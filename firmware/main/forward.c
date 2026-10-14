@@ -177,9 +177,10 @@ static uint8_t cased(uint8_t c, uint32_t caps, int *k)
 }
 
 /* resp answers q as u asked it: its ID, a response, one question, the type and class asked
- * and the name in the very case sent (0x20; any case once caps is 0). 1: it does; -1: all
- * but the name's case; 0: not. */
-static int matches(const uint8_t *resp, size_t rlen, const fwd_up_t *u, const fwd_q_t *q)
+ * and the name in the very case sent (0x20; any case once caps is 0). 1: it does, and its
+ * question is put back in q's own case, so the names that point at it (CNAME targets, an
+ * SOA's) don't carry the case asked in; -1: all but the name's case; 0: not. */
+static int matches(uint8_t *resp, size_t rlen, const fwd_up_t *u, const fwd_q_t *q)
 {
     if (rlen < DNS_HDR_LEN || rd16(resp) != u->id || !(rd16(resp + 2) & DNS_F_QR) || rd16(resp + 4) != 1)
         return 0;
@@ -192,6 +193,8 @@ static int matches(const uint8_t *resp, size_t rlen, const fwd_up_t *u, const fw
     for (int i = 0, k = 0; u->caps && i < n; i++)
         if (name[i] != cased(q->qname[i], u->caps, &k))
             return -1;
+    if (pos == DNS_HDR_LEN + (size_t)q->qlen)
+        memcpy(resp + DNS_HDR_LEN, q->qname, (size_t)q->qlen);
     return 1;
 }
 

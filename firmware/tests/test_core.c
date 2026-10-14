@@ -1998,6 +1998,12 @@ static void test_fwd_0x20(void)
     for (int i = 0; i < 8; i++)
         CHECK(ask_up(&ok.addr, 1, 300, &ms) > 0);
     CHECK(cnt(&ok.queries) == 8 && cnt(&ok.cased) == 8);
+    /* The answer taken names its question as asked, not in the case sent upstream: names
+     * compressed against it (a CNAME's target) keep their own case. */
+    uint8_t pn[256], pa[1232];
+    int pl = N("popular.example.org", pn);
+    CHECK(fwd_query(&ok.addr, 1, pn, pl, DNS_T_A, DNS_C_IN, false, pa, sizeof(pa), 300) > 0 &&
+          memcmp(pa + DNS_HDR_LEN, pn, (size_t)pl) == 0);
     CHECK(ask_up(&low.addr, 1, 300, &ms) > 0 && cnt(&low.queries) == 2 && cnt(&low.cased) == 1);
     /* Asked in capitals by its client (a resolver that uses 0x20 itself): the second answer,
      * in lowercase, is taken all the same. */
