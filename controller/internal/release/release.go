@@ -66,9 +66,6 @@ const (
 	KeyRecovery = 1
 )
 
-// AnyNode as a target: the release applies on every node.
-var AnyNode = [6]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-
 // ParseMAC reads a node ID as /status gives it ("30:ed:a0:00:00:01").
 func ParseMAC(s string) ([6]byte, error) {
 	var m [6]byte

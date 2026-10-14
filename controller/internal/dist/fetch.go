@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,69 +22,84 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/secfile"
 )
 
-// DefaultForge is where the project's releases are published: its GitHub repository. A
-// mirror on another forge works the same way: settings.json's "release_url", or espdns
-// release fetch -url.
+// DefaultForge is where the project's releases are published: its GitHub repository.
+// Another (a fork's, or one on a GitHub Enterprise server) is settings.json's
+// "release_url", or espdns release fetch -url.
 const DefaultForge = "https://github.com/skitzo2000/espdns"
 
 // FetchOptions say which release Fetch gets, from where.
 type FetchOptions struct {
 	Forge   string // the repository's page, https://<host>/<owner>/<repo> ("": DefaultForge)
-	Version string // "0.0.3" or "v0.0.3"; "": the newest published one
+	Version string // a tag (firmware-v0.0.3, or v0.0.2 from before), or a version alone (0.0.3: the firmware release the forge lists for it); "": the newest firmware release
 	// ProjectPub is the project's release public key (keys/project.pub): the only key a
 	// fetched release is taken with.
 	ProjectPub []byte
-	Client     *http.Client         // nil: one with a timeout
-	Logf       func(string, ...any) // progress; nil: none
+	// Images are the chip images to get (esp32s3-eth), at least one: only their tarballs
+	// are downloaded and imported, and the other chip images here stay as they are.
+	Images []string
+	Client *http.Client         // nil: one with a timeout
+	Logf   func(string, ...any) // progress; nil: none
 }
 
-// Forge is a repository on GitHub or another forge, from its page's URL.
+// Forge is a GitHub repository (github.com, or a GitHub Enterprise server), from its page's URL.
 type Forge struct {
 	Base        string // https://<host>/<owner>/<repo>
 	host, owner string
 	repo        string
-	scheme      string
 }
 
 var forgeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 
-// ParseForge reads a repository's URL: http or https, a host, and /<owner>/<repo>.
+// ParseForge reads a repository's URL: https, a host, and /<owner>/<repo>.
 func ParseForge(s string) (Forge, error) {
 	u, err := url.Parse(strings.TrimSuffix(strings.TrimSpace(s), "/"))
 	if err != nil {
 		return Forge{}, fmt.Errorf("release URL %q: %v", s, err)
 	}
 	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+	if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
 		len(parts) != 2 || !forgeName.MatchString(parts[0]) || !forgeName.MatchString(parts[1]) {
 		return Forge{}, fmt.Errorf("release URL %q: not a repository's page, https://<host>/<owner>/<repo>", s)
 	}
 	repo := strings.TrimSuffix(parts[1], ".git")
-	return Forge{Base: u.Scheme + "://" + u.Host + "/" + parts[0] + "/" + repo, host: u.Host, owner: parts[0], repo: repo, scheme: u.Scheme}, nil
+	return Forge{Base: "https://" + u.Host + "/" + parts[0] + "/" + repo, host: u.Host, owner: parts[0], repo: repo}, nil
 }
 
-// api is the forge's releases API: GitHub's, else the /api/v1 one.
+// api is the forge's releases API: api.github.com, else the server's own (/api/v3).
 func (f Forge) api() string {
 	if strings.EqualFold(f.host, "github.com") {
 		return "https://api.github.com/repos/" + f.owner + "/" + f.repo + "/releases?per_page=30"
 	}
-	return f.scheme + "://" + f.host + "/api/v1/repos/" + f.owner + "/" + f.repo + "/releases?limit=30"
+	return "https://" + f.host + "/api/v3/repos/" + f.owner + "/" + f.repo + "/releases?per_page=30"
 }
 
-// Download is a release file's URL, the same on GitHub and the other forges.
+// Download is a release file's URL, the same on github.com and a GitHub Enterprise server.
 func (f Forge) Download(tag, file string) string {
 	return f.Base + "/releases/download/" + url.PathEscape(tag) + "/" + url.PathEscape(file)
 }
 
 // Fetch downloads a release's SHA256SUMS and SHA256SUMS.sig, checks the signature with the
-// project's key, then downloads the chip images' tarballs it lists, each checked against
-// it as it arrives, into a new directory in work (removed after), and imports them into
-// images (Import: signer the project, with their provenance). The other files it lists (the
-// controller image's reference) are not downloaded. The caller holds the fleet lock, as for any import.
+// project's key, then downloads the tarballs of the chip images asked for (o.Images), each
+// checked against it as it arrives, into a new directory in work (removed after), and
+// imports them into images (Import: signer the project, with their provenance). A chip image
+// asked for that the release doesn't have is an error. The other files it lists (the other
+// chip images, the controller image's reference) are not downloaded, and the chip images
+// already in images that weren't asked for are left as they are. The caller holds the fleet
+// lock, as for any import.
 func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, error) {
 	var out Imported
 	if len(o.ProjectPub) != 65 || o.ProjectPub[0] != 4 {
 		return out, errors.New("no project public key (" + ProjectPub + "): a fetched release is checked with it")
+	}
+	if len(o.Images) == 0 {
+		return out, errors.New("no chip images asked for")
+	}
+	want := map[string]bool{}
+	for _, img := range o.Images {
+		if !ImageName(img) {
+			return out, fmt.Errorf("chip image %q: not one of the chip images", img)
+		}
+		want[img] = true
 	}
 	src := o.Forge
 	if src == "" {
@@ -100,19 +117,21 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	if c == nil {
 		c = &http.Client{Timeout: 10 * time.Minute}
 	}
+	// A tag as it is; a version alone, or none (the newest), the firmware release the forge
+	// lists for it
 	tag := o.Version
-	if tag == "" {
-		if tag, err = newest(ctx, c, f); err != nil {
+	v, ok := FirmwareVersion(tag)
+	if !ok {
+		if tag != "" && !version.MatchString(tag) {
+			return out, fmt.Errorf("version %q: not vMAJOR.MINOR.PATCH or firmware-vMAJOR.MINOR.PATCH", o.Version)
+		}
+		if tag, err = firmwareTag(ctx, c, f, tag); err != nil {
 			return out, err
 		}
-		logf("%s: the newest release is %s", f.Base, tag)
-	}
-	if !strings.HasPrefix(tag, "v") {
-		tag = "v" + tag
-	}
-	v := strings.TrimPrefix(tag, "v")
-	if !version.MatchString(v) {
-		return out, fmt.Errorf("version %q: not vMAJOR.MINOR.PATCH", o.Version)
+		v, _ = FirmwareVersion(tag)
+		if o.Version == "" {
+			logf("%s: the newest firmware release is %s", f.Base, tag)
+		}
 	}
 
 	if err := secfile.MkdirAll(work); err != nil {
@@ -160,29 +179,71 @@ func Fetch(ctx context.Context, o FetchOptions, work, images string) (Imported, 
 	if err != nil {
 		return out, err
 	}
-	n := 0
+	var has []string
+	tarball := map[string]Sum{}
 	for _, s := range list {
-		cv, _, ok := chipOf(s.Name)
+		cv, img, ok := chipOf(s.Name)
 		if !ok {
 			continue
 		}
 		if cv != v {
 			return out, fmt.Errorf("%s lists %s, not version %s", SumsFile, s.Name, v)
 		}
+		has = append(has, img)
+		tarball[img] = s
+	}
+	if len(has) == 0 {
+		return out, fmt.Errorf("release %s has no chip images", tag)
+	}
+	// Every chip image asked for is in the release before any is downloaded
+	var missing []string
+	for _, img := range o.Images {
+		if _, ok := tarball[img]; !ok && !slices.Contains(missing, img) {
+			missing = append(missing, img)
+		}
+	}
+	if len(missing) > 0 {
+		return out, fmt.Errorf("release %s has no chip image %s; it has %s", tag, strings.Join(missing, ", "), strings.Join(has, ", "))
+	}
+	need := map[string]bool{}
+	for _, img := range slices.Sorted(maps.Keys(want)) {
+		s := tarball[img]
 		if err := get(s.Name, maxTarball, s.SHA256); err != nil {
 			return out, err
 		}
-		n++
+		need[s.Name] = true
 	}
-	if n == 0 {
-		return out, fmt.Errorf("release %s has no chip images", tag)
-	}
-	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, true)
+	return importFrom(dir, Signers{Project: o.ProjectPub}, images, f.Base+"/releases/tag/"+tag, need)
 }
 
-// newest is the tag of the newest published release (not a draft) named vMAJOR.MINOR.PATCH;
-// a pre-release counts (every 0.x release is one).
-func newest(ctx context.Context, c *http.Client, f Forge) (string, error) {
+// FirmwareVersion is the version a firmware release's tag names: firmware-vMAJOR.MINOR.PATCH,
+// or vMAJOR.MINOR.PATCH (the firmware and the controller released together, before each had
+// its own version). Any other tag, a controller release's (controller-v...) among them, is
+// not one.
+func FirmwareVersion(tag string) (string, bool) {
+	v, ok := strings.CutPrefix(tag, "firmware-v")
+	if !ok {
+		v, ok = strings.CutPrefix(tag, "v")
+	}
+	return v, ok && version.MatchString(v)
+}
+
+// Latest is the tag of the newest published firmware release on the forge ("":
+// DefaultForge): a controller release never makes a node out of date.
+func Latest(ctx context.Context, c *http.Client, forge string) (string, error) {
+	if forge == "" {
+		forge = DefaultForge
+	}
+	f, err := ParseForge(forge)
+	if err != nil {
+		return "", err
+	}
+	return firmwareTag(ctx, c, f, "")
+}
+
+// firmwareTag is the tag of the published firmware release (FirmwareVersion; not a draft)
+// of version v, or the newest one if v is "". A pre-release counts (every 0.x release is one).
+func firmwareTag(ctx context.Context, c *http.Client, f Forge, v string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.api(), nil)
 	if err != nil {
 		return "", err
@@ -204,9 +265,12 @@ func newest(ctx context.Context, c *http.Client, f Forge) (string, error) {
 		return "", fmt.Errorf("the releases of %s: %v", f.Base, err)
 	}
 	for _, r := range rels {
-		if !r.Draft && strings.HasPrefix(r.Tag, "v") && version.MatchString(r.Tag[1:]) {
+		if rv, ok := FirmwareVersion(r.Tag); ok && !r.Draft && (v == "" || rv == v) {
 			return r.Tag, nil
 		}
+	}
+	if v != "" {
+		return "", fmt.Errorf("%s has no published firmware release %s", f.Base, v)
 	}
 	return "", fmt.Errorf("%s has no published release yet", f.Base)
 }

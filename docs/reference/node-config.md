@@ -12,10 +12,10 @@ Back to the [reference index](README.md).
 
 A node takes each setting from the first layer that has it:
 
-1. **The node config** (this page).
-2. **The board definition**, written to the node when it was flashed: its address, its Wi-Fi
+1. The node config (this page).
+2. The board definition, written to the node when it was flashed: its address, its Wi-Fi
    transmit power cap, its CPU clock scaling, and its memory sizes.
-3. **The firmware default.**
+3. The firmware default.
 
 A key you leave out keeps the layer below. A list you give replaces the lower list whole:
 `"forward_zones": []` means no forward zones at all.
@@ -23,7 +23,7 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
 ## Rules for the whole file
 
 - Every key is optional. `{}` is a valid config.
-- Unknown keys are refused, so a typo is an error, not a setting that silently does nothing.
+- Unknown keys are refused, so a typo shows up as an error.
 - The file holds one JSON object and nothing after it.
 - The node receives it as compact JSON, at most 16,192 bytes. A node whose flash has no
   config partition yet keeps configs in NVS, which holds at most 4,000 bytes.
@@ -44,14 +44,16 @@ A key you leave out keeps the layer below. A list you give replaces the lower li
   "time": { "ntp": ["192.0.2.1"], "tz": "EST5EDT,M3.2.0,M11.1.0" },
   "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
   "cpu": { "dfs": false },
-  "querylog": { "enabled": true, "client": "full" }
+  "querylog": { "enabled": true, "client": "full" },
+  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true },
+  "allow": ["198.51.100.0/24", "2001:db8::/32"]
 }
 ```
 
 ## Keys
 
-"Applies" says when a change takes effect on a running node: **live** (at once) or at the
-next **reboot**. A node with a change waiting for a reboot reports it in `/status`
+"Applies" says when a change takes effect on a running node: live (at once) or at the
+next reboot. A node with a change waiting for a reboot reports it in `/status`
 `reboot.reasons` (see [node-endpoints.md](node-endpoints.md#status)), and the controller
 reboots nodes one at a time.
 
@@ -72,6 +74,8 @@ reboots nodes one at a time.
 | `blocking` | object | enabled, `null` answer, TTL 10 | See [blocking](#blocking). | live |
 | `cpu` | object | the board's, else the chip image's | See [cpu](#cpu). | live |
 | `querylog` | object | enabled, full client address | See [querylog](#querylog). | live |
+| `led` | object | the board's LED | See [led](#led). | live |
+| `allow` | list of networks | none | See [allow](#allow). | live |
 
 An **IPv4 address** here means a dotted address that is not `0.0.0.0`, not loopback, not
 multicast and not `255.255.255.255`.
@@ -96,12 +100,19 @@ gives `"dhcp"` to a node on a network in `settings.json` `no_dhcp` (see
 | Key | Meaning | Checks | Applies |
 |-----|---------|--------|---------|
 | `ssid` | The Wi-Fi network's name. Left out: the network saved over USB when the node was set up. | 1 to 32 characters. | reboot |
-| `password` | The Wi-Fi password. `""` for an open network. | Only with `ssid`. 8 to 63 characters, or empty. | reboot |
+| `password` | The Wi-Fi password. `""` for an open network. The controller never sends it as it is: see below. | Only with `ssid`. 8 to 63 characters, or empty. | reboot |
 | `tx_power_dbm` | Transmit power in dBm. Left out: the board's cap, else the chip's default. | 2 to 20. | live |
 | `power_save` | Wi-Fi power saving. | `true` or `false`. Default `false`. | live |
 
 The dashboard never shows the Wi-Fi password unless you ask to reveal it and enter your
 password again.
+
+The password goes to the node sealed to its node key (`/status` `node_key`, pinned when the
+node was adopted): the controller replaces `password` with `"sealed": "<base64>"` in what it
+sends, and an empty one (an open network) with nothing. A node refuses a config with a plain
+`password`, and the controller refuses to send one to a node without a pinned node key, or
+one that reports another key. See [Security, The Wi-Fi
+password](../security.md#the-wi-fi-password).
 
 ### forward_zones
 
@@ -169,6 +180,47 @@ The hosted zones themselves aren't in the config; they're pushed as their own re
 | `enabled` | `false` turns the query log off. Default `true`, on a board that gives the query log memory. | — |
 | `client` | How much of a client's address the log keeps: `"full"`, `"subnet"` (the /24 only) or `"hidden"` (none). Default `"full"`. | One of the three. |
 
+### led
+
+The status light, in place of the one the board definition names. The node page's
+*Status light* sets it.
+
+| `kind` | Other keys |
+|--------|-----------|
+| `"none"` | — |
+| `"gpio"` | `pin`; `active_low`: `true` for an LED lit by a low level (wired to 3.3 V) |
+| `"ws2812"` | `pin` |
+| `"rgb"` | `red`, `green`, `blue`: a plain RGB LED on three GPIOs; `common_anode`: `true` for a common-anode LED |
+
+Checks: every pin the kind takes is given, 0 to 54. The node refuses a pin its board uses for
+something else (Ethernet, SD card, SPI; the board's own LED pins are free for it), and one
+its chip can't drive or keeps for the flash, PSRAM or Ethernet. The controller makes the
+same check against the catalog board before it sends the config.
+
+### allow
+
+Who may send the node DNS queries. By default a node answers queries (UDP and TCP port 53)
+only from private source addresses:
+
+| | Networks |
+|-|----------|
+| IPv4 | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (shared, CGNAT), `169.254.0.0/16` (link-local), `127.0.0.0/8` |
+| IPv6 | `::1`, `fc00::/7` (unique local), `fe80::/10` (link-local) |
+
+An IPv4-mapped IPv6 source (`::ffff:a.b.c.d`) is judged by its IPv4 address. The zone
+primary in `secondary.primary` is always answered, for its NOTIFY.
+
+`allow` adds networks to that set; it never takes any away. A query from anywhere else gets
+no answer at all: over UDP it is dropped, over TCP the connection is closed. So a node on a
+public address can't be used as an open resolver, or to reflect traffic at someone else.
+The node counts them in `/status` `queries.refused_source` and `/metrics`
+`espdns_queries_refused_source_total`.
+
+Checks: at most 16 networks, each in CIDR form, IPv4 (`198.51.100.0/24`, prefix 0 to 32) or
+IPv6 (`2001:db8::/32`, prefix 0 to 128), with no host bits set (`198.51.100.1/24` is
+refused). `"0.0.0.0/0"` answers every IPv4 client: only for a node behind a firewall that
+does the filtering.
+
 ## Services
 
 A node runs these services, following its config:
@@ -186,7 +238,8 @@ A node runs these services, following its config:
 ## What applies live and what needs a reboot
 
 Live: `name`, `wifi.tx_power_dbm`, `wifi.power_save`, `forwarders`, `upstream_timeout_ms`,
-`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`.
+`secondary.soa_poll_s`, `secondary.retry_s`, `hosted`, `time`, `blocking`, `cpu`, `querylog`, `led`,
+`allow`.
 Services start and stop live with them.
 
 At a reboot, with the reason the node reports:
@@ -206,8 +259,8 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
   config -data /data -check -file dns-a.json
 ```
 
-It prints `ok` with the size, then the payload the node would get. The payload includes the
-Wi-Fi password, so mind where the output goes.
+It prints `ok` with the size, then the payload. It includes the Wi-Fi password as written
+(a push seals it to the node's key), so mind where the output goes.
 
 Add `-host <address>` to also check it against that node (read only), or
 `-board <catalog board>` to check its memory plan on a catalog board ([cli.md](cli.md#config)).

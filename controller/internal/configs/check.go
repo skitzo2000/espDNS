@@ -118,8 +118,9 @@ func hostOnly(h string) string {
 //   - a config without a network, for a node whose address comes from its pushed config
 //     (/status address_from "config"): the node would drop to its board's or built-in
 //     address, or none;
-//   - services switched on or off, "cpu" or "querylog", for firmware from before them, which refuses
+//   - services switched on or off, "cpu", "querylog", "led" or "allow", for firmware from before them, which refuses
 //     the config (and a node rolled back to such firmware couldn't boot on it);
+//   - an LED whose pins its catalog board can't give it (boards.CheckLED), which it refuses;
 //   - services that don't fit the node's memory plan (internal/memplan), which it refuses;
 //   - a forward or secondary zone the node serves as a hosted zone (HostedClash).
 func (s Spec) Refusal(st release.NodeStatus, catalog string) error {
@@ -147,6 +148,21 @@ func (s Spec) Refusal(st release.NodeStatus, catalog string) error {
 	if s.Config.SetsQueryLog() && st.QueryLog == nil {
 		return fmt.Errorf("%s sets \"querylog\" (the query log), which %s's firmware doesn't take: "+
 			"update its firmware first", s.Path, s.Host)
+	}
+	if s.Config.SetsLED() && (st.LED == nil || st.LED.From == "") {
+		return fmt.Errorf("%s sets \"led\" (the status light), which %s's firmware doesn't take: "+
+			"update its firmware first", s.Path, s.Host)
+	}
+	if s.Config.SetsAllow() && (st.Queries == nil || st.Queries.RefusedSource == nil) {
+		return fmt.Errorf("%s sets \"allow\" (networks it answers besides the private ones), which %s's firmware "+
+			"doesn't take: update its firmware first", s.Path, s.Host)
+	}
+	if l := s.Config.LED; l != nil && st.Board != "" && catalog != "" {
+		if b, err := CatalogBoard(catalog, st.Board); err == nil {
+			if err := boards.CheckLED(b, *l); err != nil {
+				return fmt.Errorf("%s: its status light doesn't fit board %s: %w", s.Path, st.Board, err)
+			}
+		}
 	}
 	if mb, from, ok := NodeMemory(st, catalog); ok {
 		if _, err := memplan.Make(mb, s.Config.Services()); err != nil {

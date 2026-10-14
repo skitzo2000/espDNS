@@ -284,6 +284,10 @@ static void test_results(void)
     CHECK(ql_result(&n, DNS_R_NXDOMAIN, 40) == QR_CACHE);
     n = (ql_note_t){ .parsed = true, .asked = true };
     CHECK(ql_result(&n, DNS_R_SERVFAIL, 40) == QR_SERVFAIL);
+    n.answered = true; /* a forwarder's SERVFAIL, passed on */
+    CHECK(ql_result(&n, DNS_R_SERVFAIL, 40) == QR_SERVFAIL);
+    n = (ql_note_t){ .parsed = true, .cache = true };
+    CHECK(ql_result(&n, DNS_R_SERVFAIL, 40) == QR_SERVFAIL);
     for (int r = 0; r < QR_N; r++)
         CHECK(strcmp(ql_result_name(r), "unknown") != 0);
     CHECK(!strcmp(ql_result_name(QR_N), "unknown") && ql_rule_name(QL_RULE_NONE) == NULL);
@@ -352,6 +356,12 @@ static void test_stats(void)
     /* A dropped query has no latency; an rcode out of range no rcode. */
     st_query(&s_st, QR_DROPPED, -1, 99);
     CHECK(s_st.result[QR_DROPPED] == 1);
+    st_hist_read(&s_st.latency, cum, &sum);
+    CHECK(cum[ST_NBUCKETS - 1] == 400000);
+    /* A NOTIFY counts only when refused, and then as refused: no rcode, no latency. */
+    st_query(&s_st, QR_NOTIFY, DNS_R_NOERROR, 99);
+    st_query(&s_st, QR_NOTIFY, DNS_R_REFUSED, 99);
+    CHECK(s_st.result[QR_NOTIFY] == 0 && s_st.result[QR_REFUSED] == 1 && s_st.rcode[DNS_R_REFUSED] == 0);
     st_hist_read(&s_st.latency, cum, &sum);
     CHECK(cum[ST_NBUCKETS - 1] == 400000);
 }

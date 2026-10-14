@@ -84,7 +84,7 @@ func needLogin(what string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if auth.User(r.Context()) == "" {
 			httpErr(w, http.StatusForbidden, fmt.Errorf("read-only: %s a login, and no password is set "+
-				"(espdns passwd: docs/getting-started.md, step 6)", what))
+				"(set one in the browser, or espdns passwd)", what))
 			return
 		}
 		if r.Method != http.MethodGet {

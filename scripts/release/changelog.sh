@@ -1,15 +1,16 @@
 #!/bin/sh
 # Prints one version's section of CHANGELOG.md, its heading left out: the release's notes.
 #
-#   changelog.sh 0.0.2
+#   changelog.sh "firmware 0.0.3"      (or "controller 0.0.3"; "0.0.2" for the releases
+#                                       of both together, before they had a version each)
 #
-# The section is from "## [0.0.2] - YYYY-MM-DD" to the next "## " heading. No such section,
-# or one with nothing in it, is an error: every version has its changelog.
+# The section is from "## [firmware 0.0.3] - YYYY-MM-DD" to the next "## " heading. No such
+# section, or one with nothing in it, is an error: every version has its changelog.
 #
 # ESPDNS_ROOT: the repository to read (default: this script's); the tests use another.
 set -eu
 root=${ESPDNS_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
-[ $# -eq 1 ] || { echo "usage: $0 MAJOR.MINOR.PATCH" >&2; exit 2; }
+[ $# -eq 1 ] || { echo "usage: $0 \"firmware|controller MAJOR.MINOR.PATCH\"" >&2; exit 2; }
 log=$root/CHANGELOG.md
 [ -f "$log" ] || { echo "no $log" >&2; exit 1; }
 awk -v v="$1" '

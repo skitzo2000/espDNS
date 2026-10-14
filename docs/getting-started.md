@@ -2,17 +2,17 @@
 
 <img src="img/artie-head.png" alt="Artie" width="64" align="right">
 
-Download one file, start it, open your browser. About 15 minutes for two boards.
+Download one file, start it and open your browser. Setup takes 10 minutes.
 
-espDNS is **alpha (0.0.x)**. Keep a second DNS server around until you trust it.
+espDNS is alpha (0.0.x). Keep a second DNS server around until you trust it.
 
 ## What you need
 
-- **A Linux computer with Docker**, on the same network as your boards.
-- **Chrome or Edge** on that computer. It installs espDNS on the boards over USB.
-- **Two boards** from the [catalog](hardware.md), each with a microSD card and a USB data
-  cable (not charge-only).
-- **Two free addresses** on your network, outside your router's DHCP pool.
+- A Linux computer with Docker, on the same network as your boards.
+- Chrome or Edge on that computer, to install espDNS on the boards over USB.
+- Two boards from the [catalog](hardware.md), each with a microSD card and a USB data cable
+  (not charge-only).
+- Two free addresses on your network, outside your router's DHCP pool.
 
 ## Start the controller
 
@@ -31,20 +31,23 @@ comments in `compose.yaml` show the swap.
 
 ## Run the setup
 
-Open **http://127.0.0.1:8480** in Chrome or Edge on the same machine. Artie walks you
-through seven steps:
+Open http://127.0.0.1:8480 in Chrome or Edge on the same machine. Artie walks you
+through it:
 
 1. **Set a password.** At least 12 characters.
 2. **Make your keys.** Two clicks. Your nodes only take changes signed with your keys, so
    nobody else can touch them. Your browser downloads `recovery.pem`: save it somewhere
    safe, off this computer.
-3. **Zone primary.** Optional. Skip it unless you already run a DNS server with your own
-   zones ([Zones](zones.md)).
-4. **Add your first node.** Pick your board, give it its address and gateway, plug it in
+3. **Add your first node.** Pick your board, give it its address and gateway, plug it in
    over USB and press **Install**. The controller fetches the firmware for you and checks
    its signature. Installing erases the board.
-5. **Add a second node.** Same again, with the second address. Two nodes keep DNS
+4. **Add a second node.** Same again, with the second address. Two nodes keep DNS
    answering while one restarts or updates.
+5. **Add your zone.** Optional. Type a name for your network, like `home.example`, and
+   press **Host it here**: your nodes answer for it, and your devices get names in it
+   (`nas.home.example`). It starts with the records every zone needs; you add yours on the
+   Zones page ([Zones](zones.md)). Already run a DNS server with your zones? Copy them
+   from it here, under **Set it up myself**.
 6. **Tell your router.** In its DHCP settings, set the DNS servers to your two nodes'
    addresses, and remove any others.
 7. **Turn on blocking.** Optional. Pick a list or two to block ads and trackers
@@ -55,7 +58,7 @@ through seven steps:
 
 ## Check it works
 
-The dashboard shows both nodes, healthy. To ask one yourself:
+The Nodes page shows both nodes with a green dot. To ask one yourself:
 
 ```sh
 docker run --rm --network host alpine:3 nslookup example.com 192.0.2.53
@@ -65,17 +68,19 @@ docker run --rm --network host alpine:3 nslookup example.com 192.0.2.53
 
 ## Keeping it running
 
-- **Back up.** Copy the `espdns/data` folder, or use **Keep the controller safe** in the
+- To back up, copy the `espdns/data` folder, or use **Keep the controller safe** in the
   account menu for one encrypted file. Keep `recovery.pem` apart from either.
-- **Update.** Download the new `compose.yaml` and start it again, in the same folder:
+- To update, download the new `compose.yaml` and start it again, in the same folder:
 
   ```sh
   curl -fsSLO https://github.com/skitzo2000/espdns/releases/latest/download/compose.yaml
   docker compose up -d
   ```
 
-  Then update your nodes from the Nodes page. They go one at a time, so DNS never drops.
-  The nodes don't need the controller to answer, so stopping it never stops DNS.
+  The controller looks for new firmware when it starts and every day. When there's some,
+  each node that needs it gets an **Update** button in its row on the Nodes page. Updates go
+  one node at a time, so DNS never drops. The nodes don't need the controller to answer, so
+  stopping it never stops DNS.
 
 ## Where next
 

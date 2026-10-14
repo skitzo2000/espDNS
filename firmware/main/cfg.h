@@ -19,7 +19,10 @@
  *                 (or { "address": "dhcp" }, for a network with a DHCP server; without it
  *                  the board's address, else the firmware's. A node with none of them has
  *                  no address: it never asks DHCP on its own)
- *     "wifi": { "ssid": "home", "password": "...", "tx_power_dbm": 11, "power_save": false },
+ *     "wifi": { "ssid": "home", "sealed": "<base64>", "tx_power_dbm": 11, "power_save": false },
+ *                 (sealed: the password, sealed to the node key by the controller (nodekey.h);
+ *                  never "password" in plain text, which is refused. No password: an open
+ *                  network)
  *     "forwarders": [ "9.9.9.9", "1.1.1.1" ],              (0-4; [] turns forwarding off)
  *     "upstream_timeout_ms": 1500,
  *     "forward_zones": [ { "zone": "corp.example", "forwarder": "198.51.100.53" } ],
@@ -36,6 +39,13 @@
  *     "querylog": { "enabled": true, "client": "full" }
  *                                           (the query log, qlog.h; client: "full", "subnet"
  *                                            (the /24 only) or "hidden" (no address kept))
+ *     "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true }
+ *                                           (the status LED, in place of the board's:
+ *                                            board_led_t; its pins checked against the board's)
+ *     "allow": [ "198.51.100.0/24", "2001:db8::/32" ]
+ *                                           (0-16 networks whose clients the node answers DNS
+ *                                            queries from, besides the private ones:
+ *                                            cfg_src_allowed)
  *   }
  *
  * The services a node runs follow from it (svc.h): forwarding while it has default
@@ -44,7 +54,7 @@
  * defaults, config.h). A service that is off costs nothing.
  *
  * Settings that can change live (name, wifi tx_power_dbm and power_save, forwarders,
- * upstream_timeout_ms, secondary soa_poll_s and retry_s, hosted, time, blocking, cpu, querylog) do,
+ * upstream_timeout_ms, secondary soa_poll_s and retry_s, hosted, time, blocking, cpu, querylog, led, allow) do,
  * and so forwarding, hosted zones, blocking and the query log start and stop live; any other change (address,
  * Wi-Fi network, zones, primary, forward zones) applies with a reboot.
  *
@@ -67,6 +77,7 @@
 #define CFG_HOST_MAX   64 /* an NTP server's name, with its NUL */
 #define CFG_TZ_MAX     64
 #define CFG_NAME_MAX   32
+#define CFG_MAX_ALLOW  16
 #define CFG_POOL       4096 /* zone names */
 /* A slot of the `config` partition (two of them): the release header, then the payload. */
 #define CFG_SLOT_SIZE  16384
@@ -76,6 +87,13 @@ typedef struct {
     const char *zone;
     uint32_t forwarder; /* IPv4, network order */
 } cfg_fzone_t;
+
+/* A network: its address (an IPv4 one as IPv4-mapped IPv6, ::ffff:a.b.c.d) and its prefix
+ * length in those 128 bits. */
+typedef struct {
+    uint8_t addr[16];
+    uint8_t bits;
+} cfg_net_t;
 
 /* Which layer the address came from. */
 typedef enum { CFG_ADDR_NONE, CFG_ADDR_FIRMWARE, CFG_ADDR_BOARD, CFG_ADDR_CONFIG } cfg_addr_from_t;
@@ -132,6 +150,14 @@ typedef struct {
     bool querylog;
     uint8_t querylog_client;
 
+    /* the status LED (live): the board's, or the config's in its place (led_config) */
+    board_led_t led;
+    bool led_config;
+
+    /* who may query (live): networks besides the private ones (cfg_src_allowed) */
+    cfg_net_t allow[CFG_MAX_ALLOW];
+    int nallow;
+
     char pool[CFG_POOL];
     size_t pool_used;
 } cfg_t;
@@ -140,6 +166,12 @@ typedef struct {
  * config (json NULL: none). False with a reason in err if the node config is malformed or
  * fails a check; c is then the defaults and board only. */
 bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, char *err, size_t errlen);
+
+/* Opens a wifi.sealed blob (n bytes, base64-decoded) into out (cap bytes, NUL-terminated):
+ * NULL, or a reason. The node's (nodekey_node.c) is set once at boot; until one is, a
+ * sealed password is refused. */
+typedef const char *(*cfg_unseal_fn)(const uint8_t *blob, size_t n, char *out, size_t cap);
+void cfg_set_unseal(cfg_unseal_fn fn);
 
 /* True if going from a to b needs a reboot (a setting that can't change live differs). */
 bool cfg_needs_reboot(const cfg_t *a, const cfg_t *b);
@@ -171,6 +203,14 @@ const char *cfg_addr_from(const cfg_t *c);
  * it follows CFG_BUILTIN_ADDR_MARK, which the controller and tools/ota_push.py look for. */
 #define CFG_BUILTIN_ADDR_MARK "espdns:builtin-address="
 const char *cfg_builtin_addr(void);
+
+/* Whether the node answers a DNS query from address a (16 bytes; an IPv4 source as
+ * ::ffff:a.b.c.d): a private address (IPv4 10/8, 172.16/12, 192.168/16, 100.64/10,
+ * 169.254/16, 127/8; IPv6 ::1, fc00::/7, fe80::/10), or one in c's allow list. Anything
+ * else is dropped unanswered, so the node is no open resolver to reflect off. */
+bool cfg_src_allowed(const cfg_t *c, const uint8_t a[16]);
+/* The same for an IPv4 source (network order). */
+bool cfg_src4_allowed(const cfg_t *c, uint32_t ip);
 
 /* Strict dotted-quad IPv4 ("198.51.100.1"; no shorthand, no leading zeros). Network order. */
 bool cfg_parse_ipv4(const char *s, uint32_t *out);

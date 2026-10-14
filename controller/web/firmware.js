@@ -1,10 +1,11 @@
 // Get firmware (firmware.go; docs/releasing.md, Using a release): the chip images the
 // controller has, each with where it came from ("project release v0.0.3", checked with the
 // project's key; "your build v0.0.3", signed with your release key; "your build", one you
-// exported), and the Get firmware button, which runs the fetch-release job: the newest
-// published release downloaded from the forge, checked with the project's key and imported.
-// Shown in Install over USB when a board's chip image isn't in the controller yet, and in
-// the account panel. Everything from the controller is put in as text.
+// exported), and the Get firmware button, which runs the fetch-release job: chip images of
+// the newest published release downloaded from the forge, checked with the project's key and
+// imported. Shown in Install over USB when a board's chip image isn't in the controller yet
+// (it gets that one), and in the account panel (the controller gets those its nodes need).
+// Everything from the controller is put in as text.
 import { h, arr, obj, str } from "./shell.js";
 import { getJSON, post, ended } from "./common.js";
 
@@ -21,7 +22,8 @@ export function summary(fw) {
   return labels.length ? labels.join(", ") : "None yet";
 }
 
-// firmwareBox is the list and the button. o.done runs after an import (the images changed);
+// firmwareBox is the list and the button. o.images are the chip images Get firmware gets
+// (none: those the controller needs); o.done runs after an import (the images changed);
 // o.id prefixes the elements' ids (two boxes may be on a page).
 export function firmwareBox(o = {}) {
   const id = o.id || "fw";
@@ -41,11 +43,11 @@ export function firmwareBox(o = {}) {
     list.replaceChildren(...(imgs.length ? imgs.map(i => h("div", { class: "change" },
       h("span", { class: "mono small" }, str(i.image)),
       h("span", { class: i.error ? "hint bad" : "hint", title: str(i.error) || null }, `${labelOf(i)}${i.error ? ` (${str(i.error)})` : ""}`)))
-      : [h("p", { class: "hint" }, "No firmware yet: get the project's release, or import a build of your own (espdns release import).")]));
+      : [h("p", { class: "hint" }, "No firmware yet: get the project's release, or import your own build (espdns release import).")]));
     const key = str(fw.project_key);
     from.textContent = key
-      ? `From ${str(fw.release_url)}, checked with the project's release key ${key}. Your nodes never trust that key: the controller signs what it sends them with yours.`
-      : `No project key here (/keys/project.pub), so no release can be fetched: import one with espdns release import.`;
+      ? `From ${str(fw.release_url)}, checked with the project's release key ${key}. Your nodes never trust that key: what they get is signed with yours.`
+      : `No project key (/keys/project.pub), so no release can be fetched. Import a build with espdns release import.`;
     go.disabled = !key;
     return fw;
   }
@@ -53,8 +55,16 @@ export function firmwareBox(o = {}) {
   go.addEventListener("click", async () => {
     go.disabled = true;
     say("Starting…");
+    let j;
     try {
-      let j = await post("api/jobs", { kind: "fetch-release", params: {} });
+      j = await post("api/jobs", { kind: "fetch-release", params: o.images ? { images: o.images } : {} });
+    } catch (e) {
+      // Not started (nothing to get, no project key): the controller's words alone
+      say(e.message, "small bad");
+      go.disabled = false;
+      return;
+    }
+    try {
       while (!ended(j.state)) {
         await new Promise(r => setTimeout(r, 400));
         j = await getJSON(`api/jobs/${encodeURIComponent(j.id)}`);

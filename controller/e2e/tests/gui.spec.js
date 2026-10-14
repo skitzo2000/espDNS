@@ -144,10 +144,10 @@ async function fake(page) {
   return state;
 }
 
-// clickRow clicks a row where it holds no button or link (its small text: a board, where a
+// clickRow clicks a row where it holds no button or link (its small text: a node's flag, where a
 // zone comes from, a query's node), so the row itself acts, as a real click there does.
 async function clickRow(page, row) {
-  const at = row.locator(".sub").first();
+  const at = row.locator(".sub, .flag").first();
   await expect(at).toBeVisible();
   expect(await at.evaluate(e => !e.closest("a, button"))).toBe(true);
   await at.click();
@@ -203,7 +203,7 @@ test("Nodes: a listed node's row opens its page; a found one its setup; old firm
   await clickRow(page, rows.nth(1));
   await expect(page).toHaveURL(new RegExp(`/node\\.html#${encodeURIComponent(K3)}$`));
   await expect(page.locator("#name")).toHaveText("dns3");
-  await expect(page.locator("#attention")).toContainText("Zone refresh failing");
+  await expect(page.locator("#attention")).toContainText("dns3 is degraded: zone refresh failing.");
   // Back: the found node ready to add: its setup panel, then the Add flow.
   await page.locator("nav.main").getByRole("link", { name: "Nodes" }).click();
   await clickRow(page, rows.nth(2));

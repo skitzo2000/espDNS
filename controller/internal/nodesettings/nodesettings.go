@@ -10,6 +10,7 @@
 //	tz          "time": {"tz"} (a POSIX TZ string; a name from TimeZones is made one)
 //	blocking    "blocking": {"enabled"}
 //	querylog    "querylog": {"enabled", "client"}
+//	led         "led": the status light, in place of the board's (nodecfg.LED)
 //
 // Every other key of the config is kept as it is: an edit changes only what it names. A
 // field in an edit's Reset goes back to the board's or the firmware's value (its key left
@@ -29,18 +30,18 @@ import (
 )
 
 // Fields are the form's fields, in the page's order.
-var Fields = []string{"name", "network", "forwarders", "tz", "blocking", "querylog"}
+var Fields = []string{"name", "network", "forwarders", "tz", "blocking", "querylog", "led"}
 
 // Words are the fields as a person reads them, for a change's summary.
 var Words = map[string]string{"name": "name", "network": "address", "forwarders": "upstream DNS", "tz": "time zone",
-	"blocking": "blocking", "querylog": "query log"}
+	"blocking": "blocking", "querylog": "query log", "led": "status light"}
 
 // Applies is how a change of each field reaches the node: "live", or "restart" (the node
 // takes it at its next boot, which the controller makes only while another node answers).
 // It is the firmware's (nodecfg.Compare: the address waits for a reboot, the rest is live);
 // a test holds the two together.
 var Applies = map[string]string{"name": "live", "network": "restart", "forwarders": "live", "tz": "live",
-	"blocking": "live", "querylog": "live"}
+	"blocking": "live", "querylog": "live", "led": "live"}
 
 // From says where a field's value comes from.
 const (
@@ -69,6 +70,13 @@ type QueryLog struct {
 	Client  string `json:"client"` // nodecfg.QueryLogClients
 }
 
+// StatusLight is the led field's value: the LED in effect, and the board's own as the node
+// reports it (nil: not known).
+type StatusLight struct {
+	LED   *nodecfg.LED `json:"led"`
+	Board *nodecfg.LED `json:"board"`
+}
+
 // Form is a node's settings as the form shows them.
 type Form struct {
 	Name       Field[string]           `json:"name"`
@@ -77,6 +85,7 @@ type Form struct {
 	TZ         Field[TimeZone]         `json:"tz"`
 	Blocking   Field[bool]             `json:"blocking"`
 	QueryLog   Field[QueryLog]         `json:"querylog"`
+	LED        Field[StatusLight]      `json:"led"`
 }
 
 // Read is the form for a node whose config is c (nil: none, the board's and firmware's
@@ -136,9 +145,35 @@ func Read(c *nodecfg.Config, st *release.NodeStatus) Form {
 			f.QueryLog.Value.Client = q.Client
 		}
 	}
+	f.LED = Field[StatusLight]{From: FromUnknown}
+	if st != nil && st.LED != nil && st.LED.From != "" && st.LED.Board != nil {
+		f.LED = Field[StatusLight]{Value: StatusLight{LED: ledOf(st.LED.LEDSetting), Board: ledOf(*st.LED.Board)}, From: FromNode}
+	}
+	if c.LED != nil {
+		l := *c.LED
+		f.LED.Value.LED, f.LED.From = &l, FromConfig
+	}
 	f.Name.Applies, f.Network.Applies, f.Forwarders.Applies = Applies["name"], Applies["network"], Applies["forwarders"]
 	f.TZ.Applies, f.Blocking.Applies, f.QueryLog.Applies = Applies["tz"], Applies["blocking"], Applies["querylog"]
+	f.LED.Applies = Applies["led"]
 	return f
+}
+
+// ledOf is an LED as /status gives it, as a config's "led".
+func ledOf(s release.LEDSetting) *nodecfg.LED {
+	l := &nodecfg.LED{Kind: s.Kind}
+	pin := func(i int) *int {
+		if i < len(s.Pins) {
+			return &s.Pins[i]
+		}
+		return nil
+	}
+	if l.Kind == "rgb" {
+		l.Red, l.Green, l.Blue, l.CommonAnode = pin(0), pin(1), pin(2), s.ActiveLow
+	} else if l.Kind != "none" {
+		l.Pin, l.ActiveLow = pin(0), s.ActiveLow
+	}
+	return l
 }
 
 // QueryLogEdit changes the query log: either part, or both.
@@ -156,6 +191,7 @@ type Edit struct {
 	TZ         *string          `json:"tz,omitempty"` // a POSIX TZ string, or a name from TimeZones
 	Blocking   *bool            `json:"blocking,omitempty"`
 	QueryLog   *QueryLogEdit    `json:"querylog,omitempty"`
+	LED        *nodecfg.LED     `json:"led,omitempty"`
 	Reset      []string         `json:"reset,omitempty"`
 }
 
@@ -201,6 +237,8 @@ func (e Edit) set(field string) bool {
 		return e.Blocking != nil
 	case "querylog":
 		return e.QueryLog != nil
+	case "led":
+		return e.LED != nil
 	}
 	return false
 }
@@ -326,6 +364,13 @@ func (e Edit) apply(c *nodecfg.Config, field string, reset bool) error {
 				return errors.New(`querylog.client: "full", "subnet" or "hidden"`)
 			}
 		}
+	case "led":
+		if reset {
+			c.LED = nil
+			return nil
+		}
+		l := *e.LED
+		c.LED = &l
 	}
 	return nil
 }
@@ -364,6 +409,8 @@ func fieldOf(f Form, name string) any {
 		return f.Blocking
 	case "querylog":
 		return f.QueryLog
+	case "led":
+		return f.LED
 	}
 	return nil
 }

@@ -1,0 +1,12 @@
+{
+  "name": "ws-p4-module-dev-kit",
+  "title": "Waveshare ESP32-P4-Module-DEV-KIT",
+  "image": "esp32p4-rev1",
+  "flash_mb": 16,
+  "psram_mb": 32,
+  "tier": "community",
+  "ethernet": { "kind": "emac", "phy": "ip101", "addr": 1, "reset": 51 },
+  "sd": { "kind": "sdmmc", "slot": 0, "width": 4, "ldo": 4 },
+  "led": { "kind": "none" },
+  "notes": "Carrier for the castellated ESP32-P4-Module (ESP32-P4NRW32, 16 MB flash, 32 MB PSRAM, an ESP32-C6 inside, unused). IP101GRI with IDF's P4 defaults (MDC 31, MDIO 52, REF_CLK in on GPIO50), reset GPIO51; address 1 as on the P4-NANO (same strapping circuit; not stated by Waveshare). Pins: Waveshare wiki (ethernetbasic demo) and schematic. microSD on SDMMC slot 0 (CLK 43, CMD 44, D0-D3 39-42) on LDO channel 4; supply switch on GPIO45 on by default. PoE module header. Power LED only."
+}

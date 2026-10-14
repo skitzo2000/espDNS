@@ -7,7 +7,8 @@
 //
 // A node is pinned when it is adopted (internal/fleet, Adopt), when espdns recover lists it,
 // or by hand (espdns pin), and moves with it when a config it took moves it to another
-// address (fleet.ConfirmConfig). One file per node in <data>/pins/, written whole or not at
+// address (fleet.ConfirmConfig). Adoption and a pin by hand also record its node key, which
+// its Wi-Fi password is sealed to. One file per node in <data>/pins/, written whole or not at
 // all; every change to a node goes under the fleet lock, so two writers never race a seq.
 package pins
 
@@ -42,6 +43,10 @@ type Record struct {
 	Pinned time.Time `json:"pinned"`
 	// Seq is the last seq signed for it, per kind (/status's names: "config", ...).
 	Seq map[string]uint64 `json:"seq,omitempty"`
+	// NodeKey is its node key as its /status gave it when it was adopted or pinned by hand
+	// ("node_key", base64; "" for none): its Wi-Fi password is sealed to this key alone
+	// (release.SealConfig), whatever a /status says later.
+	NodeKey string `json:"node_key,omitempty"`
 }
 
 // Ledger is the record in one data directory.
@@ -255,6 +260,45 @@ func (l *Ledger) Unpinned(id string) (string, error) {
 		return "", fmt.Errorf("node %s is pinned to %s: releases for it are signed there alone", id, r.Addr)
 	}
 	return id, nil
+}
+
+// SetNodeKey records key as node id's node key ("" for none), trusted as it is: for its
+// adoption, or a pin by hand, where the node answering is the one meant.
+func (l *Ledger) SetNodeKey(id, key string) error {
+	id, err := normID(id)
+	if err != nil {
+		return err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	r, err := l.read(id)
+	if err != nil {
+		return err
+	}
+	if r == nil {
+		return fmt.Errorf("node %s: %w", id, ErrNotPinned)
+	}
+	r.NodeKey = key
+	return l.write(r)
+}
+
+// NodeKey is node id's recorded node key, "" for none. A node not in the record is
+// ErrNotPinned.
+func (l *Ledger) NodeKey(id string) (string, error) {
+	id, err := normID(id)
+	if err != nil {
+		return "", err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	r, err := l.read(id)
+	if err != nil {
+		return "", err
+	}
+	if r == nil {
+		return "", fmt.Errorf("node %s: %w", id, ErrNotPinned)
+	}
+	return r.NodeKey, nil
 }
 
 // Seq is the last seq signed for node id of kind, 0 for none. A node not in the record is

@@ -45,12 +45,12 @@
 //	espdns pin -data /data -host 192.0.2.53 -node 30:ed:a0:00:00:01   (sign for that node there; no -host: list)
 //	espdns node out -node 192.0.2.53 -data /data   (out of service: sent nothing, not counted; in: back, brought
 //	                                               up to date first; remove: out of settings.json)
-//	espdns version                                 (this build's version, the repository's VERSION)
+//	espdns version                                 (this build's version, controller/VERSION)
 //	espdns release build -version 0.0.1 -images dir -catalog /catalog -out dist   (a release's files, unsigned)
 //	espdns release sign -dir dist -pub release.pub < release.pem                  (signs its SHA256SUMS)
 //	espdns release verify -dir dist -pub /keys/project.pub
 //	espdns release import -dir dist -data /data            (its chip images: signed by the project's key or yours)
-//	espdns release fetch -data /data [-version v0.0.3]     (a published release, checked with the project's key)
+//	espdns release fetch -data /data [-version 0.0.3]      (a published release, checked with the project's key)
 package main
 
 import (

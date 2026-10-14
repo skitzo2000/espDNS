@@ -47,7 +47,7 @@ func fakeChips(t *testing.T, version string, images ...string) string {
 			}
 		}
 		chip := map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4": "esp32p4", "esp32s3-octal": "esp32s3", "esp32s3-eth": "esp32s3",
-			"esp32s3-quad": "esp32s3", "esp32": "esp32", "esp32c3": "esp32c3", "esp32c6": "esp32c6"}[img]
+			"esp32s3-quad": "esp32s3"}[img]
 		info := map[string]any{"image": img, "chip": chip, "chip_family": strings.ToUpper(strings.Replace(chip, "esp32", "ESP32-", 1)),
 			"offsets": map[string]int{"bootloader.bin": 0, "partitions-8mb.bin": 0x8000, "partitions-4mb.bin": 0x8000,
 				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000, "keys": 0x1b000},
@@ -89,7 +89,7 @@ func appImage(version, addr, text string) []byte {
 }
 
 // The catalog's chip images, and one more no board runs (it is released all the same)
-var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32c6"}
+var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad", "esp32p4"}
 
 func catalogBoards(t *testing.T) []boards.Entry {
 	t.Helper()
@@ -188,7 +188,7 @@ func TestBuildRefused(t *testing.T) {
 	}{
 		{Options{Version: "0.0.5", Images: good, Catalog: catalog}, `is version "0.0.4", not 0.0.5`},
 		{Options{Version: "v0.0.4", Images: good, Catalog: catalog}, "not MAJOR.MINOR.PATCH"},
-		{Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", "esp32s3-octal"), Catalog: catalog}, "runs chip image esp32p4-rev1, which isn't in"},
+		{Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", "esp32s3-octal"), Catalog: catalog}, "which isn't in"},
 		{Options{Version: "0.0.4", Images: t.TempDir(), Catalog: catalog}, "no chip images"},
 		{Options{Version: "0.0.4", Images: good, Catalog: t.TempDir()}, "no boards"},
 		{Options{Version: "0.0.4", Images: good, Catalog: catalog, Out: full}, "isn't empty"},
@@ -263,7 +263,7 @@ func TestSignVerify(t *testing.T) {
 // a manifest never makes a release verify.
 func TestManifestSignatureIsNotASumsSignature(t *testing.T) {
 	k := testKey(t)
-	h, err := release.Header(k, release.Firmware, release.KeyRelease, release.AnyNode, "esp32s3-octal", 1, []byte("x"))
+	h, err := release.Header(k, release.Firmware, release.KeyRelease, [6]byte{0x30, 0xed, 0xa0, 0, 0, 1}, "esp32s3-octal", 1, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,8 +321,8 @@ func TestImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One there before, with a stray file: replaced as a whole
-	os.MkdirAll(filepath.Join(images, "esp32c6"), 0o700)
-	os.WriteFile(filepath.Join(images, "esp32c6", "stale.bin"), []byte("old"), 0o600)
+	os.MkdirAll(filepath.Join(images, "esp32p4"), 0o700)
+	os.WriteFile(filepath.Join(images, "esp32p4", "stale.bin"), []byte("old"), 0o600)
 	imp, err := Import(out, Signers{Project: pub}, images)
 	if done := imp.Images; err != nil || !slices.Equal(slices.Sorted(slices.Values(done)), slices.Sorted(slices.Values(catalogImages))) {
 		t.Fatalf("imported %v, %v", done, err)
@@ -345,12 +345,12 @@ func TestImport(t *testing.T) {
 			t.Errorf("%s: app %q", c.Image, b)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(images, "esp32c6", "stale.bin")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(images, "esp32p4", "stale.bin")); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("the image imported over kept a stray file")
 	}
 	// Nothing left beside the images: no old image moved aside, no unfinished import
 	ents, _ := os.ReadDir(images)
-	if mode(t, filepath.Join(images, "esp32c6", ProvenanceDir)) != 0o700 || mode(t, filepath.Join(images, "esp32c6", ProvenanceDir, SumsFile)) != 0o600 {
+	if mode(t, filepath.Join(images, "esp32p4", ProvenanceDir)) != 0o700 || mode(t, filepath.Join(images, "esp32p4", ProvenanceDir, SumsFile)) != 0o600 {
 		t.Error("provenance: not private")
 	}
 	for _, e := range ents {
@@ -374,7 +374,7 @@ func TestImportRefusesOddTarballs(t *testing.T) {
 	for _, entry := range []struct {
 		name string
 		typ  byte
-	}{{"esp32c6/../../escape.bin", tar.TypeReg}, {"esp32c6/app.bin", tar.TypeSymlink}, {"esp32c6/other.bin", tar.TypeReg},
+	}{{"esp32p4/../../escape.bin", tar.TypeReg}, {"esp32p4/app.bin", tar.TypeSymlink}, {"esp32p4/other.bin", tar.TypeReg},
 		{"esp32s3-octal/app.bin", tar.TypeReg}, {"/etc/passwd", tar.TypeReg}} {
 		dir := t.TempDir()
 		var buf bytes.Buffer
@@ -386,7 +386,7 @@ func TestImportRefusesOddTarballs(t *testing.T) {
 		}
 		tw.Close()
 		gz.Close()
-		name := ChipFile("0.0.4", "esp32c6")
+		name := ChipFile("0.0.4", "esp32p4")
 		os.WriteFile(filepath.Join(dir, name), buf.Bytes(), 0o644)
 		sums, err := Sums(dir, []string{name})
 		if err != nil {
@@ -430,7 +430,7 @@ func TestImportRefusesAChangeAfterVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := filepath.Join(out, ChipFile("0.0.4", "esp32c6"))
+	f := filepath.Join(out, ChipFile("0.0.4", "esp32p4"))
 	b, _ := os.ReadFile(f)
 	os.WriteFile(f, append(b, 0), 0o644)
 	images := filepath.Join(t.TempDir(), "firmware", "images")

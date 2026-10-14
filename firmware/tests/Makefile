@@ -1,7 +1,7 @@
 CFLAGS = -std=gnu17 -g -O1 -Wall -Wextra -Wno-unused-parameter -I../main \
          -fsanitize=address,undefined -fno-omit-frame-pointer
 SRCS   = test_core.c ../main/dns_wire.c ../main/zone.c ../main/answer.c ../main/cache.c ../main/flight.c ../main/fwdq.c ../main/upq.c ../main/load.c ../main/forward.c \
-         ../main/release.c ../main/keys.c ../main/blocklist.c ../main/block.c ../main/board_def.c ../main/health.c ../main/cfg.c ../main/hzone.c ../main/reboot.c ../main/svc.c ../main/memplan.c ../main/sup.c ../main/cpuplan.c \
+         ../main/release.c ../main/keys.c ../main/nodekey.c ../main/blocklist.c ../main/block.c ../main/board_def.c ../main/health.c ../main/cfg.c ../main/hzone.c ../main/reboot.c ../main/svc.c ../main/memplan.c ../main/sup.c ../main/cpuplan.c \
          ../main/qlog.c ../main/stats.c ../main/metrics.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 CFLAGS += -I$(IDF_PATH)/components/json/cJSON
 # The firmware defaults as a deployment's transitional image has them: an address built in
@@ -16,8 +16,10 @@ CFLAGS += -DDNS2_FWD_PORT=15353
 NEUTRAL_SRCS = test_defaults.c $(filter-out test_core.c,$(SRCS))
 # The query log, /metrics and the querylog config (test_observe.c), with the same build
 OBS_SRCS = test_observe.c $(filter-out test_core.c,$(SRCS))
-# Local zones' lookups and zone transfers (test_zones.c), against a fake primary on the loopback
-ZONES_SRCS = test_zones.c ../main/zone.c ../main/axfr.c ../main/answer.c ../main/dns_wire.c ../main/forward.c
+# Local zones' lookups and zone transfers (test_zones.c), against a fake primary on the loopback,
+# and GET /zone's pages
+ZONES_SRCS = test_zones.c ../main/zone.c ../main/axfr.c ../main/answer.c ../main/dns_wire.c ../main/forward.c \
+             ../main/zread.c ../main/jsonw.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 # The node HTTP server's Host check, deadlines and JSON strings (test_http.c)
 HTTP_SRCS = test_http.c ../main/httpguard.c ../main/jsonw.c $(IDF_PATH)/components/json/cJSON/cJSON.c
 # The board catalog (boards/ at the top of the repo; /boards in the build container)
@@ -27,7 +29,8 @@ CFLAGS += -DBOARDS_DIR='"$(BOARDS)"'
 # mbedTLS from the ESP-IDF tree (the same code the firmware links), with a minimal config.
 MBEDTLS  = $(IDF_PATH)/components/mbedtls/mbedtls
 TLS_SRCS = $(addprefix $(MBEDTLS)/library/,ecdsa.c ecp.c ecp_curves.c bignum.c bignum_core.c \
-             constant_time.c platform_util.c sha256.c asn1parse.c asn1write.c)
+             constant_time.c platform_util.c sha256.c asn1parse.c asn1write.c \
+             md.c hkdf.c aes.c cipher.c cipher_wrap.c gcm.c base64.c)
 TLS_OBJS = $(patsubst $(MBEDTLS)/library/%.c,tls/%.o,$(TLS_SRCS))
 TLS_FLAGS = -std=gnu17 -O2 -I$(MBEDTLS)/include -I. -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"'
 
@@ -48,7 +51,7 @@ test: test_core test_defaults test_observe test_http test_zones test_w5500
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_keyspart.py
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) test_keys_release.py
 
-test_core: $(SRCS) $(TLS_OBJS) release_vectors.h blocklist_vectors.h memplan_vectors.json place_vectors.json cpu_vectors.json cfg_reboot_vectors.json keys_vectors.json \
+test_core: $(SRCS) $(TLS_OBJS) release_vectors.h blocklist_vectors.h memplan_vectors.json place_vectors.json cpu_vectors.json cfg_reboot_vectors.json keys_vectors.json nodekey_vectors.json \
            ../site-defaults.h.example config_example.json
 	$(CC) $(CFLAGS) $(TLS_FLAGS:-O2=) -o $@ $(SRCS) $(TLS_OBJS) -lpthread
 
@@ -67,7 +70,7 @@ test_w5500: test_w5500.c ../components/w5500/w5500_ring.h
 
 # The heap the zone code holds, counted (test_zones.c)
 ZONES_WRAP = -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
-test_zones: $(ZONES_SRCS) ../main/zone.h ../main/axfr.h ../main/answer.h
+test_zones: $(ZONES_SRCS) ../main/zone.h ../main/axfr.h ../main/answer.h ../main/zread.h
 	$(CC) $(CFLAGS) -o $@ $(ZONES_SRCS) $(ZONES_WRAP) -lpthread
 
 tls/%.o: $(MBEDTLS)/library/%.c mbedtls_host_config.h

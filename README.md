@@ -10,36 +10,39 @@ controller, run with Docker Compose, sets them up and keeps them updated.
 
 > **Status: alpha (0.0.x).** It runs a real network today, but anything may change between
 > versions. Read the [changelog](CHANGELOG.md) before you update.
+>
+> 0.0.3 is a breaking change: nodes on 0.0.1 or 0.0.2 must be installed again over USB.
 
 ## Features
 
-**On each node**
+On each node:
 
-- **Hosted zones.** Edit your own zones in the controller; they arrive signed and apply live.
-- **Secondary zones.** Copy zones from any standards-compliant primary (BIND, Knot,
-  PowerDNS, Windows DNS, Technitium and others) by zone transfer, kept fresh by SOA checks
-  and NOTIFY. Kept on the microSD card, so nodes answer while the primary is down.
-- **Forwarders.** Names the node doesn't hold go upstream. Forward zones send chosen names
-  to their own servers. Recursion is for private client addresses only.
-- **Cache.** In PSRAM, sized per board.
-- **Blocklists.** Adblock, hosts, domains, wildcard and RPZ lists by URL or file, plus
-  your own block and allow lists. Compiled by the controller, refused if the size changes
-  too much, and the same on every node. Pause blocking, or roll back to the previous list.
-- **Overrides.** Your own block and allow rules on top of the lists, applied live.
-- **Query log and charts.** Recent queries and traffic charts in the controller, plus
-  Prometheus metrics at `/metrics` on every node.
-- **Health.** State at `/health` and on an LED; failed services restart on their own.
+- Your own hosted zones, edited in the controller. They arrive signed and apply live.
+- Secondary zones copied from any standards-compliant primary (BIND, Knot, PowerDNS,
+  Windows DNS, Technitium and others) by zone transfer, kept fresh by SOA checks and
+  NOTIFY. They're kept on the microSD card, so nodes answer while the primary is down.
+- Forwarders for the names the node doesn't hold. Forward zones send chosen names to their
+  own servers. Recursion is for private client addresses only.
+- A cache in PSRAM, sized per board.
+- Blocklists: Adblock, hosts, domains, wildcard and RPZ lists by URL or file, plus your own
+  block and allow lists. The controller compiles them and refuses a list whose size changes
+  too much, and every node gets the same one. You can pause blocking, or roll back to the
+  previous list.
+- Overrides, your own block and allow rules on top of the lists, applied live.
+- A log of recent queries and traffic charts in the controller, plus Prometheus metrics at
+  `/metrics` on every node.
+- Health state at `/health` and on an LED. Failed services restart on their own.
 
-**Across the fleet**
+Across the fleet:
 
-- **Two or more nodes answering together.** No leader, no shared state, and **a node never
-  depends on the controller**: turn it off and DNS goes on.
-- **Signed rolling updates.** Firmware, config, zones and lists are signed releases (ECDSA
-  P-256), each bound to one node and refused if replayed. The controller updates one node
-  at a time and never takes down the last healthy one.
-- **A web controller.** Adopt nodes, edit settings, zones and lists, review and apply
-  changes, flash new boards from the browser, back up and restore. The `espdns` CLI ships
-  in the same Docker image.
+- Two or more nodes answer together, with no leader and no shared state. A node never
+  depends on the controller: turn it off and DNS goes on.
+- Firmware, config, zones and lists go out as signed releases (ECDSA P-256), each bound to
+  one node and refused if replayed. The controller rolls them out one node at a time and
+  never takes down the last healthy one.
+- A web controller to adopt nodes, edit settings, zones and lists, review and apply
+  changes, flash new boards from the browser, and back up and restore. The `espdns` CLI
+  ships in the same Docker image.
 
 ## Quick start
 
@@ -64,20 +67,19 @@ built once per chip; the board file says how the board is wired.
 | Board | Chip | Network | Tier |
 |---|---|---|---|
 | Guition JC-ESP32P4-M3-DEV (`p4-ip101`) | ESP32-P4, 32 MB PSRAM | Ethernet (built-in MAC) | Tested |
+| Waveshare ESP32-P4-ETH (`ws-p4-eth`) | ESP32-P4, 32 MB PSRAM | Ethernet (built-in MAC), optional PoE module | Tested |
 | Waveshare ESP32-S3-ETH (`ws-s3-eth`) | ESP32-S3, 8 MB PSRAM | Ethernet (W5500), optional PoE | Tested |
 | Seeed XIAO ESP32S3 Sense (`xiao-s3-sense`) | ESP32-S3, 8 MB PSRAM | Wi-Fi, or Ethernet with an added W5500 | Tested |
 
-Wire your nodes if you can; Wi-Fi is a best-effort fallback. Firmware is also built for the
-classic ESP32, ESP32-C3, ESP32-C6, newer ESP32-P4 silicon and quad-PSRAM ESP32-S3, with no
-tested board yet (nor working memory sizes for boards without PSRAM). Describe your own
-board in the controller's builder.
+Wire your nodes if you can; Wi-Fi is a best-effort fallback. Every board needs 8 MB of
+PSRAM or more. Describe your own board in the controller's builder.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
 | [Getting started](docs/getting-started.md) | Start the controller and run the setup |
-| [Developer guide](docs/developer.md) | Docker Compose, the command line, setup in detail, how firmware is checked, your own build |
+| [Developer guide](docs/developer.md) | Docker Compose, the command line, setup in detail, how firmware is checked, your own build, tests and make targets |
 | [Hardware](docs/hardware.md) | The tested boards, what a board needs, and describing your own board |
 | [Zones and forwarding](docs/zones.md) | Hosted, secondary and forward zones, and the default forwarders |
 | [Blocking](docs/blocking.md) | Blocklists, overrides, pausing, the query log and the charts |
@@ -105,8 +107,11 @@ board in the controller's builder.
 
 ## Versions
 
-The firmware and the controller share one version, set in [`VERSION`](VERSION). It stays
-0.0.x during alpha. The controller's version:
+The firmware and the controller each have their own version, set in
+[`firmware/VERSION`](firmware/VERSION) and [`controller/VERSION`](controller/VERSION), and
+each is released on its own tag (`firmware-v0.0.3`, `controller-v0.0.3`). Both stay 0.0.x
+during alpha. Your nodes are compared with firmware releases only, so a new controller
+never makes them out of date. The controller's version:
 
 ```sh
 docker exec espdns-controller /espdns version

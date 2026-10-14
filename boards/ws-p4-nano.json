@@ -1,0 +1,12 @@
+{
+  "name": "ws-p4-nano",
+  "title": "Waveshare ESP32-P4-NANO",
+  "image": "esp32p4-rev1",
+  "flash_mb": 16,
+  "psram_mb": 32,
+  "tier": "community",
+  "ethernet": { "kind": "emac", "phy": "ip101", "addr": 1, "reset": 51 },
+  "sd": { "kind": "sdmmc", "slot": 0, "width": 4, "ldo": 4 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-P4NRW32 (32 MB PSRAM), 16 MB flash (GD25Q128); the ESP32-C6 companion isn't used. IP101GRI on the chip's MAC with IDF's P4 defaults (MDC 31, MDIO 52, REF_CLK in on GPIO50), PHY reset on GPIO51, address 1. Pins: Waveshare wiki and schematic, ESPHome devices page, arduino-esp32 waveshare_p4_poe_eth variant. microSD on SDMMC slot 0 (CLK 43, CMD 44, D0-D3 39-42), IO bank on LDO channel 4; the card's supply switch on GPIO45 is on by default. Optional PoE module header. Early units carry silicon v1.x. Power LED only: no LED the firmware can drive."
+}

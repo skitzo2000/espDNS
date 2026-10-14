@@ -84,8 +84,8 @@ type Settings struct {
 	// Empty (the default): DefaultRefresh, every day.
 	BlocklistRefresh string `json:"blocklist_refresh,omitempty"`
 	// ReleaseURL is the repository the project's releases are fetched from (espdns release
-	// fetch, the pages' Get firmware): https://<host>/<owner>/<repo>, a mirror
-	// of it; "" for the project's own, https://github.com/skitzo2000/espdns.
+	// fetch, the pages' Get firmware): https://<host>/<owner>/<repo>, a GitHub
+	// repository (a fork's, say); "" for the project's own, https://github.com/skitzo2000/espdns.
 	ReleaseURL string `json:"release_url,omitempty"`
 }
 
@@ -215,7 +215,7 @@ func (s Settings) Check() error {
 	}
 	if s.ReleaseURL != "" {
 		u, err := url.Parse(s.ReleaseURL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil ||
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
 			len(strings.Split(strings.Trim(u.Path, "/"), "/")) != 2 {
 			return refuse("release_url", "%q is not a repository's page, https://<host>/<owner>/<repo>", s.ReleaseURL)
 		}

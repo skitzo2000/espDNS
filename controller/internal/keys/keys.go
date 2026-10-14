@@ -56,7 +56,7 @@ func (f FileSource) String() string { return f.Path }
 func (f FileSource) Key() (*ecdsa.PrivateKey, error) {
 	b, err := secfile.Read(f.Path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("%w: %s doesn't exist (import one with espdns key import: docs/getting-started.md, step 7)", ErrNoKey, f.Path)
+		return nil, fmt.Errorf("%w: %s doesn't exist (make one in the setup, Make your keys, or import one with espdns key import)", ErrNoKey, f.Path)
 	}
 	if err != nil {
 		return nil, err

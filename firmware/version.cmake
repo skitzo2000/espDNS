@@ -1,4 +1,4 @@
-# The version: the repository's VERSION, the one place it
+# The version (docs/developer.md, Versions and releases): the firmware's VERSION, the one place it
 # is set. espdns_version(<file> <var>) reads it into <var>, MAJOR.MINOR.PATCH, or stops the
 # build saying what is wrong. CMakeLists.txt makes it the app descriptor's version.
 #
@@ -6,7 +6,7 @@
 # prints the version.
 function(espdns_version file var)
     if(NOT EXISTS "${file}")
-        message(FATAL_ERROR "no ${file}: the repository's VERSION names the version built")
+        message(FATAL_ERROR "no ${file}: the firmware's VERSION names the version built")
     endif()
     file(READ "${file}" text)
     if(NOT text MATCHES "^((0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*))\n$")

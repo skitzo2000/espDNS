@@ -32,6 +32,7 @@
 #include "led.h"
 #include "mbedtls/sha256.h"
 #include "net.h"
+#include "nodekey_node.h"
 #include "nvs.h"
 #include "metrics_node.h"
 #include "power.h"
@@ -44,6 +45,7 @@
 #include "services.h"
 #include "settings.h"
 #include "share.h"
+#include "zread.h"
 
 static const char *TAG = "ota";
 
@@ -550,7 +552,7 @@ static bool release_head(httpd_req_t *req, rjob_t *j)
         why = rel_verify(j->hdr, &s_trust, last_seq(kind), limit, &j->m);
     /* KEYS: the recovery key, this node by its ID, keys from the keys partition */
     if (!why && kind == REL_KEYS)
-        why = rel_keys_check(&j->m, &s_trust);
+        why = rel_keys_check(&j->m);
     if (!why && kind == REL_KEYS && j->m.payload_len != KEYS_REL_LEN)
         why = "a keys release's payload is 138 bytes";
     uint32_t gen;
@@ -685,6 +687,9 @@ static const char *reset_name(esp_reset_reason_t r)
  * secondary zone's entry without its name, with every number at its longest (111 bytes),
  * which also holds a forward zone's (41 bytes without its name). */
 #define STATUS_FIXED 9216
+/* The protocol this firmware speaks to the controller (/status "proto"): raised only by a
+ * change that breaks what a controller expects (controller/internal/updates, Proto*). */
+#define STATUS_PROTO "1"
 #define STATUS_SLOT  128
 
 static esp_err_t status_get(httpd_req_t *req)
@@ -742,26 +747,29 @@ static esp_err_t status_get(httpd_req_t *req)
     if (!j)
         return httpd_resp_send_500(req);
     n += (size_t)snprintf(j + n, cap - n,
-        "{\"project\":\"%s\",\"version\":\"%s\",\"elf_sha256\":\"%s\",\"built\":\"%s\",\"idf\":\"%s\","
+        "{\"project\":\"%s\",\"proto\":" STATUS_PROTO ",\"version\":\"%s\",\"elf_sha256\":\"%s\",\"built\":\"%s\",\"idf\":\"%s\","
         "\"slot\":\"%s\",\"ota_state\":\"%s\",\"uptime_s\":%lld,\"ip\":\"" IPSTR "\","
         "\"node_id\":\"" MACSTR "\",\"board\":\"%s\",\"image\":\"%s\",\"board_source\":\"%s\","
         "\"board_error\":\"%s\",\"fallback_board\":\"%s\",\"keys\":[\"%s\",\"%s\"],"
-        "\"keys_retired\":%s,\"keys_source\":\"%s\",\"keys_gen\":%s,\"keys_error\":\"%s\","
+        "\"keys_retired\":%s,\"keys_source\":\"%s\",\"keys_gen\":%s,\"keys_error\":\"%s\",\"node_key\":\"%s\","
         "\"seq\":{\"firmware\":%llu,\"config\":%llu,\"zones\":%llu,\"blocklist\":%llu,\"overrides\":%llu,\"control\":%llu,"
         "\"keys\":%llu},"
         "\"degraded\":%s,\"heap_free\":%u,\"psram_free\":%u,"
         "\"queries\":{\"total\":%lu,\"udp\":%lu,\"tcp\":%lu,\"auth\":%lu,\"forwarded\":%lu,\"cache_hits\":%lu,"
-        "\"nxdomain\":%lu,\"servfail\":%lu,\"refused\":%lu,\"notifies\":%lu,\"dropped\":%lu},",
+        "\"nxdomain\":%lu,\"servfail\":%lu,\"refused\":%lu,\"notifies\":%lu,\"dropped\":%lu,"
+        "\"refused_source\":%lu,\"tcp_closed\":%lu},",
         e_proj, e_ver, sha, e_built, e_idf, run->label, state_name(st),
         esp_timer_get_time() / 1000000, IP2STR((esp_ip4_addr_t *)&ip), MAC2STR(s_trust.node_id), e_board,
         e_image, e_src, e_err, e_fb, keys_node_fp(0), keys_node_fp(1), kret, keys_node_source(), kgen, e_kerr,
+        nodekey_node_pub(),
         (unsigned long long)seq_get(REL_FIRMWARE),
         (unsigned long long)seq_get(REL_CONFIG), (unsigned long long)seq_get(REL_ZONES), (unsigned long long)seq_get(REL_BLOCKLIST), (unsigned long long)seq_get(REL_OVERRIDES),
         (unsigned long long)seq_get(REL_CONTROL), (unsigned long long)last_seq(REL_KEYS), (h.reasons & HR_DEGRADED_MASK) ? "true" : "false",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         (unsigned long)s.queries, (unsigned long)s.udp, (unsigned long)s.tcp, (unsigned long)s.auth,
         (unsigned long)s.forwarded, (unsigned long)s.cache_hits, (unsigned long)s.nxdomain,
-        (unsigned long)s.servfail, (unsigned long)s.refused, (unsigned long)s.notifies, (unsigned long)s.dropped);
+        (unsigned long)s.servfail, (unsigned long)s.refused, (unsigned long)s.notifies, (unsigned long)s.dropped,
+        (unsigned long)s.refused_source, (unsigned long)s.tcp_closed);
     /* Boot timing in ms since the app started; null for a step that hasn't finished. */
     /* The MAC of the interface it uses (Ethernet or Wi-Fi), what a DHCP reservation or a
      * static address is set by; "" before the interface is up. */
@@ -790,10 +798,10 @@ static esp_err_t status_get(httpd_req_t *req)
         n += health_json(&h, j + n, cap - n);
     if (n < cap)
         n += (size_t)snprintf(j + n, cap - n,
-                              "},\"sd\":{\"state\":\"%s\",\"timed_out\":%s,\"timeout_ms\":%d},"
-                              "\"led\":{\"kind\":\"%s\",\"identify_s\":%lu},",
-                              sd_state_name(sd_state()), sd_timed_out() ? "true" : "false", SD_BOOT_TIMEOUT_MS,
-                              led_kind_name(), (unsigned long)health_identify_left());
+                              "},\"sd\":{\"state\":\"%s\",\"timed_out\":%s,\"timeout_ms\":%d},",
+                              sd_state_name(sd_state()), sd_timed_out() ? "true" : "false", SD_BOOT_TIMEOUT_MS);
+    if (n < cap)
+        n += led_status_json(j + n, cap - n, health_identify_left());
     n += (size_t)snprintf(j + n, cap - n, "\"reset\":\"%s\",\"boot_ms\":", reset_name(esp_reset_reason()));
     n += (size_t)(boot_ms() ? snprintf(j + n, cap - n, "%lu", (unsigned long)boot_ms()) : snprintf(j + n, cap - n, "null"));
     n += (size_t)snprintf(j + n, cap - n, ",\"boot_limit_ms\":%d,\"boot\":{", BOOT_LIMIT_MS);
@@ -827,7 +835,7 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     reg_unlock();
     if (n < cap)
-        n += (size_t)snprintf(j + n, cap - n, "],");
+        n += (size_t)snprintf(j + n, cap - n, "],\"reads\":[\"zone\"],");
     if (n < cap)
         n += services_status_json(j + n, cap - n);
     if (n + 1 < cap) {
@@ -871,6 +879,47 @@ static esp_err_t status_get(httpd_req_t *req)
     esp_err_t r = httpd_resp_send(req, j, n < cap ? (ssize_t)n : (ssize_t)cap - 1);
     free(j);
     return r;
+}
+
+static int zone_send(void *req, const char *buf, size_t len)
+{
+    return httpd_resp_send_chunk(req, buf, (ssize_t)len) == ESP_OK ? 0 : -1;
+}
+
+static esp_err_t zone_fail(httpd_req_t *req, const char *status, const char *msg)
+{
+    httpd_resp_set_status(req, status);
+    return httpd_resp_sendstr(req, msg);
+}
+
+/* GET /zone (zread.h): private addresses only, as /querylog. */
+static esp_err_t zone_get(httpd_req_t *req)
+{
+    if (!ota_peer_private(req)) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "private addresses only\n");
+    }
+    char q[320], name[DNS_MAX_NAME];
+    bool bad = httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+               httpd_query_key_value(q, "name", name, sizeof(name)) != ESP_OK;
+    uint64_t from = querylog_arg(bad ? NULL : q, "from", 0, &bad);
+    uint64_t limit = querylog_arg(bad ? NULL : q, "limit", ZR_LIMIT_DEF, &bad);
+    uint64_t gen = querylog_arg(bad ? NULL : q, "gen", UINT64_MAX, &bad);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (bad || limit == 0)
+        return zone_fail(req, "400 Bad Request",
+                         "{\"error\":\"name: a zone; from, limit and gen: whole numbers, limit 1 or more\"}\n");
+    char *buf = heap_caps_malloc_prefer(ZR_BUF, 2, MALLOC_CAP_SPIRAM, MALLOC_CAP_8BIT);
+    if (!buf)
+        return httpd_resp_send_500(req);
+    int r = zread_page(name, from, limit < ZR_LIMIT_MAX ? limit : ZR_LIMIT_MAX, gen, buf, ZR_BUF, zone_send, req);
+    free(buf);
+    if (r == 404)
+        return zone_fail(req, "404 Not Found", "{\"error\":\"no such zone held here\"}\n");
+    if (r == 409)
+        return zone_fail(req, "409 Conflict", "{\"error\":\"the zone changed: read it again from 0\"}\n");
+    return r == 200 ? httpd_resp_send_chunk(req, NULL, 0) : ESP_FAIL;
 }
 
 /* GET /health: cheap and open (no names), for load balancers, monitoring and the controller.
@@ -1129,12 +1178,14 @@ void ota_start(void)
     }
     static const hroute_t status = { .fn = status_get }, health = { .fn = health_get },
                           metrics = { .fn = metrics_get }, querylog = { .fn = querylog_get },
+                          zone = { .fn = zone_get },
                           ota = { .head = ota_head, .body = ota_body, .lock = true },
                           rel = { .head = release_head, .body = release_body, .lock = true };
     route(srv, "/status", HTTP_GET, &status);
     route(srv, "/health", HTTP_GET, &health);   /* open (no names), for monitoring */
     route(srv, "/metrics", HTTP_GET, &metrics); /* open, as /health */
     route(srv, "/querylog", HTTP_GET, &querylog); /* private addresses only */
+    route(srv, "/zone", HTTP_GET, &zone);         /* private addresses only */
     route(srv, "/ota", HTTP_POST, &ota);
     route(srv, "/release", HTTP_POST, &rel);
 #ifdef DNS2_BENCH_BLOCKLIST
@@ -1142,7 +1193,7 @@ void ota_start(void)
     route(srv, "/bench", HTTP_POST, &bench);
     ESP_LOGW(TAG, "bench build: POST /bench; rolls back by itself in %d s", HEALTH_TIMEOUT_S);
 #endif
-    ESP_LOGI(TAG, "http on :80 (/health, /status, /metrics, /querylog, /ota, /release)");
+    ESP_LOGI(TAG, "http on :80 (/health, /status, /metrics, /querylog, /zone, /ota, /release)");
 }
 
 static bool any_zone_loaded(void)

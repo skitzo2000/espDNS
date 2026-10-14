@@ -55,6 +55,7 @@ function form(name, over = {}) {
       tz: { value: { tz: "EST5EDT,M3.2.0,M11.1.0", name: "America/New_York" }, from: "config", applies: "live" },
       blocking: { value: true, from: "default", applies: "live" },
       querylog: { value: { enabled: true, client: "full" }, from: "default", applies: "live" },
+      led: { value: { led: { kind: "none" }, board: { kind: "none" } }, from: "node", applies: "live" },
     },
     pending: null,
     time_zones: [{ name: "UTC", tz: "UTC0" }, { name: "America/New_York", tz: "EST5EDT,M3.2.0,M11.1.0" }, { name: "Europe/London", tz: "GMT0BST,M3.5.0/1,M10.5.0" }],
@@ -85,12 +86,15 @@ async function fake(page, opts = {}) {
       const b = r.request().postDataJSON();
       state.posts.push(["settings", id, b]);
       if (b.settings.name === "dns3") return json(r, { error: "name: 192.0.2.54 is called dns3 already", field: "name" }, 400);
+      if (b.settings.led && b.settings.led.green === 11) {
+        return json(r, { error: "dns2.json: its status light doesn't fit board p4-ip101: GPIO 11 used twice: SPI2 MOSI and LED green" }, 400);
+      }
       const to = b.settings.network && b.settings.network.address && b.settings.network.address.split("/")[0];
       if (to && to !== f.node.host) {
         return json(r, { error: `network: this moves ${f.node.name} to ${to}, which isn't a change to apply: a move is made on its own, now. The node restarts onto its new address and is confirmed there`, field: "network", move: to }, 400);
       }
       const fields = Object.keys(b.settings).filter(k => k !== "reset").concat(b.settings.reset || []);
-      const words = { name: "name", network: "address", forwarders: "upstream DNS", tz: "time zone", blocking: "blocking", querylog: "query log" };
+      const words = { name: "name", network: "address", forwarders: "upstream DNS", tz: "time zone", blocking: "blocking", querylog: "query log", led: "status light" };
       const ch = { id: `c${state.changes.length + 1}`, kind: "config", name: f.config.file, summary: `${f.node.name}: ${fields.map(x => words[x]).join(", ")}`, effect: "Applies live: DNS keeps answering" };
       state.changes.push(ch);
       const next = JSON.parse(JSON.stringify(f));
@@ -196,7 +200,7 @@ test("Nodes opens a node's page", async ({ page }) => {
   await login(page);
   await fake(page);
   await page.goto("./");
-  await page.locator("#nodes .r[data-href]").nth(1).locator(".sub").first().click();
+  await page.locator("#nodes .r[data-href]").nth(1).locator(".flag").click();
   await expect(page).toHaveURL(new RegExp(`node\\.html#${encodeURIComponent(ID3)}$`));
   await expect(page.locator("#name")).toHaveText("dns3");
 });
@@ -229,13 +233,14 @@ test("settings: a change saved goes into the changes to apply; a refusal shows i
   const state = await fake(page);
   await open(page, ID2);
   const rows = page.locator("#settings details.ex");
-  await expect(rows).toHaveCount(6);
+  await expect(rows).toHaveCount(7);
   await expect(rows.nth(0).locator("summary")).toContainText("Name");
   await expect(rows.nth(1).locator(".val")).toHaveText(`${DNS2}/24 · gateway 192.0.2.1`);
   await expect(rows.nth(2).locator(".val")).toHaveText("198.51.100.1, 198.51.100.2");
   await expect(rows.nth(3).locator(".val")).toHaveText("America/New_York");
   await expect(rows.nth(4).locator(".val")).toHaveText("On");
   await expect(rows.nth(5).locator(".val")).toHaveText("Keeps client addresses");
+  await expect(rows.nth(6).locator(".val")).toHaveText("None (its board's)");
 
   // Nothing changed: said, nothing sent.
   await page.locator("#set-save").click();
@@ -270,6 +275,38 @@ test("settings: a change saved goes into the changes to apply; a refusal shows i
   expect(await violations()).toEqual([]);
 });
 
+test("settings: the status light, an RGB LED on three GPIOs; a pin taken shows in its row", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  const state = await fake(page);
+  await open(page, ID2);
+  const row = page.locator('#settings details.ex[data-field="led"]');
+  await row.locator("summary").click();
+  await expect(row).toContainText("Its board's: None.");
+  // Only the pins its kind takes are shown.
+  await expect(page.locator("#set-led-pin")).toBeHidden();
+  await expect(page.locator("#set-led-red")).toBeHidden();
+  await page.locator("#set-led").selectOption("gpio");
+  await expect(page.locator("#set-led-pin")).toBeVisible();
+  await expect(page.locator("#set-led-low")).toBeVisible();
+  await page.locator("#set-led").selectOption("rgb");
+  await expect(page.locator("#set-led-pin")).toBeHidden();
+  await page.locator("#set-led-red").fill("4");
+  await page.locator("#set-led-green").fill("11");
+  await page.locator("#set-led-blue").fill("6");
+  await page.locator("#set-led-ca").check();
+  // A pin the board uses: refused, shown in the row.
+  await page.locator("#set-save").click();
+  await expect(row.locator(".hint.bad")).toContainText("GPIO 11 used twice: SPI2 MOSI and LED green");
+  await page.locator("#set-led-green").fill("5");
+  await page.locator("#set-save").click();
+  await expect(page.locator("#toast")).toContainText("Added to changes to apply: dns2: status light");
+  const sent = state.posts.filter(p => p[0] === "settings");
+  expect(sent.at(-1)[2]).toEqual({ settings: { led: { kind: "rgb", red: 4, green: 5, blue: 6, common_anode: true } }, version: "v1" });
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
 test("Blink its light, Restart, Update firmware and the quick fixes run as jobs", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
@@ -297,7 +334,7 @@ test("Blink its light, Restart, Update firmware and the quick fixes run as jobs"
   await expect(u).toContainText("dns3 keeps answering while dns2 restarts");
   await u.getByRole("button", { name: "Add to changes" }).click();
   await expect(page.locator("#toast")).toContainText("Added to changes to apply: update dns2");
-  expect(state.posts.find(p => p[0] === "updates")[1]).toEqual({ nodes: [DNS2], builds: { [DNS2]: "b4" } });
+  expect(state.posts.find(p => p[0] === "updates")[1]).toEqual({ nodes: [DNS2] });
 
   await page.locator("#details > summary").click();
   await page.getByRole("button", { name: "Older blocklist" }).click();
@@ -357,7 +394,7 @@ test("out of service: taken out while offline, muted, returned to service, remov
   await expect(page.locator("#attention")).toHaveClass(/\balert\b/);
   await page.getByRole("button", { name: "Take out of service" }).click();
   const d = page.getByRole("dialog", { name: "Take dns3 out of service?" });
-  await expect(d).toContainText("the controller sends it no changes and doesn't count it while dns2 change");
+  await expect(d).toContainText("gets no changes, and isn't counted while dns2 changes");
   await d.getByRole("button", { name: "Take out of service" }).click();
   await expect(page.getByRole("dialog", { name: "dns3 is out of service" })).toBeVisible();
   expect(jobs()).toEqual([{ kind: "node-out", params: { node: DNS3 } }]);
@@ -390,8 +427,8 @@ test("out of service: taken out while offline, muted, returned to service, remov
   expect(jobs()[2]).toEqual({ kind: "node-remove", params: { node: DNS3 } });
   await expect(page).toHaveURL(/\/(index\.html)?$/);
 
-  // On Nodes: its row muted with its badge, not counted as a node down.
-  await expect(page.locator("#nodes .r.r-out .out-badge")).toHaveText("Out of service");
+  // On Nodes: its row muted with its flag, not counted as a node down.
+  await expect(page.locator("#nodes .r.r-out .flag")).toHaveText("Out of service");
   await expect(page.locator("#nodes .r.r-out")).not.toHaveClass(/r-bad|r-warn/);
   await expect(page.locator("#facts")).toContainText("1 of 1 node answering");
   await expect(page.locator("#sentence")).toHaveText("DNS is answering on dns2");

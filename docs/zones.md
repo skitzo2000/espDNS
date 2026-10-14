@@ -9,11 +9,11 @@ alpha (0.0.x).
 
 A node looks at each query in this order:
 
-1. **A zone it holds**, hosted or secondary. The node answers with authority, and these
+1. A zone it holds, hosted or secondary. The node answers with authority, and these
    names are never blocked.
-2. **Blocking**, if the service is on ([blocking.md](blocking.md)).
-3. **A forward zone**: a domain sent to its own forwarder.
-4. **The cache, then the default forwarders.** Everything else.
+2. Blocking, if the service is on ([blocking.md](blocking.md)).
+3. A forward zone: a domain sent to its own forwarder.
+4. The cache, then the default forwarders, for everything else.
 
 Each zone name has exactly one kind; the controller refuses a name that's two at once, such
 as a hosted zone that's also a secondary zone on the same node.
@@ -32,7 +32,7 @@ Commands here run from `controller/`. The data directory is the one `ESPDNS_DATA
 ([Getting started](getting-started.md#run-the-setup)); other ways to
 give it are in the [CLI reference](reference/cli.md#secrets).
 
-Most tasks can be done from the dashboard at http://127.0.0.1:8480. You need to be logged in
+You can do most tasks from the dashboard at http://127.0.0.1:8480. You need to be logged in
 to read or change zones.
 
 ## Hosted zones
@@ -190,6 +190,15 @@ The zones to copy end up in each node's config, under `"secondary"`:
 **Zone primary** and **+ Add zone** on the Zones page edit these for you, and a node's own
 page can edit its config.
 
+### See a copied zone's records
+
+Open the zone on **Zones** to see its records, read-only; edit them on your primary. The
+controller reads them from a node that holds the zone: the one with the newest copy, then
+the next if that one can't hand it over. The page says which node they came from. Only when
+no node can (none has copied it yet, or none answers) does the controller ask your primary
+for them by zone transfer, and then the primary must allow zone transfers from the
+controller's computer too.
+
 ### When the nodes can't copy a zone
 
 A zone the nodes can't copy shows **Can't copy it** on Zones. Its page says what to check:
@@ -242,9 +251,9 @@ Forwarders are plain DNS: UDP, with TCP for answers that don't fit.
 
 ## Live changes and reboots
 
-- **Live:** the default forwarders, `upstream_timeout_ms`, `soa_poll_s` and `retry_s`.
-- **Reboot:** a change to the list of secondary zones, the secondary primary, or the forward
-  zones.
+These apply live: the default forwarders, `upstream_timeout_ms`, `soa_poll_s` and `retry_s`.
+A change to the list of secondary zones, the secondary primary, or the forward zones needs a
+reboot.
 
 The **Configs** page shows which is which before you push. A rolling push reboots one node
 at a time, and only while another node is answering.

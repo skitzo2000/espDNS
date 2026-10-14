@@ -6,10 +6,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# The version: the repository's VERSION (docker build --build-context version=..; its
-# .dockerignore lets in nothing else), linked in (internal/version), as controller/Makefile does
-COPY --from=version VERSION /VERSION
-RUN v=$(cat /VERSION) && \
+# The version: controller/VERSION, linked in (internal/version), as controller/Makefile does
+RUN v=$(cat VERSION) && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/skitzo2000/espdns/controller/internal/version.Version=$v" -o /espdns-controller ./cmd/espdns-controller && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/skitzo2000/espdns/controller/internal/version.Version=$v" -o /espdns ./cmd/espdns
 # The data directory, empty, the runtime user's (65532, nonroot) and 0700: a new named volume

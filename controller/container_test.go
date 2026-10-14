@@ -98,16 +98,15 @@ func TestDockerignoreAllowlist(t *testing.T) {
 	}
 }
 
-// The binaries carry the repository's VERSION (internal/version): make build and the image
-// both link it in, at the package's path, and the image's build gets it from the repository's
-// top, a context whose .dockerignore lets in VERSION only.
+// The binaries carry controller/VERSION (internal/version): make build and the image both
+// link it in, at the package's path; the image's build has it in its own context.
 func TestVersionLinked(t *testing.T) {
 	const x = "-X github.com/skitzo2000/espdns/controller/internal/version.Version="
 	if _, err := os.Stat("internal/version/version.go"); err != nil {
 		t.Fatal(err)
 	}
 	mk := read(t, "Makefile")
-	if !strings.Contains(mk, x+"$(shell cat $(CURDIR)/../VERSION)") {
+	if !strings.Contains(mk, x+"$(shell cat $(CURDIR)/VERSION)") {
 		t.Errorf("Makefile: no %s<VERSION>", x)
 	}
 	for _, bin := range []string{"espdns-controller", "espdns"} {
@@ -116,17 +115,14 @@ func TestVersionLinked(t *testing.T) {
 		}
 	}
 	df := read(t, "Dockerfile")
-	if !strings.Contains(df, "COPY --from=version VERSION /VERSION") {
-		t.Error("Dockerfile: VERSION not copied from the version context")
+	if !strings.Contains(df, "RUN v=$(cat VERSION) && ") {
+		t.Error("Dockerfile: VERSION not read")
 	}
 	if n := strings.Count(df, x+"$v\""); n != 2 {
 		t.Errorf("Dockerfile: %d builds link the version, want 2", n)
 	}
-	if !regexp.MustCompile(`(?m)^version: \.\.$`).MatchString(strings.Join(lines(t, "compose.yaml"), "\n")) {
-		t.Error("compose.yaml: no version: .. build context")
-	}
-	if ign := lines(t, "../.dockerignore"); len(ign) != 2 || ign[0] != "*" || ign[1] != "!VERSION" {
-		t.Errorf("../.dockerignore: %q, want * and !VERSION only", ign)
+	if !strings.Contains(strings.Join(lines(t, ".dockerignore"), "\n"), "\n!VERSION\n") {
+		t.Error(".dockerignore: VERSION isn't let in")
 	}
 }
 
@@ -147,10 +143,8 @@ func TestPublicKeysInImage(t *testing.T) {
 	if b, err := os.ReadFile("../keys/project.pub"); err != nil || len(b) != 65 || b[0] != 4 {
 		t.Errorf("keys/project.pub: not a raw P-256 public key (%v)", err)
 	}
-	for _, wf := range []string{"../.github/workflows/release.yml"} {
-		if w := read(t, wf); !strings.Contains(w, "--build-context keys=keys ") || strings.Contains(w, "firmware/keys") {
-			t.Errorf("%s: the controller image isn't built with --build-context keys=keys", wf)
-		}
+	if w := read(t, "../.github/workflows/release-controller.yml"); !strings.Contains(w, "--build-context keys=keys ") || strings.Contains(w, "firmware/keys") {
+		t.Error(".github/workflows/release-controller.yml: the controller image isn't built with --build-context keys=keys")
 	}
 }
 

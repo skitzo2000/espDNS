@@ -16,7 +16,7 @@ import { h, arr, obj, str, toast, copyText } from "./shell.js";
 import { getJSON, post, ended } from "./common.js";
 import { readPublic, base64 } from "./keys.js";
 
-const STATE = { prepared: "waiting", keys: "new keys in use; its settings, zones and lists not all signed again yet", done: "done" };
+const STATE = { prepared: "waiting", keys: "new keys in use; settings, zones and lists not all signed again yet", done: "done" };
 
 // summary is the rotation under way in a few words, for the row while closed.
 export function rotationSummary(r) {
@@ -75,8 +75,8 @@ export function rotateBox(o = {}) {
         recFile),
       rec.present ? null : h("label", { class: "f" },
         h("span", {}, "The recovery public key your nodes trust now (recovery.pub)"), curFile,
-        h("span", { class: "hint" }, "The controller doesn't have it yet: the public half only. The KEYS releases are checked with it.")),
-      h("label", { class: "check" }, comp, h("span", {}, "The release key is compromised: the nodes drop it at once instead of keeping it for what they stored")),
+        h("span", { class: "hint" }, "The public half only: the controller doesn't have it yet, and checks the signed releases with it.")),
+      h("label", { class: "check" }, comp, h("span", {}, "The release key is compromised: nodes drop it at once instead of keeping it for what they stored")),
       h("div", { class: "row" }, go));
     form.addEventListener("submit", async e => {
       e.preventDefault();
@@ -96,7 +96,7 @@ export function rotateBox(o = {}) {
       } catch (err) { say(err.message, "bad"); } finally { busy = go.disabled = false; }
     });
     return [
-      h("p", { class: "small" }, "New keys for every node: a KEYS release for each, signed offline with the recovery key they trust. The controller prepares and pushes; it never has the recovery key."),
+      h("p", { class: "small" }, "New keys for every node, signed offline with the recovery key they trust. The controller prepares and pushes; it never has the recovery key."),
       last ? h("p", { class: "hint", id: "rot-last" }, `Last rotation ${str(last.id)}: release ${str(obj(last.new).release)}, recovery ${str(obj(last.new).recovery)}.`) : null,
       form];
   }
@@ -138,8 +138,8 @@ export function rotateBox(o = {}) {
     return [
       h("p", { class: "small", id: "rot-what" }, `Rotation ${str(p.id)}: release ${str(old.release)} → ${str(nw.release)}, recovery ${str(old.recovery)} → ${str(nw.recovery)}.`),
       h("p", { class: p.compromised ? "small bad" : "hint" }, p.compromised
-        ? "Compromised: each node drops the old release key at once, so everything it stores is signed again with the new key right after."
-        : str(old.release) === str(nw.release) ? "The release key stays." : "Each node keeps the old release key for what it stored until it is signed again with the new key, right after."),
+        ? "Compromised: each node drops the old release key at once, then everything it stores is signed again with the new key."
+        : str(old.release) === str(nw.release) ? "The release key stays." : "Each node keeps the old release key for what it stored until that's signed again with the new key."),
       nodes,
       h("b", { class: "small" }, "Sign it offline"),
       h("p", { class: "small" }, `With the recovery key ${str(old.recovery)}, on this machine, from the controller's folder (no network; the key is read, never written):`),
@@ -147,7 +147,7 @@ export function rotateBox(o = {}) {
       h("div", { class: "row" }, copy, again),
       h("label", { class: "f" }, h("span", {}, "Signed elsewhere? Add each node's release.bin"), files),
       h("b", { class: "small" }, "Push"),
-      h("p", { class: "hint" }, "One node at a time: its new keys, then its settings, zones and lists signed again with the new key, then its health. A failure stops it; Push again goes on from there."),
+      h("p", { class: "hint" }, "One node at a time: its new keys, then its settings, zones and lists signed again, then a health check. A failure stops it; Push again carries on from there."),
       h("div", { class: "row" }, push, discard)];
   }
 

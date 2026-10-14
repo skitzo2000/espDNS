@@ -32,9 +32,6 @@ var Clocks = map[string]ImageClocks{
 	"esp32s3-octal": {240, 80, true, 80, []int{40, 80, 160}},
 	"esp32s3-eth":   {240, 80, true, 80, []int{40, 80, 160}},
 	"esp32s3-quad":  {240, 80, true, 80, []int{40, 80, 160}},
-	"esp32":         {240, 240, false, 40, []int{40}},
-	"esp32c3":       {160, 80, true, 80, []int{40, 80}},
-	"esp32c6":       {160, 80, true, 80, []int{40, 80}},
 }
 
 // CPUPlan is the board's clock scaling before a node config has its say: on or off, and

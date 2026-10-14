@@ -71,7 +71,7 @@ func begin(dataDir, cmd string, args []string, dry bool) (ctx context.Context, e
 			err = errors.New("not a directory")
 		}
 		return nil, nil, fmt.Errorf("-data %s: %v: the data directory shared with the controller, for the fleet lock "+
-			"and the action log (make it before you start the controller: docs/getting-started.md, step 5)", dataDir, err)
+			"and the action log (make it before you start the controller: docs/getting-started.md)", dataDir, err)
 	}
 	h := fleetlock.Self("espdns "+cmd, strings.Join(args, " "))
 	who := h.User

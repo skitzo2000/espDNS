@@ -14,15 +14,6 @@
 .zbody { display: grid; gap: 28px; min-width: 0 }
 h1.mono { font-family: var(--mono); font-size: 22px; overflow-wrap: anywhere }
 
-/* + Add zone: what the lookup found, and setting it up by hand */
-.zpanel .manual { border-top: 1px solid var(--line); padding-top: 10px }
-.zpanel .manual summary { cursor: pointer; font-size: 13.5px; color: var(--muted) }
-.zpanel .mopts { display: grid; gap: 8px; margin-top: 10px }
-.zpanel .mopt { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; font-size: 14px }
-.zpanel .mopt input[type=radio] { margin-top: 3px; accent-color: var(--orange) }
-.zpanel .mopt .t { width: 150px; padding: 4px 8px; margin-left: 4px }
-.zpanel .tried { margin: 0; padding-left: 18px }
-
 /* Records */
 .recs { width: 100%; border-collapse: collapse; font-size: 14px }
 .recs th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 8px 18px; border-bottom: 1px solid var(--line) }

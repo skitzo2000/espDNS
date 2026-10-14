@@ -66,6 +66,18 @@ func TestRead(t *testing.T) {
 	if f.Forwarders.From != FromUnknown || f.Forwarders.Value != nil || f.TZ.From != FromUnknown {
 		t.Errorf("unknown: %+v %+v", f.Forwarders, f.TZ)
 	}
+	// The status light: the node's, with its board's; a config's in its place.
+	st.LED = &release.LEDStatus{LEDSetting: release.LEDSetting{Kind: "rgb", Pins: []int{4, 5, 6}, ActiveLow: true}, From: "board",
+		Board: &release.LEDSetting{Kind: "gpio", Pins: []int{2}}}
+	f = Read(nil, st)
+	if l, b := f.LED.Value.LED, f.LED.Value.Board; f.LED.From != FromNode || l.Kind != "rgb" || *l.Red != 4 || *l.Blue != 6 ||
+		!l.CommonAnode || b.Kind != "gpio" || *b.Pin != 2 || b.ActiveLow || f.LED.Applies != "live" {
+		t.Errorf("led from the node: %+v", f.LED)
+	}
+	f = Read(parse(t, `{"led":{"kind":"none"}}`), st)
+	if f.LED.From != FromConfig || f.LED.Value.LED.Kind != "none" || f.LED.Value.Board.Kind != "gpio" {
+		t.Errorf("led from the config: %+v", f.LED)
+	}
 	// Nothing at all: the defaults nodecfg documents.
 	f = Read(nil, nil)
 	if !f.Blocking.Value || f.Blocking.From != FromDefault || f.QueryLog.Value != (QueryLog{Enabled: true, Client: "full"}) ||
@@ -81,7 +93,7 @@ func TestApply(t *testing.T) {
 	keep, _ := json.Marshal(base)
 	c, err := Apply(base, Edit{Name: ptr(" dns-b "), Network: &nodecfg.Network{Address: "192.0.2.60/24", Gateway: "192.0.2.1"},
 		Forwarders: ptr([]string{"198.51.100.1", " 198.51.100.2"}), TZ: ptr("Europe/London"), Blocking: ptr(false),
-		QueryLog: &QueryLogEdit{Client: ptr("hidden")}})
+		QueryLog: &QueryLogEdit{Client: ptr("hidden")}, LED: &nodecfg.LED{Kind: "rgb", Red: ptr(4), Green: ptr(5), Blue: ptr(6)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +102,7 @@ func TestApply(t *testing.T) {
 	}
 	if c.Name != "dns-b" || c.Network.Address != "192.0.2.60/24" || !slices.Equal(*c.Forwarders, []string{"198.51.100.1", "198.51.100.2"}) ||
 		c.Time.TZ != "GMT0BST,M3.5.0/1,M10.5.0" || !slices.Equal(*c.Time.NTP, []string{"192.0.2.1"}) || *c.Blocking.Enabled ||
-		c.Blocking.Answer != "nxdomain" || c.QueryLog.Client != "hidden" || c.QueryLog.Enabled != nil {
+		c.Blocking.Answer != "nxdomain" || c.QueryLog.Client != "hidden" || c.QueryLog.Enabled != nil || *c.LED.Green != 5 {
 		t.Errorf("applied %+v", c)
 	}
 	if *c.Wifi.Password != "a secret pass" || (*c.Secondary.Zones)[0] != "example.com" {
@@ -107,7 +119,7 @@ func TestApply(t *testing.T) {
 
 	// Reset: back to the board's or the firmware's, keys emptied away.
 	full := parse(t, `{"name":"x","network":{"address":"dhcp"},"forwarders":["198.51.100.1"],"time":{"tz":"UTC0"},
-		"blocking":{"enabled":false},"querylog":{"enabled":false}}`)
+		"blocking":{"enabled":false},"querylog":{"enabled":false},"led":{"kind":"gpio","pin":2}}`)
 	c, err = Apply(full, Edit{Reset: Fields})
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +156,9 @@ func TestApplyRefused(t *testing.T) {
 		{Edit{QueryLog: &QueryLogEdit{Client: ptr("some")}}, "querylog", `"full", "subnet" or "hidden"`},
 		{Edit{QueryLog: &QueryLogEdit{Client: ptr("")}}, "querylog", `"full", "subnet" or "hidden"`},
 		{Edit{QueryLog: &QueryLogEdit{}}, "querylog", `give "enabled"`},
+		{Edit{LED: &nodecfg.LED{Kind: "rgb", Red: ptr(4), Green: ptr(5)}}, "led", "led.blue: required"},
+		{Edit{LED: &nodecfg.LED{Kind: "gpio", Pin: ptr(60)}}, "led", "out of range"},
+		{Edit{LED: &nodecfg.LED{Kind: "neon"}}, "led", `"none", "gpio", "ws2812" or "rgb"`},
 		{Edit{Name: ptr("b"), Reset: []string{"name"}}, "name", "both set and reset"},
 		{Edit{Reset: []string{"wifi"}}, "wifi", "no field"},
 	} {
@@ -170,6 +185,7 @@ func TestAppliesIsTheFirmwares(t *testing.T) {
 		"tz":         {TZ: ptr("Europe/Paris")},
 		"blocking":   {Blocking: ptr(false)},
 		"querylog":   {QueryLog: &QueryLogEdit{Client: ptr("subnet")}},
+		"led":        {LED: &nodecfg.LED{Kind: "gpio", Pin: ptr(2), ActiveLow: true}},
 	}
 	if len(edits) != len(Fields) || len(Applies) != len(Fields) || len(Words) != len(Fields) {
 		t.Fatal("a field without its edit, Applies or Words")

@@ -108,7 +108,7 @@ func cmdKey(args []string) error {
 		return nil
 	}
 	if fi, err := os.Stat(*dataDir); err != nil || !fi.IsDir() {
-		return fmt.Errorf("-data %s: not a directory (make it before you start the controller: docs/getting-started.md, step 5)", *dataDir)
+		return fmt.Errorf("-data %s: not a directory (make it before you start the controller: docs/getting-started.md)", *dataDir)
 	}
 	same, err := keys.Import(path, k, replace)
 	if err != nil {

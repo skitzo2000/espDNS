@@ -18,3 +18,5 @@ void health_start(void);
 bool health_identify(uint32_t secs);
 /* Seconds of identify left. */
 uint32_t health_identify_left(void);
+/* The settings' LED changed: the monitor stops the old one and starts the new one. */
+void health_led_apply(void);

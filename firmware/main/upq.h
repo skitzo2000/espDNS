@@ -19,7 +19,8 @@
  *     which stays in place (the slot, or the loop's TCP buffer) until upq_release.
  *
  * A query past the table's caps (FLIGHT_FULL) is counted as shed, per kind of group, and one
- * to the default forwarders is noted for health ("forwarders slow").
+ * to the default forwarders is noted for health ("forwarders slow"), unless only its own
+ * flight was full (FLIGHT_NAME_FULL: one slow name). Either way it gets FLIGHT_FULL.
  *
  * Portable C (pthreads, BSD sockets): server.c runs it on the node, the tests on threads.
  */

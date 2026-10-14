@@ -13,6 +13,7 @@
 //	  "name": "dns-a",
 //	  "network": { "address": "192.0.2.53/24", "gateway": "192.0.2.1" },
 //	  "wifi": { "ssid": "home", "password": "...", "tx_power_dbm": 11, "power_save": false },
+//	           (the password goes to a node only sealed to its key, as "sealed": Wifi)
 //	  "forwarders": [ "9.9.9.9", "1.1.1.1" ],
 //	  "upstream_timeout_ms": 1500,
 //	  "forward_zones": [ { "zone": "corp.example", "forwarder": "192.0.2.53" } ],
@@ -21,7 +22,9 @@
 //	  "time": { "ntp": [ "192.0.2.1" ], "tz": "EST5EDT,M3.2.0,M11.1.0" },
 //	  "blocking": { "enabled": true, "answer": "null", "ttl": 10 },
 //	  "cpu": { "dfs": false },
-//	  "querylog": { "enabled": true, "client": "full" }
+//	  "querylog": { "enabled": true, "client": "full" },
+//	  "led": { "kind": "rgb", "red": 1, "green": 2, "blue": 15, "common_anode": true },
+//	  "allow": [ "198.51.100.0/24", "2001:db8::/32" ]
 //	}
 package nodecfg
 
@@ -47,6 +50,8 @@ const (
 	maxForwarders = 4
 	maxZones      = 32
 	maxNTP        = 3
+	// MaxAllow is how many networks "allow" may name (firmware CFG_MAX_ALLOW).
+	MaxAllow = 16
 )
 
 type Config struct {
@@ -63,6 +68,62 @@ type Config struct {
 	Blocking          *Blocking      `json:"blocking,omitempty"`
 	CPU               *CPU           `json:"cpu,omitempty"`
 	QueryLog          *QueryLog      `json:"querylog,omitempty"`
+	LED               *LED           `json:"led,omitempty"`
+	// Allow are networks (CIDR, IPv4 or IPv6) the node answers DNS queries from besides the
+	// private ones, live (firmware cfg_src_allowed); queries from anywhere else go unanswered.
+	Allow *[]string `json:"allow,omitempty"`
+}
+
+// LED is the status LED, in place of the board definition's (firmware board_def.h,
+// board_led_t), live: Kind "none", "gpio" (Pin; ActiveLow: lit by a low level), "ws2812"
+// (Pin) or "rgb", a plain RGB LED on three GPIOs (Red, Green, Blue; CommonAnode: lit low).
+// The board definition's "led" (internal/boards) is the same setting. Its pins against the
+// board's other pins are the node's check, and the controller's where it knows the board
+// (boards.CheckLED).
+type LED struct {
+	Kind        string `json:"kind"`
+	Pin         *int   `json:"pin,omitempty"`
+	ActiveLow   bool   `json:"active_low,omitempty"`
+	Red         *int   `json:"red,omitempty"`
+	Green       *int   `json:"green,omitempty"`
+	Blue        *int   `json:"blue,omitempty"`
+	CommonAnode bool   `json:"common_anode,omitempty"`
+}
+
+// LEDKinds are the values LED.Kind takes.
+var LEDKinds = []string{"none", "gpio", "ws2812", "rgb"}
+
+// LEDPin is one pin an LED uses.
+type LEDPin struct {
+	Key string // its key in the JSON: "pin", "red", "green" or "blue"
+	Pin *int
+}
+
+// Pins are the pins the LED's kind uses.
+func (l *LED) Pins() []LEDPin {
+	switch l.Kind {
+	case "gpio", "ws2812":
+		return []LEDPin{{"pin", l.Pin}}
+	case "rgb":
+		return []LEDPin{{"red", l.Red}, {"green", l.Green}, {"blue", l.Blue}}
+	}
+	return nil
+}
+
+// Check checks an LED as the node does (board_led_parse), but for the board's pins.
+func (l *LED) Check() error {
+	if !slices.Contains(LEDKinds, l.Kind) {
+		return fmt.Errorf(`led.kind: "none", "gpio", "ws2812" or "rgb"; not %q`, l.Kind)
+	}
+	for _, p := range l.Pins() {
+		if p.Pin == nil {
+			return fmt.Errorf("led.%s: required", p.Key)
+		}
+		if *p.Pin < 0 || *p.Pin > 54 {
+			return fmt.Errorf("led.%s: GPIO %d out of range", p.Key, *p.Pin)
+		}
+	}
+	return nil
 }
 
 // QueryLog: Enabled false turns the query log off (left out: on, on a board with
@@ -122,9 +183,13 @@ func (n *Network) Check() error {
 	return nil
 }
 
+// Wifi is the Wi-Fi network. A config file has the password in plain text; the controller
+// sends it to a node only as Sealed, sealed to that node's key (release.SealConfig), and a
+// node refuses a config with Password.
 type Wifi struct {
 	SSID       *string `json:"ssid,omitempty"`
 	Password   *string `json:"password,omitempty"`
+	Sealed     *string `json:"sealed,omitempty"`
 	TxPowerDBm *int    `json:"tx_power_dbm,omitempty"`
 	PowerSave  *bool   `json:"power_save,omitempty"`
 }
@@ -220,6 +285,14 @@ func (c *Config) SetsCPU() bool { return c.CPU != nil }
 // SetsQueryLog says whether the config has "querylog", which firmware from before the query
 // log refuses (its /status has no "querylog").
 func (c *Config) SetsQueryLog() bool { return c.QueryLog != nil }
+
+// SetsLED says whether the config has "led", which firmware from before it refuses (its
+// /status "led" has no "from").
+func (c *Config) SetsLED() bool { return c.LED != nil }
+
+// SetsAllow says whether the config has "allow", which firmware from before it refuses (its
+// /status "queries" has no "refused_source").
+func (c *Config) SetsAllow() bool { return c.Allow != nil }
 
 // Services are the node services the config runs, in the node's order (firmware svc.h,
 // svc_enabled): a list the config leaves out is the firmware's default, which has
@@ -356,6 +429,9 @@ func (c *Config) Validate() error {
 				return errors.New("wifi.password: 8-63 characters, or empty for an open network")
 			}
 		}
+		if w.Sealed != nil && (w.SSID == nil || w.Password != nil) {
+			return errors.New("wifi.sealed: only with wifi.ssid, and without wifi.password")
+		}
 		if err := intIn(w.TxPowerDBm, 2, 20, "wifi.tx_power_dbm"); err != nil {
 			return err
 		}
@@ -454,6 +530,32 @@ func (c *Config) Validate() error {
 	}
 	if q := c.QueryLog; q != nil && q.Client != "" && !slices.Contains(QueryLogClients, q.Client) {
 		return errors.New(`querylog.client: "full", "subnet" or "hidden"`)
+	}
+	if c.Allow != nil {
+		if len(*c.Allow) > MaxAllow {
+			return fmt.Errorf("allow: at most %d networks", MaxAllow)
+		}
+		for _, s := range *c.Allow {
+			if err := allowNet(s); err != nil {
+				return err
+			}
+		}
+	}
+	if c.LED != nil {
+		return c.LED.Check()
+	}
+	return nil
+}
+
+// allowNet checks one of "allow" as the node does: a network in CIDR, IPv4 (strict dotted
+// quad) or IPv6, with no host bits set.
+func allowNet(s string) error {
+	p, err := netip.ParsePrefix(s)
+	if err != nil || p.Addr().Zone() != "" || p.Addr().Is4() && strings.Count(s[:strings.IndexByte(s, '/')], ".") != 3 {
+		return fmt.Errorf("allow: a network as 198.51.100.0/24 or 2001:db8::/32; not %q", s)
+	}
+	if p.Masked() != p {
+		return fmt.Errorf("allow: %s has host bits set (the network is %s)", s, p.Masked())
 	}
 	return nil
 }

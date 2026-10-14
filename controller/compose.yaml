@@ -27,9 +27,6 @@ services:
       # COPY --from=boards; docker build --build-context boards=../boards)
       additional_contexts:
         boards: ../boards
-        # The repository's VERSION, linked into the binaries (the Dockerfile's COPY
-        # --from=version): the repository's top, of which its .dockerignore lets in VERSION only
-        version: ..
         # The project's release public key, /keys/project.pub in the image (the Dockerfile's
         # COPY --from=keys), which espdns release import and fetch check a release with: its
         # .dockerignore lets in only it

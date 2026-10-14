@@ -16,10 +16,6 @@
  *           on to measure.
  *   S3      Idles at 80 MHz: still the PLL, so the APB (80), the W5500's SPI clock and the
  *           octal PSRAM's timing are untouched. 40 (the crystal) also changes those.
- *   C3, C6  As the S3: 80 keeps the PLL and the APB clock, and is Wi-Fi's floor anyway.
- *   ESP32   Off: its built-in MAC holds the APB maximum, which on a 240 MHz ESP32 is 240 MHz,
- *           so a wired ESP32 never clocks down. A Wi-Fi board may turn it on, idling at the
- *           crystal (40): the only clock reached from 240 without changing the PLL.
  */
 static const cp_image_t IMAGES[] = {
     { "esp32p4-rev1", 360, 90, false, 180, { 90, 180, 0 } },
@@ -27,9 +23,6 @@ static const cp_image_t IMAGES[] = {
     { "esp32s3-octal", 240, 80, true, 80, { 40, 80, 160, 0 } },
     { "esp32s3-eth", 240, 80, true, 80, { 40, 80, 160, 0 } },
     { "esp32s3-quad", 240, 80, true, 80, { 40, 80, 160, 0 } },
-    { "esp32", 240, 240, false, 40, { 40, 0 } },
-    { "esp32c3", 160, 80, true, 80, { 40, 80, 0 } },
-    { "esp32c6", 160, 80, true, 80, { 40, 80, 0 } },
 };
 
 const cp_image_t *cp_image(const char *image)

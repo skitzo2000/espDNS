@@ -36,6 +36,9 @@ void settings_load(void);
 const cfg_t *settings(void);
 /* A consistent copy of the default forwarders (out has CFG_MAX_FWD room); returns how many. */
 int settings_forwarders(uint32_t *out, int *timeout_ms);
+/* Whether a DNS query from IPv4 address ip (network order) is answered (cfg_src_allowed),
+ * against the allow list in effect. */
+bool settings_src_allowed(uint32_t ip);
 
 /* ---- releases (POST /release, in ota.c) ---- */
 typedef bool (*settings_recv_fn)(void *ctx, uint8_t *buf, size_t n);

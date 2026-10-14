@@ -1,28 +1,31 @@
 #!/bin/sh
-# Moves espDNS to its next version (docs/releasing.md):
+# Moves the firmware or the controller to its next version (docs/releasing.md):
 #
-#   scripts/bump-version.sh patch|minor|major    the next one (0.0.1 -> 0.0.2, 0.1.0, 1.0.0)
-#   scripts/bump-version.sh 0.0.4                that one, which must be newer
+#   scripts/bump-version.sh firmware patch|minor|major    the next one (0.0.1 -> 0.0.2, 0.1.0, 1.0.0)
+#   scripts/bump-version.sh controller 0.0.4              that one, which must be newer
 #
-# It writes the repository's VERSION (the one place the version is set: the firmware's build
-# and the controller's read it) and, in CHANGELOG.md, makes the "## [Unreleased]" section the
-# new version's, dated today (UTC), with a new empty "## [Unreleased]" above it. A version
-# needs its changelog: an Unreleased section with nothing in it is refused, as is a file
-# without one. Nothing else is touched: review the diff and commit it; builds made from then
-# on say the new version.
+# It writes that part's VERSION (firmware/VERSION, which the firmware's build reads, or
+# controller/VERSION, which the controller's builds link in) and, in CHANGELOG.md, makes the
+# "## [Unreleased]" section the new version's ("## [firmware 0.0.4] - <date>"), dated today
+# (UTC), with a new empty "## [Unreleased]" above it. A version needs its changelog: an
+# Unreleased section with nothing in it is refused, as is a file without one. Nothing else is
+# touched: review the diff and commit it; builds made from then on say the new version.
 #
 # ESPDNS_ROOT: the repository to change (default: this script's parent; the tests use another).
 set -eu
 root=${ESPDNS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
-usage() { echo "usage: $0 patch|minor|major|MAJOR.MINOR.PATCH" >&2; exit 2; }
-[ $# -eq 1 ] || usage
+usage() { echo "usage: $0 firmware|controller patch|minor|major|MAJOR.MINOR.PATCH" >&2; exit 2; }
+[ $# -eq 2 ] || usage
+case $1 in firmware | controller) part=$1 ;; *) usage ;; esac
+shift
+file=$root/$part/VERSION
 # Each number at most 9 digits, as the controller (internal/version, MaxDigits) and the
 # firmware's build (firmware/version.cmake) take them: within the shell's arithmetic, and the
 # longest fits the app descriptor's 32 bytes.
 semver='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
 
-cur=$(cat "$root/VERSION")
-printf '%s\n' "$cur" | grep -Eq "$semver" || { echo "$root/VERSION: '$cur' is not MAJOR.MINOR.PATCH" >&2; exit 1; }
+cur=$(cat "$file")
+printf '%s\n' "$cur" | grep -Eq "$semver" || { echo "$file: '$cur' is not MAJOR.MINOR.PATCH" >&2; exit 1; }
 IFS=. read -r ma mi pa <<END
 $cur
 END
@@ -61,10 +64,10 @@ esac
 today=$(date -u +%Y-%m-%d)
 tmp=$(mktemp "$root/.bump.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
-awk -v v="$new" -v d="$today" '
-	!done && /^## \[Unreleased\]$/ { print; print ""; print "## [" v "] - " d; done = 1; next }
+awk -v p="$part" -v v="$new" -v d="$today" '
+	!done && /^## \[Unreleased\]$/ { print; print ""; print "## [" p " " v "] - " d; done = 1; next }
 	{ print }
 ' "$log" > "$tmp"
 cat "$tmp" > "$log"
-printf '%s\n' "$new" > "$root/VERSION"
-echo "$cur -> $new: VERSION and CHANGELOG.md written; review the diff and commit it"
+printf '%s\n' "$new" > "$file"
+echo "$part $cur -> $new: $part/VERSION and CHANGELOG.md written; review the diff and commit it"

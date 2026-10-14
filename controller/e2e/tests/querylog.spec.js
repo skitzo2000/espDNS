@@ -223,7 +223,7 @@ test("Query log: a search result's link opens the device; no failures says so", 
 
   state.entries = state.entries.filter(e => e.result !== "servfail");
   await page.goto("querylog.html#query-log?show=failed");
-  await expect(page.locator("#qlrows .empty")).toHaveText("No failed queries in what the controller holds. That is good.");
+  await expect(page.locator("#qlrows .empty")).toHaveText("No failed queries.");
 });
 
 test("Query log: new queries come in live; Pause holds them", async ({ page }) => {

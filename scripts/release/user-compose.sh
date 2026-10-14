@@ -2,7 +2,7 @@
 # Prints a release's compose.yaml: controller/compose.user.yaml with the controller's image
 # filled in, pinned by digest (the line of espdns-<version>-controller-image.txt):
 #
-#   user-compose.sh controller/compose.user.yaml ghcr.io/owner/espdns-controller:0.0.2@sha256:<64 hex>
+#   user-compose.sh controller/compose.user.yaml ghcr.io/owner/espdns-controller:0.0.3@sha256:<64 hex>
 #
 # A user downloads it into an empty folder and runs docker compose up -d.
 set -eu

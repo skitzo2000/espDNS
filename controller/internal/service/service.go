@@ -195,16 +195,21 @@ func CatchUp(dataDir, catalog, host string, st release.NodeStatus, sums func(lis
 		one("blocklist "+list, rolling.Web{Kind: "blocklist", File: list + ".bin"})
 	}
 
-	// Its firmware, if it runs an older one than the newest build for it.
-	rep := updates.For([]updates.Node{{Host: host, Listed: true, Online: true, Status: &st}}, updates.Builds(dataDir, catalog), nil)
-	if len(rep.Nodes) == 1 {
-		u := rep.Nodes[0]
-		switch {
-		case u.State == updates.Available && u.Newest != nil:
-			one("firmware "+u.Newest.Source, rolling.Web{Kind: "firmware", Firmware: []string{u.Newest.Source}})
-		case u.State != updates.Current:
-			notes = append(notes, "its firmware: "+u.Why)
-		}
+	// Its firmware, if it runs an older version than the newest and its chip image of that
+	// version is held.
+	builds := updates.Builds(dataDir, catalog)
+	u := updates.For([]updates.Node{{Host: host, Listed: true, Online: true, Status: &st}}, builds, updates.Latest(dataDir), nil).Nodes[0]
+	src := "images/" + st.Image
+	held := slices.ContainsFunc(builds, func(b updates.Build) bool {
+		return b.Source == src && b.Error == "" && u.Newest != nil && b.Text == u.Newest.Text
+	})
+	switch {
+	case u.State == updates.Available && held:
+		one("firmware "+src, rolling.Web{Kind: "firmware", Firmware: []string{src}})
+	case u.State == updates.Available:
+		notes = append(notes, "its firmware: "+u.Why+": its chip image of that version isn't here yet: update it from Nodes")
+	case u.State != updates.Current:
+		notes = append(notes, "its firmware: "+u.Why)
 	}
 	return out, notes, nil
 }

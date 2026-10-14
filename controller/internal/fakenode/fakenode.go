@@ -1,5 +1,5 @@
 // Package fakenode is a fake espDNS node for tests and browser checks: its HTTP side
-// (/status, /health, /release, /ota) and its DNS answers, as firmware/main serves them.
+// (/status, /health, /release, /ota, /zone) and its DNS answers, as firmware/main serves them.
 // It checks every release as the firmware does (signed by the key in slot 0, for its node
 // ID and chip image, a seq above its last, the payload's hash) and takes firmware (staged,
 // rebooted into, on trial, or rolled back), configs, hosted zones, blocklists, overrides
@@ -13,7 +13,10 @@ package fakenode
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -75,6 +78,12 @@ type Node struct {
 	// them; none if nil. A zones release with one of them is refused, as the node does.
 	// Its /status says them ("forward_zones", each {"name", "forwarder"}), as the firmware.
 	Forward []nodecfg.ForwardZone
+	// Copies are the records it holds of its secondary zones (GET /zone, zone.go), by name,
+	// the SOA first; its /status says each one's serial and records, and "reads": ["zone"]
+	// (nil: firmware from before /zone). ZonePage, if set, runs after each /zone page it
+	// serves (locked): a test changes a copy mid-read there (SetCopy).
+	Copies   map[string][]dns.RR
+	ZonePage func(n *Node)
 	// Blocked are the names its blocklist blocks while it is on (the one it starts with, and
 	// any pushed while Lists is nil).
 	Blocked []string
@@ -106,11 +115,16 @@ type Node struct {
 	KeysGen         uint32
 	KeysError       string
 	NoKeysPartition bool
+	// NoNodeKey: firmware from before the node key (firmware/main/nodekey.h): its /status
+	// says none, and it opens no sealed Wi-Fi password.
+	NoNodeKey bool
 	// Prefix and Gateway go with its address in /status config (default 24 and 127.0.0.1).
 	Prefix  int
 	Gateway string
 
 	mu       sync.Mutex
+	nkey     *ecdh.PrivateKey // its node key, made once (NodeKey)
+	nkeyOnce sync.Once
 	boot     time.Time
 	down     time.Time // down until
 	trialEnd time.Time
@@ -130,6 +144,7 @@ type Node struct {
 	// blocking paused until (espdns pause); a reboot ends it, as on the node
 	pauseUntil time.Time
 	hosted     release.HostedStatus
+	copyGen    map[string]uint64     // each copy's gen: SetCopy bumps it
 	hostedPrev *release.HostedStatus // the bundle in its other slot: what a revert goes back to
 	cfg        *nodecfg.Config
 	retired    []byte // the release key a KEYS release replaced, kept for its stored releases
@@ -214,6 +229,39 @@ func (n *Node) Events() []string {
 	return slices.Clone(n.events)
 }
 
+// NodeKey is its /status "node_key": its node key's public point, base64; "" with NoNodeKey.
+func (n *Node) NodeKey() string {
+	if n.NoNodeKey {
+		return ""
+	}
+	n.nkeyOnce.Do(func() { n.nkey, _ = ecdh.P256().GenerateKey(rand.Reader) })
+	return base64.StdEncoding.EncodeToString(n.nkey.PublicKey().Bytes())
+}
+
+// openWifi takes a config's Wi-Fi password as the firmware does (cfg.c): sealed to its
+// node key, never in plain text; kept opened, as the node runs it. Locked.
+func (n *Node) openWifi(c *nodecfg.Config) error {
+	w := c.Wifi
+	switch {
+	case w == nil || w.Password == nil && w.Sealed == nil:
+		return nil
+	case w.Password != nil:
+		return errors.New("config refused: wifi.password: never in plain text; only sealed to the node key (wifi.sealed)")
+	case n.NodeKey() == "":
+		return errors.New("config refused: wifi.sealed: this node has no node key")
+	}
+	b, err := base64.StdEncoding.DecodeString(*w.Sealed)
+	if err == nil {
+		b, err = release.Open(n.nkey, n.MAC, b)
+	}
+	if err != nil {
+		return fmt.Errorf("config refused: wifi.sealed: %w", err)
+	}
+	pw := string(b)
+	w.Password, w.Sealed = &pw, nil
+	return nil
+}
+
 // ID is its node ID, as /status says it.
 func (n *Node) ID() string {
 	m := n.MAC
@@ -290,6 +338,10 @@ func (n *Node) status() map[string]any {
 	if pending == nil {
 		pending = []string{}
 	}
+	queries := n.Queries
+	if queries.RefusedSource == nil {
+		queries.RefusedSource = new(uint64) // firmware with "allow"
+	}
 	src, from, cseq := "node", "board", n.seq["config"]
 	var cerr any
 	if n.defaults {
@@ -303,16 +355,20 @@ func (n *Node) status() map[string]any {
 	}
 	zs := []map[string]any{}
 	for _, z := range n.secondary() {
-		zs = append(zs, map[string]any{"name": z})
+		zm := map[string]any{"name": z}
+		if rrs, ok := n.Copies[z]; ok {
+			zm["serial"], zm["records"], zm["expired"] = n.copySerial(z), len(rrs), false
+		}
+		zs = append(zs, zm)
 	}
 	var hz []map[string]any
 	for _, z := range n.hosted.Zones {
 		hz = append(hz, map[string]any{"name": z.Name, "serial": z.Serial, "records": z.Records})
 	}
-	st := map[string]any{"project": "espdns", "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
+	st := map[string]any{"project": "espdns", "proto": 1, "version": n.Version, "built": "Oct  3 2026 12:00:00", "elf_sha256": n.Elf,
 		"slot": n.Slot, "ota_state": n.otaState(), "uptime_s": int64(time.Since(n.boot).Seconds()), "node_id": n.ID(),
 		"board": n.Board, "image": n.Image, "boot_ms": 2100, "ip": n.Addr,
-		"keys": n.keys(), "seq": n.seq,
+		"keys": n.keys(), "seq": n.seq, "node_key": n.NodeKey(),
 		"net":    map[string]any{"kind": "ethernet", "mac": n.ID(), "link": true, "hostname": n.Name + ".local"},
 		"health": map[string]any{"state": n.state, "answering": n.answering(), "reasons": reasons},
 		"reboot": map[string]any{"pending": len(n.pending) > 0, "reasons": pending, "since_s": 3},
@@ -324,7 +380,10 @@ func (n *Node) status() map[string]any {
 			"reverted_from": n.hosted.RevertedFrom, "bytes": n.hosted.Bytes, "limit_bytes": n.hosted.LimitBytes, "zones": hz},
 		"services": n.services(),
 		"blocking": map[string]any{"list": n.list, "overrides": n.ovr, "paused_s": n.pausedS()},
-		"queries":  n.Queries,
+		"queries":  queries,
+	}
+	if n.Copies != nil {
+		st["reads"] = []string{"zone"}
 	}
 	if n.NoConfigs {
 		delete(st, "config")
@@ -354,6 +413,16 @@ func (n *Node) status() map[string]any {
 		fz = append(fz, map[string]any{"name": z.Zone, "forwarder": z.Forwarder})
 	}
 	st["forward_zones"] = fz
+	// No LED on its board; its config's in its place.
+	led := release.LEDStatus{LEDSetting: release.LEDSetting{Kind: "none", Pins: []int{}}, From: "board",
+		Board: &release.LEDSetting{Kind: "none", Pins: []int{}}}
+	if l := n.cfg.LED; l != nil {
+		led.Kind, led.ActiveLow, led.From = l.Kind, l.ActiveLow || l.CommonAnode, "config"
+		for _, p := range l.Pins() {
+			led.Pins = append(led.Pins, *p.Pin)
+		}
+	}
+	st["led"] = led
 	return st
 }
 
@@ -454,6 +523,12 @@ func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(reply)
+	case "/zone":
+		if n.Copies == nil {
+			http.NotFound(w, r)
+			return
+		}
+		n.serveZone(w, r)
 	default:
 		if !n.serveObserve(w, r) {
 			http.NotFound(w, r)
@@ -539,6 +614,9 @@ func (n *Node) release(b []byte, ota, later bool) (map[string]any, error) {
 		return map[string]any{"ok": true, "message": "rebooting", "rebooting": true}, nil
 	case release.Config:
 		c, err := nodecfg.Parse(p)
+		if err == nil {
+			err = n.openWifi(c)
+		}
 		if err == nil {
 			err = n.observeConfig(c)
 		}

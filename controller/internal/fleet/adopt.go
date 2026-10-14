@@ -154,9 +154,10 @@ func (c *Client) adopt(ctx context.Context, a Adopt, res *AdoptResult) error {
 			st.Seq[release.Config.String()], st.Config.Error)
 	}
 	// The node's ID is pinned to its address here, as it answers now: every release after
-	// this is signed for that ID, whatever a /status says later (internal/pins).
+	// this is signed for that ID, and its Wi-Fi password sealed to its node key, whatever a
+	// /status says later (internal/pins).
 	if !a.DryRun {
-		if err := c.pinAdopted(st.NodeID, a.Host); err != nil {
+		if err := c.pinAdopted(st.NodeID, a.Host, st.NodeKey); err != nil {
 			return fmt.Errorf("2. %w", err)
 		}
 	}
@@ -426,9 +427,10 @@ func currentAddress(st release.NodeStatus) (netip.Prefix, bool) {
 	return p, err == nil && p.Addr().Is4()
 }
 
-// pinAdopted pins node id to host for its adoption. An address another node is pinned to
-// is refused: that is for espdns pin to change, knowing which node is there.
-func (c *Client) pinAdopted(id, host string) error {
+// pinAdopted pins node id to host for its adoption, with its node key (key, "" for none).
+// An address another node is pinned to is refused: that is for espdns pin to change,
+// knowing which node is there.
+func (c *Client) pinAdopted(id, host, key string) error {
 	if c.Pusher == nil || c.Pusher.Pins == nil {
 		return errors.New("no release key and record of the nodes to sign with")
 	}
@@ -441,10 +443,21 @@ func (c *Client) pinAdopted(id, host string) error {
 		return fmt.Errorf("%s answers as node %s, but node %s is pinned there: if its board was replaced, "+
 			"pin the new one first (espdns pin -host %s -node %s)", host, id, cur, host, id)
 	}
+	if key != "" {
+		if _, err := release.ParseNodeKey(key); err != nil {
+			return err
+		}
+	}
 	if _, err := c.Pusher.Pins.Pin(id, host); err != nil {
 		return err
 	}
+	if err := c.Pusher.Pins.SetNodeKey(id, key); err != nil {
+		return err
+	}
 	c.logf("   node %s pinned to %s: releases are signed for it there", id, host)
+	if key == "" {
+		c.logf("   it has no node key (a wired-only node, or firmware from before it): no Wi-Fi password is sent to it")
+	}
 	return nil
 }
 

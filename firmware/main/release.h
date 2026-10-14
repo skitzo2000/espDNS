@@ -8,7 +8,7 @@
  *     0     8  magic "ESPDNS1\0"
  *     8     1  kind (rel_kind_t)
  *     9     1  key_id: 0 = release key, 1 = offline recovery key
- *    10     6  target node ID (base MAC), ff:ff:ff:ff:ff:ff = any node
+ *    10     6  target node ID (base MAC): a release names the one node it is for
  *    16    16  chip image name, NUL-padded (must match the running firmware; firmware from
  *                before board definitions checked a board name here)
  *    32     8  seq, little-endian; must be above the last one accepted for this kind, and
@@ -81,9 +81,9 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
 extern const char rel_why_ahead[];
 
 /* What a KEYS release (REL_KEYS) must be besides what rel_verify checks, given m from it:
- * signed with the recovery key (key_id 1; the release key never rewrites the keys) and
- * addressed to this node by its ID (never ANY_NODE). NULL if it is, else a reason. */
-const char *rel_keys_check(const rel_manifest_t *m, const rel_trust_t *t);
+ * signed with the recovery key (key_id 1; the release key never rewrites the keys). NULL if
+ * it is, else a reason. */
+const char *rel_keys_check(const rel_manifest_t *m);
 
 /*
  * The highest seq a node takes. Seqs are milliseconds since 1970 (the signer's

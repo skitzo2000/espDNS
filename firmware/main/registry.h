@@ -20,6 +20,7 @@ typedef struct {
     uint8_t     apex[DNS_MAX_NAME];
     int         apex_len;
     zone_t     *z;             /* swap only under reg_wrlock */
+    uint32_t    gen;           /* bumped with every swap (GET /zone, zread.h) */
     bool        expired;       /* no successful check within SOA EXPIRE */
 
     /* refresh state, owned by the xfr task */

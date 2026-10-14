@@ -1,0 +1,13 @@
+{
+  "name": "adafruit-metro-s3",
+  "title": "Adafruit Metro ESP32-S3",
+  "image": "esp32s3-octal",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "untested",
+  "spi": [{ "host": 2, "sclk": 39, "mosi": 42, "miso": 21 }],
+  "ethernet": { "kind": "none" },
+  "sd": { "kind": "spi", "spi_host": 2, "cs": 45 },
+  "led": { "kind": "gpio", "pin": 13, "active_low": false },
+  "notes": "ESP32-S3 with 16 MB flash and 8 MB octal PSRAM. Pins: Adafruit Metro ESP32-S3 pinouts (microSD on SPI: SCK 39, MOSI 42, MISO 21, CS 45), arduino-esp32 adafruit_metro_esp32s3 variant (red LED 13). Wi-Fi only: Arduino W5500 shields use D11-D13, which are plain GPIOs here, not the SPI bus the card is on."
+}

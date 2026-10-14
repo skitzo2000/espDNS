@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/blocklist"
+	"github.com/skitzo2000/espdns/controller/internal/boards"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
@@ -265,4 +267,44 @@ func BoardImage(dataDir, catalog, board string) (string, error) {
 		return def.Image, nil
 	}
 	return "", fmt.Errorf("board %s: no boards/%s.json", board, board)
+}
+
+// NothingToGet is why Get firmware has nothing to get: NeededImages are none, and none named.
+const NothingToGet = "Nothing to get yet: pick a board in Install over USB, and it gets that board's firmware."
+
+// UnknownNeeds is said when NeededImages counts the chip images already imported because a
+// listed node has no status.
+const UnknownNeeds = "a listed node has no status yet, so what it needs can't be told: the chip images already imported are fetched too"
+
+// NeededImages are the chip images Get firmware gets when none are named: each listed
+// node's (st, as it last reported: its board's chip image when it runs that or its
+// sibling, as an update gives it, else the one it runs). unknown says a listed node has no
+// status (not polled yet, or it didn't answer): what it needs can't be told, so every chip
+// image already imported is added too. Sorted, each once; none when there are no nodes.
+func NeededImages(dataDir, catalog string, nodes []release.NodeStatus, unknown bool) []string {
+	var out []string
+	add := func(img string) {
+		if dist.ImageName(img) && !slices.Contains(out, img) {
+			out = append(out, img)
+		}
+	}
+	for _, st := range nodes {
+		img := st.Image
+		if st.Board != "" {
+			if b, err := BoardImage(dataDir, catalog, st.Board); err == nil && (img == "" || boards.Swappable(img, b)) {
+				img = b
+			}
+		}
+		add(img)
+	}
+	if unknown {
+		ents, _ := os.ReadDir(filepath.Join(dataDir, ImagesDir))
+		for _, e := range ents {
+			if _, err := os.Stat(filepath.Join(dataDir, ImagesDir, e.Name(), "image.json")); e.IsDir() && err == nil {
+				add(e.Name())
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }

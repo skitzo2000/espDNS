@@ -10,9 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/dist"
+	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/release"
+	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
@@ -20,7 +23,7 @@ import (
 // espdns release sign -dir DIR -pub release.pub          (the release key on standard input)
 // espdns release verify -dir DIR -pub release.pub
 // espdns release import -dir DIR -data /data [-pub /keys/project.pub]
-// espdns release fetch -data /data [-version v0.0.3] [-url https://github.com/skitzo2000/espdns] [-pub /keys/project.pub]
+// espdns release fetch -data /data [-image esp32s3-eth ...] [-version 0.0.3] [-url https://github.com/skitzo2000/espdns] [-pub /keys/project.pub]
 //
 // A release's files (internal/dist, docs/releasing.md). build makes them from the exported
 // chip images, key-neutral, with SHA256SUMS, as CI does on a version tag (no factory images:
@@ -31,8 +34,9 @@ import (
 // controller's image) or by your own (the controller's, in -data), refusing any other, and
 // every file, then puts the release's chip images in the data directory (firmware/images),
 // each with its provenance, where the builder and the Nodes page's updates find them. fetch
-// downloads a published release's chip images (from GitHub, or a mirror: -url, else
-// settings.json's "release_url"), checked with the project's key alone, and imports them.
+// downloads chip images of a published release (from its GitHub repository, or another: -url,
+// else settings.json's "release_url"), checked with the project's key alone, and imports them:
+// those named with -image, else those settings.json's nodes need (rolling.NeededImages).
 func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) < 1 {
 		return errors.New("usage: espdns release build|sign|verify|import|fetch [flags]")
@@ -42,7 +46,7 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 	switch sub {
 	case "build":
 		o := dist.Options{}
-		fl.StringVar(&o.Version, "version", "", "the version released, the repository's VERSION (required): every chip image must be it")
+		fl.StringVar(&o.Version, "version", "", "the version released, firmware/VERSION (required): every chip image must be it")
 		fl.StringVar(&o.Images, "images", "", "the exported chip images, <dir>/<image>/image.json (required)")
 		fl.StringVar(&o.Catalog, "catalog", "", "the board catalog (boards/; /catalog in the controller's image): every board's chip image must be in -images (required)")
 		fl.StringVar(&o.Out, "out", "", "where the release's files go, missing or empty (required)")
@@ -125,12 +129,15 @@ func cmdRelease(args []string, stdin io.Reader, stdout io.Writer) error {
 func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer) error {
 	data := fl.String("data", "", "the controller's data directory (/data in Docker) (required)")
 	pubFile := fl.String("pub", dist.ProjectPub, "the project's release public key, raw (keys/project.pub at the top of the repository)")
-	dir, ver, forge := "", "", ""
+	dir, ver, forge, catalog := "", "", "", ""
+	var imgs hostList
 	if sub == "import" {
 		fl.StringVar(&dir, "dir", "", "the release's files, with its SHA256SUMS and SHA256SUMS.sig (required)")
 	} else {
-		fl.StringVar(&ver, "version", "", "the release, v0.0.3 (default: the newest published)")
-		fl.StringVar(&forge, "url", "", "the repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
+		fl.StringVar(&ver, "version", "", "the firmware release, 0.0.3 or its tag firmware-v0.0.3 (default: the newest published)")
+		fl.StringVar(&forge, "url", "", "the GitHub repository the release is published on (default: settings.json's \"release_url\", else "+dist.DefaultForge+")")
+		fl.Var(&imgs, "image", "a chip image to get, esp32s3-eth (comma-separated or repeat; default: those settings.json's nodes need)")
+		fl.StringVar(&catalog, "catalog", defaultCatalog, "the board catalog: the chip image each node's board runs")
 	}
 	if err := parseFlags(fl, args); err != nil {
 		return err
@@ -145,18 +152,30 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 	if *pubFile != dist.ProjectPub && signers.Project == nil {
 		return fmt.Errorf("-pub %s: no such file", *pubFile)
 	}
-	if forge == "" && sub == "fetch" {
+	if sub == "fetch" {
+		for _, img := range imgs {
+			if !dist.ImageName(img) {
+				return fmt.Errorf("-image %q: not one of the chip images", img)
+			}
+		}
 		s, err := settings.Load(settings.Path(*data))
 		if err != nil {
 			return err
 		}
-		forge = s.ReleaseURL
+		if forge == "" {
+			forge = s.ReleaseURL
+		}
+		if len(imgs) == 0 {
+			if imgs = neededImages(*data, catalog, s.Nodes, stdout); len(imgs) == 0 {
+				return errors.New(rolling.NothingToGet + " Or name one: -image esp32s3-eth.")
+			}
+		}
 	}
 	// Under the fleet lock, as every change to the data directory: never under a rollout
 	// or a job reading the chip images
 	what := []string{"-dir", dir}
 	if sub == "fetch" {
-		what = []string{"-version", ver, "-url", forge}
+		what = []string{"-version", ver, "-url", forge, "-image", imgs.String()}
 	}
 	_, end, err := begin(*data, "release "+sub, what, false)
 	if err != nil {
@@ -167,7 +186,7 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 	if sub == "import" {
 		imp, err = dist.Import(dir, signers, images)
 	} else {
-		imp, err = dist.Fetch(context.Background(), dist.FetchOptions{Forge: forge, Version: ver, ProjectPub: signers.Project,
+		imp, err = dist.Fetch(context.Background(), dist.FetchOptions{Forge: forge, Version: ver, ProjectPub: signers.Project, Images: imgs,
 			Logf: func(f string, a ...any) { fmt.Fprintf(stdout, f+"\n", a...) }}, filepath.Join(*data, "firmware"), images)
 	}
 	end(err)
@@ -178,6 +197,34 @@ func releaseImport(sub string, fl *flag.FlagSet, args []string, stdout io.Writer
 	fmt.Fprintf(stdout, "version %s, signed by %s %s; chip images imported into %s: %s\n", imp.Signer.Version, who,
 		imp.Signer.Fingerprint, images, strings.Join(imp.Images, ", "))
 	return nil
+}
+
+// neededImages are the chip images release fetch gets by default (rolling.NeededImages):
+// those of the nodes listed, each one's /status read now; if one doesn't answer, what it
+// needs can't be told, and the chip images already imported in data are added (said).
+func neededImages(data, catalog string, hosts []string, w io.Writer) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c := &fleet.Client{}
+	var sts []release.NodeStatus
+	unknown := false
+	for _, h := range hosts {
+		st, err := c.Status(ctx, h)
+		if err != nil {
+			fmt.Fprintf(w, "%s: %v\n", h, err)
+			unknown = true
+			continue
+		}
+		sts = append(sts, st)
+	}
+	if unknown {
+		fmt.Fprintln(w, rolling.UnknownNeeds)
+	}
+	imgs := rolling.NeededImages(data, catalog, sts, unknown)
+	if len(imgs) > 0 {
+		fmt.Fprintf(w, "the chip images needed: %s\n", strings.Join(imgs, ", "))
+	}
+	return imgs
 }
 
 func report(w io.Writer, c dist.Checked, fp string) {

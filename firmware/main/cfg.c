@@ -1,13 +1,18 @@
 #include "cfg.h"
 
+#include <arpa/inet.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h> /* inet_pton, AF_INET6 (lwIP's on the node) */
 
 #include "cJSON.h"
 #include "config.h"
 #include "dns_wire.h"
+#include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
+#include "nodekey.h"
 #include "qlog.h"
 #include "reboot.h"
 
@@ -120,6 +125,7 @@ static void defaults(cfg_t *c)
     c->cpu_dfs = -1; /* the board's, else the image's (cpuplan.h) */
     c->querylog = DNS2_QUERYLOG;
     c->querylog_client = QL_CLIENT_FULL;
+    c->led = (board_led_t){ BOARD_LED_NONE, { BOARD_NC, BOARD_NC, BOARD_NC }, false };
 }
 
 static void set_net(cfg_t *c, const board_net_t *n, cfg_addr_from_t from)
@@ -133,6 +139,8 @@ static void set_net(cfg_t *c, const board_net_t *n, cfg_addr_from_t from)
 
 static void board_layer(cfg_t *c, const board_desc_t *b)
 {
+    if (b)
+        c->led = b->led;
     if (b && b->wifi_max_tx_dbm)
         c->wifi_tx_dbm = b->wifi_max_tx_dbm;
     if (b && b->net.set)
@@ -394,20 +402,40 @@ static void parse_network(ctx_t *c, cfg_t *cf, const cJSON *net)
         set_net(cf, &n, CFG_ADDR_CONFIG);
 }
 
+/* The node's opener for wifi.sealed (cfg_set_unseal), NULL until it is set. */
+static cfg_unseal_fn s_unseal;
+
+void cfg_set_unseal(cfg_unseal_fn fn) { s_unseal = fn; }
+
+static void unseal(ctx_t *c, cfg_t *cf, const char *b64)
+{
+    uint8_t blob[NODEKEY_PUB_LEN + 63 + NODEKEY_TAG_LEN];
+    size_t n = 0;
+    const char *why = mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)b64, strlen(b64))
+                          ? "not base64, or too long"
+                      : !s_unseal ? "this node has no node key"
+                                  : s_unseal(blob, n, cf->wifi_pass, sizeof(cf->wifi_pass));
+    if (why)
+        fail(c, "wifi.sealed: %s", why);
+}
+
 static void parse_wifi(ctx_t *c, cfg_t *cf, const cJSON *w)
 {
-    static const char *const keys[] = { "ssid", "password", "tx_power_dbm", "power_save", NULL };
+    static const char *const keys[] = { "ssid", "sealed", "tx_power_dbm", "power_save", NULL };
+    /* Never in plain text: the controller seals it to this node's key (nodekey.h). */
+    if (member(w, "password"))
+        fail(c, "wifi.password: never in plain text; only sealed to the node key (wifi.sealed)");
     only(c, w, "wifi", keys);
     const char *ssid = string(c, w, "ssid", 1, sizeof(cf->wifi_ssid));
-    const char *pass = string(c, w, "password", 0, sizeof(cf->wifi_pass));
-    if (pass && !ssid)
-        fail(c, "wifi.password: only with wifi.ssid");
-    if (pass && pass[0] && strlen(pass) < 8)
-        fail(c, "wifi.password: at least 8 characters, or empty for an open network");
+    const char *sealed = string(c, w, "sealed", 1, 256);
+    if (sealed && !ssid)
+        fail(c, "wifi.sealed: only with wifi.ssid");
     if (ssid) {
         strcpy(cf->wifi_ssid, ssid);
-        strcpy(cf->wifi_pass, pass ? pass : "");
+        cf->wifi_pass[0] = 0; /* none: an open network */
     }
+    if (sealed && !c->failed)
+        unseal(c, cf, sealed);
     integer(c, w, "tx_power_dbm", 2, 20, &cf->wifi_tx_dbm);
     boolean(c, w, "power_save", &cf->wifi_power_save);
 }
@@ -499,6 +527,17 @@ static void parse_querylog(ctx_t *c, cfg_t *cf, const cJSON *o)
         cf->querylog_client = (uint8_t)mode;
 }
 
+/* In place of the board's LED; its pins are checked against the board's others (b). */
+static void parse_led(ctx_t *c, cfg_t *cf, const cJSON *o, const board_desc_t *b)
+{
+    static const char *const keys[] = { "kind", "pin", "active_low", "red", "green", "blue", "common_anode", NULL };
+    only(c, o, "led", keys);
+    char why[80];
+    if (!board_led_parse(o, b, &cf->led, why, sizeof(why)))
+        fail(c, "led: %s", why);
+    cf->led_config = true;
+}
+
 static void parse_time(ctx_t *c, cfg_t *cf, const cJSON *t)
 {
     static const char *const keys[] = { "ntp", "tz", NULL };
@@ -532,6 +571,97 @@ static void parse_blocking(ctx_t *c, cfg_t *cf, const cJSON *b)
     else if (a)
         cf->block_nxdomain = !strcmp(a, "nxdomain");
     integer(c, b, "ttl", 0, 86400, &cf->block_ttl);
+}
+
+/* ---- who may query ---- */
+
+/* An IPv4 address (network order) as IPv4-mapped IPv6. */
+static void mapped4(uint32_t ip, uint8_t a[16])
+{
+    static const uint8_t pre[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+    memcpy(a, pre, 12);
+    memcpy(a + 12, &ip, 4);
+}
+
+/* "a.b.c.d/n" or an IPv6 address with "/n", with no host bits set. */
+static bool parse_cidr(const char *s, cfg_net_t *n)
+{
+    char tmp[64];
+    const char *slash = strchr(s, '/');
+    size_t len = slash ? (size_t)(slash - s) : 0;
+    if (!slash || !len || len >= sizeof(tmp) || slash[1] < '0' || slash[1] > '9' || strlen(slash + 1) > 3 ||
+        (slash[1] == '0' && slash[2]))
+        return false;
+    memcpy(tmp, s, len);
+    tmp[len] = 0;
+    char *end;
+    long bits = strtol(slash + 1, &end, 10);
+    uint32_t ip;
+    if (*end)
+        return false;
+    if (cfg_parse_ipv4(tmp, &ip)) {
+        if (bits > 32)
+            return false;
+        mapped4(ip, n->addr);
+        bits += 96;
+    } else if (!strchr(tmp, ':') || inet_pton(AF_INET6, tmp, n->addr) != 1 || bits > 128) {
+        return false;
+    }
+    n->bits = (uint8_t)bits;
+    for (int i = 0; i < 16; i++) {
+        int keep = bits >= 8 ? 8 : bits > 0 ? (int)bits : 0;
+        bits -= keep;
+        if (n->addr[i] & (0xff >> keep))
+            return false; /* an address, not a network */
+    }
+    return true;
+}
+
+static void parse_allow(ctx_t *c, cfg_t *cf, const cJSON *root)
+{
+    const cJSON *a = array(c, root, "allow", CFG_MAX_ALLOW);
+    if (!a)
+        return;
+    cf->nallow = 0;
+    for (const cJSON *v = a->child; v; v = v->next) {
+        if (!cJSON_IsString(v) || !parse_cidr(v->valuestring, &cf->allow[cf->nallow])) {
+            fail(c, "allow: networks as 198.51.100.0/24 or 2001:db8::/32 (no host bits set)");
+            return;
+        }
+        cf->nallow++;
+    }
+}
+
+static bool in_net(const uint8_t a[16], const cfg_net_t *n)
+{
+    int full = n->bits / 8, rest = n->bits % 8;
+    return !memcmp(a, n->addr, (size_t)full) && (!rest || !((a[full] ^ n->addr[full]) & (0xff00 >> rest)));
+}
+
+bool cfg_src_allowed(const cfg_t *c, const uint8_t a[16])
+{
+#define V4(x, y, bits) { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, x, y }, 96 + bits }
+    static const cfg_net_t priv[] = {
+        V4(10, 0, 8),    V4(172, 16, 12), V4(192, 168, 16), V4(100, 64, 10), V4(169, 254, 16), V4(127, 0, 8),
+        { { [15] = 1 }, 128 },     /* ::1 */
+        { { 0xfc }, 7 },           /* unique local */
+        { { 0xfe, 0x80 }, 10 },    /* link-local */
+    };
+#undef V4
+    for (size_t i = 0; i < sizeof(priv) / sizeof(priv[0]); i++)
+        if (in_net(a, &priv[i]))
+            return true;
+    for (int i = 0; i < c->nallow; i++)
+        if (in_net(a, &c->allow[i]))
+            return true;
+    return false;
+}
+
+bool cfg_src4_allowed(const cfg_t *c, uint32_t ip)
+{
+    uint8_t a[16];
+    mapped4(ip, a);
+    return cfg_src_allowed(c, a);
 }
 
 /* Checks across settings, once the layers are in. */
@@ -610,7 +740,7 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
     } else {
         static const char *const keys[] = { "format", "name", "network", "wifi", "forwarders", "upstream_timeout_ms",
                                              "forward_zones", "secondary", "hosted", "time", "blocking", "cpu", "querylog",
-                                             NULL };
+                                             "led", "allow", NULL };
         only(&x, root, "", keys);
         int format = CFG_FORMAT;
         integer(&x, root, "format", 1, 1000, &format);
@@ -642,6 +772,9 @@ bool cfg_build(cfg_t *c, const board_desc_t *b, const char *json, size_t len, ch
             parse_cpu(&x, c, o);
         if ((o = object(&x, root, "querylog")))
             parse_querylog(&x, c, o);
+        if ((o = object(&x, root, "led")))
+            parse_led(&x, c, o, b);
+        parse_allow(&x, c, root);
         if (!x.failed)
             check_all(&x, c);
     }
@@ -711,6 +844,10 @@ void cfg_copy_live(cfg_t *dst, const cfg_t *src)
     dst->cpu_dfs = src->cpu_dfs;
     dst->querylog = src->querylog;
     dst->querylog_client = src->querylog_client;
+    dst->led = src->led;
+    dst->led_config = src->led_config;
+    memcpy(dst->allow, src->allow, sizeof(dst->allow));
+    dst->nallow = src->nallow;
 }
 
 /* ---- slots ---- */
@@ -723,8 +860,6 @@ const char *cfg_slot_check(const uint8_t hdr[REL_HEADER_LEN], const uint8_t *pay
         return why;
     if (m->kind != REL_CONFIG)
         return "not a config release";
-    if (memcmp(m->target, t->node_id, 6) != 0)
-        return "a config is for one node, not any node"; /* its address would be every node's */
     if (m->payload_len == 0 || m->payload_len > avail)
         return "payload length out of range";
     uint8_t sha[32];

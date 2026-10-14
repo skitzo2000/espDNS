@@ -1,0 +1,13 @@
+{
+  "name": "m5stack-cores3",
+  "title": "M5Stack CoreS3 + Base LAN PoE",
+  "image": "esp32s3-quad",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [{ "host": 2, "sclk": 36, "mosi": 37, "miso": 35 }],
+  "ethernet": { "kind": "w5500", "optional": true, "spi_host": 2, "cs": 9, "int": 14, "rst": 7, "mhz": 20 },
+  "sd": { "kind": "spi", "spi_host": 2, "cs": 4 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-S3, 16 MB flash, 8 MB quad PSRAM (M5Stack: '8MB Quad', so GPIO35-37 are free). TF slot on the LCD's SPI bus (SCK 36, MOSI 37, MISO 35), CS GPIO4 (LCD CS GPIO3 isn't driven): M5Stack CoreS3 docs, arduino-esp32 m5stack_cores3 variant. W5500 with the Base LAN PoE v1.2: CS 9, RST 7, INT 14 from the ESPHome ethernet docs' CoreS3 example and M5Stack's Base LAN Arduino tutorial. Also fits the CoreS3 SE. Wi-Fi without the base. No LED the firmware can drive."
+}

@@ -1,13 +1,224 @@
 # Changelog
 
-What changed in each version of espDNS, the node firmware and the controller together (they
-share one version, the repository's `VERSION`). The format follows
+What changed in each version of espDNS. The node firmware and the controller each have their
+own version (`firmware/VERSION`, `controller/VERSION`) and their own sections
+(`## [firmware 0.0.3]`, `## [controller 0.0.3]`); 0.0.1 and 0.0.2 covered both under one
+version. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html): 0.0.x while in alpha, when any
 version may change anything. Write each change under Unreleased as it merges;
 `scripts/bump-version.sh` makes that section the next version's ([docs/releasing.md](docs/releasing.md)).
 
 ## [Unreleased]
+
+## [controller 0.0.3] - 2026-10-14
+
+**Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.
+Update the controller as usual, then install each node from it with **Install over USB**
+(**+ Add node**, on Nodes).
+
+### Added
+
+- Nodes answer DNS only from private addresses: UDP and TCP port 53 take queries from
+  IPv4 `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `169.254/16` and `127/8` and IPv6
+  `::1`, `fc00::/7` and `fe80::/10` (an IPv4-mapped source by its IPv4 address), and drop
+  anything else unanswered, so a node on a public address is no open resolver or
+  reflector. The node config's new `allow` key adds up to 16 more networks (IPv4 or IPv6,
+  CIDR), live; the controller checks it, and refuses it for a node whose firmware is older.
+  The dropped queries are counted in `/status` `queries.refused_source` and `/metrics`
+  `espdns_queries_refused_source_total`. See
+  [docs/reference/node-config.md](docs/reference/node-config.md#allow).
+- A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
+  driven with PWM, shows the node's health in the controller's colours (green, amber, red;
+  blue while booting or updating; white to *Blink its light*). The node page gets a
+  **Status light** setting (None, one-colour LED, WS2812 or RGB LED, with its pins), which
+  shows the board's own LED and goes out with the other changes to apply; the node changes
+  lights live, without a restart. The node config's new `led` key carries it, checked by the
+  controller and the node against the board's other pins and the chip's. Board definitions
+  take `"kind": "rgb"` too. `/status` `led` now reports the light in effect, its pins, where
+  it comes from and the board's own; `failed` is now a field of its own, no longer a kind.
+  Wiring in [docs/hardware.md](docs/hardware.md#a-status-light).
+- A board library: 18 boards from 6 makers added to the catalog (Adafruit, Espressif,
+  LilyGO, M5Stack, Seeed, Waveshare), 22 boards in all, each from the maker's pinout,
+  arduino-esp32 or ESPHome, with its sources in `notes`: the wired ESP32-S3 and ESP32-P4
+  boards with 8 MB of PSRAM or more and solid pin documentation, and a few Wi-Fi boards
+  with an SD slot. Install over USB groups the list by maker and gets a search box (maker,
+  model, catalog name, chip image, w5500, poe…); each option says its flash, PSRAM and
+  wired or Wi-Fi. The controller loads the catalog once at startup and serves
+  `GET /api/boards` from memory with an ETag (304 to `If-None-Match`); your own boards are
+  read again when `data/boards` changes or one is saved. espDNS boards have 8 MB of PSRAM
+  or more, the sizes tested: a board with less is refused (`psram_mb: espDNS needs at
+  least 8 MB of PSRAM`). The library tables are in
+  [docs/hardware.md](docs/hardware.md#untested-boards).
+
+### Changed
+
+- The Zones page reads a copied zone's records from a node that holds it (the newest copy,
+  through the node's `GET /zone`), and says which node. Your primary is asked by zone
+  transfer only when no node can hand them over, so it no longer has to allow transfers to
+  the controller's computer.
+- `release_url` (and `-release-url`, `espdns release fetch -url`) takes `https` only: an
+  `http` URL is refused. Releases were checked with the project's key anyway; https keeps
+  what is fetched, or held back, from the network between.
+- Releases come from GitHub only: `release_url` is a GitHub repository (a fork's, or one on
+  a GitHub Enterprise server).
+- Two versions: the firmware and the controller each have their own, in
+  `firmware/VERSION` and `controller/VERSION` (the root `VERSION` is gone), and are
+  released on their own tags: `firmware-v<version>` builds the chip images,
+  `controller-v<version>` the controller's image and `compose.yaml`, each signed as before.
+  The controller offers the nodes firmware releases only (`firmware-v*`, and the older
+  `v0.0.1` and `v0.0.2`), so a controller release never makes a node out of date. Get
+  firmware and `espdns release fetch -version` take a firmware version (`0.0.3`) or its
+  tag. A node's `/status` says the protocol it speaks to the controller (`"proto": 1`); a
+  node on one the controller doesn't speak is offered no update, and the Nodes page says
+  why. `scripts/bump-version.sh` takes the part first (`firmware patch`), and a version's
+  changelog section is `## [firmware 0.0.3]` or `## [controller 0.0.3]`
+  ([docs/releasing.md](docs/releasing.md)).
+- Only the supported chip images are built, released and offered: esp32p4-rev1, esp32p4,
+  esp32s3-octal, esp32s3-eth and esp32s3-quad. A board file or import naming another image
+  is refused (`not one of the chip images`).
+- Updates go by version, whatever the chip. The controller asks GitHub (or `release_url`)
+  for the newest firmware release when it starts, every 24 hours and when a new node shows
+  up, and keeps only its version, in `firmware/latest`. A node on an older version is
+  offered the update; you no longer need Get firmware to see one. Applying it downloads and
+  checks the node's chip image of that release if the controller doesn't have it. Per-board
+  builds no longer count for updates, and the `unordered` and `no_build` states are gone
+  ([docs/operations.md](docs/operations.md#versions)).
+- The Nodes page puts each node on one line: its name (the board on hover), a dot, the
+  address with a wired or Wi-Fi icon (the MAC on hover), Uptime and Load (q/s). The dot is
+  green while the node serves, amber when there's something to do (an update, a reason, a
+  node not added yet) and red when it isn't working; hover for its state and reason. A node
+  that isn't green gets a short flag, or an amber **Update 0.0.1 → 0.0.2** button that opens
+  the Update panel with only it ticked. The banner above the table and the MAC line are
+  gone; **Update all** sits by **+ Add node** while two or more nodes are out of date.
+- The setup's zone step is about your own zones. "Add your zone", after the second node:
+  type a name for your network, like home.example, and host it on espDNS (it starts with
+  the records every zone needs); the + Add zone box is the Zones page's. Already run a DNS
+  server with your zones? Copying from it is an option there, under "Set it up myself", not
+  the step itself as the old "Set up your zone primary" step was. The step is done with a
+  zone of your own (hosted here, copied or forwarded, a pending change included) or
+  skipped. `GET /api/setup` lists `zones` among the steps, in place of `primary`, and
+  counts your zones in `zones`; `POST /api/setup/step` marks `zones` skipped and refuses
+  `primary` as it does any other unknown step. An older `setup.json` with `primary` marked
+  done loads fine; the mark is ignored.
+- Get firmware and `espdns release fetch` download only the chip images needed, not every
+  one in the release. Install over USB gets the chosen board's. The account menu and the
+  CLI get what your nodes need, from each node's board. If a node hasn't reported yet, they
+  also get the chip images the controller already has, and say so. With nothing needed,
+  they say so and fetch nothing. The
+  signature is still checked first, and other imported chip images stay as they are. The
+  `fetch-release` job takes `"images"`, and `release fetch` takes `-image`.
+
+### Security
+
+- The Wi-Fi password no longer crosses the network in plain text. Each Wi-Fi node makes a
+  key pair at its first boot (the private key never leaves it) and reports the public key in
+  `/status` as `node_key`; the controller pins it when it adopts the node, and sends a
+  config's Wi-Fi password only sealed to that key (`wifi.sealed`: ECDH P-256, HKDF-SHA256,
+  AES-256-GCM). A node refuses a config release with a plain `wifi.password`. The controller
+  refuses to send a Wi-Fi password to a node with no node key pinned (adopt it again) or
+  one that reports a different key (reinstalled: adopt it again, or `espdns pin`). Config
+  files on the controller still hold the password as before; USB and Improv setup are
+  unchanged. See [docs/security.md](docs/security.md#the-wi-fi-password).
+
+## [firmware 0.0.3] - 2026-10-14
+
+**Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.
+Update the controller as usual, then install each node from it with **Install over USB**
+(**+ Add node**, on Nodes).
+
+### Added
+
+- Nodes answer DNS only from private addresses: UDP and TCP port 53 take queries from
+  IPv4 `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `169.254/16` and `127/8` and IPv6
+  `::1`, `fc00::/7` and `fe80::/10` (an IPv4-mapped source by its IPv4 address), and drop
+  anything else unanswered, so a node on a public address is no open resolver or
+  reflector. The node config's new `allow` key adds up to 16 more networks (IPv4 or IPv6,
+  CIDR), live; the controller checks it, and refuses it for a node whose firmware is older.
+  The dropped queries are counted in `/status` `queries.refused_source` and `/metrics`
+  `espdns_queries_refused_source_total`. See
+  [docs/reference/node-config.md](docs/reference/node-config.md#allow).
+- A status light on any board: a plain RGB LED on three GPIOs (common anode or cathode),
+  driven with PWM, shows the node's health in the controller's colours (green, amber, red;
+  blue while booting or updating; white to *Blink its light*). The node page gets a
+  **Status light** setting (None, one-colour LED, WS2812 or RGB LED, with its pins), which
+  shows the board's own LED and goes out with the other changes to apply; the node changes
+  lights live, without a restart. The node config's new `led` key carries it, checked by the
+  controller and the node against the board's other pins and the chip's. Board definitions
+  take `"kind": "rgb"` too. `/status` `led` now reports the light in effect, its pins, where
+  it comes from and the board's own; `failed` is now a field of its own, no longer a kind.
+  Wiring in [docs/hardware.md](docs/hardware.md#a-status-light).
+- Nodes hand over their copy of a zone: `GET /zone?name=<zone>` on a node returns a
+  secondary zone's records as the node holds them, 200 a page (500 at most), from private
+  addresses only. `/status` lists `"reads": ["zone"]` on nodes that have it. See
+  [docs/reference/node-endpoints.md](docs/reference/node-endpoints.md#zone).
+- The Waveshare ESP32-P4-ETH (`ws-p4-eth`) is a tested board.
+
+### Changed
+
+- Two versions: the firmware and the controller each have their own, in
+  `firmware/VERSION` and `controller/VERSION` (the root `VERSION` is gone), and are
+  released on their own tags: `firmware-v<version>` builds the chip images,
+  `controller-v<version>` the controller's image and `compose.yaml`, each signed as before.
+  The controller offers the nodes firmware releases only (`firmware-v*`, and the older
+  `v0.0.1` and `v0.0.2`), so a controller release never makes a node out of date. Get
+  firmware and `espdns release fetch -version` take a firmware version (`0.0.3`) or its
+  tag. A node's `/status` says the protocol it speaks to the controller (`"proto": 1`); a
+  node on one the controller doesn't speak is offered no update, and the Nodes page says
+  why. `scripts/bump-version.sh` takes the part first (`firmware patch`), and a version's
+  changelog section is `## [firmware 0.0.3]` or `## [controller 0.0.3]`
+  ([docs/releasing.md](docs/releasing.md)).
+- Only the supported chip images are built, released and offered: esp32p4-rev1, esp32p4,
+  esp32s3-octal, esp32s3-eth and esp32s3-quad. A board file or import naming another image
+  is refused (`not one of the chip images`).
+
+### Removed
+
+- The old HMAC key for firmware updates, used only by nodes on firmware from before signed
+  releases: `make key-restore`, `secrets/ota.key` and `tools/ota_push.py --legacy-key`.
+  `make ota` now refuses such a node; install it over USB.
+- Releases for any node: a node no longer takes a release addressed to
+  `ff:ff:ff:ff:ff:ff`. Every release must name the node's own ID, whatever its kind.
+  Nothing signed such a release.
+
+### Fixed
+
+- Nodes answer a query with an EDNS version other than 0 with BADVERS (RFC 6891), not
+  with an answer.
+- Nodes answer FORMERR to a query with an OPT record outside the additional section, or
+  more than one.
+- Nodes pass on forwarded records over 1024 bytes, where they fit, and set TC where they
+  don't, instead of answering SERVFAIL. A malformed upstream answer no longer leaves part
+  of itself in the SERVFAIL reply.
+- `/metrics` counts a forwarder's SERVFAIL, passed on, as `servfail`, not `forwarded`.
+- A refused NOTIFY counts as refused too: in `/status` `queries.refused` and `/metrics`
+  `espdns_queries_total{result="refused"}`.
+- One slow name no longer takes all of its forwarders' places for queries waiting on an
+  upstream answer: the queries for one question wait in at most 8 of the 32 places, and
+  past that are answered SERVFAIL at once, so queries for other names still wait for theirs.
+- Slow TCP clients no longer hold up a node's TCP port 53. A node has 2 TCP workers and a
+  queue of 4 connections waiting for them. Once a worker takes a connection, the client has
+  2 s to start its first query and 3 s to send each query whole, and is closed when idle
+  while other connections wait. A connection may wait in the queue first, so it can be held
+  a little longer. One client may hold only 3 of the 6 places. These closes are counted in
+  `/status` `queries.tcp_closed` and `/metrics` `espdns_tcp_closed_total`.
+
+### Security
+
+- The Wi-Fi password no longer crosses the network in plain text. Each Wi-Fi node makes a
+  key pair at its first boot (the private key never leaves it) and reports the public key in
+  `/status` as `node_key`; the controller pins it when it adopts the node, and sends a
+  config's Wi-Fi password only sealed to that key (`wifi.sealed`: ECDH P-256, HKDF-SHA256,
+  AES-256-GCM). A node refuses a config release with a plain `wifi.password`. The controller
+  refuses to send a Wi-Fi password to a node with no node key pinned (adopt it again) or
+  one that reports a different key (reinstalled: adopt it again, or `espdns pin`). Config
+  files on the controller still hold the password as before; USB and Improv setup are
+  unchanged. See [docs/security.md](docs/security.md#the-wi-fi-password).
+- Forged upstream replies are harder to slip in: a node asks its forwarders with the
+  name's letters in random case and takes only a reply that names it in that very case
+  (a forwarder that doesn't keep case is asked once more without it). The SOA check of a
+  copied zone now asks from a random port and takes only a reply to the question it asked.
+  Clients still see the name in their own case.
 
 ## [0.0.2] - 2026-10-11
 
@@ -123,7 +334,7 @@ version may change anything. Write each change under Unreleased as it merges;
 - `espdns release fetch [-version v0.0.3] [-url <forge>]` and **Get firmware** (Install over
   USB, for a board whose chip image isn't there yet, and the account panel's Firmware): the
   newest published release's chip images, `SHA256SUMS` and its signature downloaded from
-  GitHub (or a mirror: `-url`, `settings.json`'s `release_url`, the
+  GitHub (or a copy elsewhere: `-url`, `settings.json`'s `release_url`, the
   controller's `-release-url`), checked with the project's key and imported, as a job. The
   pages label each chip image "project release v…", "your build v…" or "your build"
   (`GET /api/firmware`; the Update panel too).

@@ -1,0 +1,12 @@
+{
+  "name": "xiao-s3-plus-w5500",
+  "title": "Seeed XIAO ESP32-S3 Plus + W5500 Ethernet Adapter",
+  "image": "esp32s3-eth",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [{ "host": 2, "sclk": 7, "mosi": 9, "miso": 8 }],
+  "ethernet": { "kind": "w5500", "spi_host": 2, "cs": 2, "mhz": 20 },
+  "led": { "kind": "gpio", "pin": 21, "active_low": true },
+  "notes": "XIAO ESP32-S3 Plus (ESP32-S3R8, 16 MB flash, 8 MB octal PSRAM) on Seeed's XIAO W5500 Ethernet Adapter: a soldered W5500 with isolated 802.3af PoE, or USB-C power. Pins: Seeed wiki Arduino demo (SCK D8/GPIO7, MISO D9/GPIO8, MOSI D10/GPIO9, CS D1/GPIO2) and Seeed's ESPHome tutorial. INT is wired to GPIO10 only on adapter V1.2 (made after 2025-11); it's left out here so older boards work, polled: on a V1.2 board add int 10 by describing a board from this one. No RST line. The XIAO's LED on GPIO21, active low. No SD slot: zones and blocking live in RAM only."
+}

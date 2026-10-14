@@ -421,8 +421,8 @@ func TestRefreshRestart(t *testing.T) {
 	done := make(chan struct{})
 	go func() { e.r.Run(ctx, 20*time.Millisecond, time.Hour); close(done) }()
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, nm := e.feed.asked("/b.txt"); nm == 1 || time.Now().After(deadline) {
+	for { // b fetched and its check saved: the fetch alone may be cancelled mid-pass
+		if _, nm := e.feed.asked("/b.txt"); nm == 1 && e.state("b").Checked.Equal(e.clk) || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)

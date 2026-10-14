@@ -9,7 +9,7 @@ facts roost here. If a page and the code disagree, the code wins: please open an
 | [espdns CLI](cli.md) | Every `espdns` command and flag, run through `docker compose`. |
 | [Controller settings](settings.md) | `settings.json` (every field and its checks), the controller's own flags, and the `.env` variables `compose.yaml` reads. |
 | [Node config](node-config.md) | The node config JSON a node runs: every key, its range, its default, and whether a change applies live or at a reboot. |
-| [Node endpoints](node-endpoints.md) | What a node answers over HTTP: `/health`, `/status` (every field), `/metrics` (every metric), `/querylog`. |
+| [Node endpoints](node-endpoints.md) | What a node answers over HTTP: `/health`, `/status` (every field), `/metrics` (every metric), `/querylog`, `/zone`. |
 
 ## Words used on these pages
 

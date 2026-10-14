@@ -12,6 +12,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/dist"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
+	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
 // signedBuild is a release of the catalog boards' chip images, version, signed with the key
@@ -99,17 +100,61 @@ func TestReleaseImportSigners(t *testing.T) {
 	}
 }
 
-// release fetch downloads a published release (here from a test forge),
-// checks it with the project's key, and imports it.
+// release fetch downloads the chip images named (-image) of a published release (here from
+// a test forge, a GitHub Enterprise server's paths), checks them with the project's key, and imports them; with
+// none named, those settings.json's nodes need (by their /status), with those imported when
+// one doesn't answer; none, and nothing is fetched.
 func TestReleaseFetch(t *testing.T) {
 	projPEM, projPub := releaseKey(t)
 	out := signedBuild(t, "0.0.4", projPEM, projPub)
-	srv := httptest.NewServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.4/", http.FileServer(http.Dir(out))))
+	srv := httptest.NewTLSServer(http.StripPrefix("/owner/espdns/releases/download/v0.0.4/", http.FileServer(http.Dir(out))))
 	defer srv.Close()
+	// The release URL is https only: the default transport trusts the test forge's certificate
+	old := http.DefaultTransport
+	http.DefaultTransport = srv.Client().Transport
+	defer func() { http.DefaultTransport = old }()
 	data := t.TempDir()
-	got, err := runRelease(t, "", "fetch", "-data", data, "-pub", projPub, "-url", srv.URL+"/owner/espdns", "-version", "v0.0.4")
-	if err != nil || !strings.Contains(got, "signed by the project's release key") || !strings.Contains(got, "esp32p4-rev1, esp32s3-eth, esp32s3-octal") {
+	fetch := func(more ...string) (string, error) {
+		return runRelease(t, "", append([]string{"fetch", "-data", data, "-pub", projPub, "-url", srv.URL + "/owner/espdns",
+			"-version", "v0.0.4", "-catalog", "../../../boards"}, more...)...)
+	}
+	if _, err := fetch(); err == nil || !strings.Contains(err.Error(), rolling.NothingToGet) {
+		t.Fatalf("nothing needed: %v", err)
+	}
+	if _, err := fetch("-image", "../x"); err == nil || !strings.Contains(err.Error(), "not one of the chip images") {
+		t.Fatalf("a bad name: %v", err)
+	}
+	got, err := fetch("-image", "esp32p4-rev1")
+	if err != nil || !strings.Contains(got, "signed by the project's release key") || !strings.HasSuffix(got, ": esp32p4-rev1\n") {
 		t.Fatalf("fetch: %v\n%s", err, got)
+	}
+	// None named: a listed node's board's (ws-s3-eth: esp32s3-eth), not the one imported
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"node_id":"aabbccddeeff","board":"ws-s3-eth","image":"esp32s3-octal"}`))
+	}))
+	defer node.Close()
+	host := strings.TrimPrefix(node.URL, "http://")
+	if err := settings.Save(settings.Path(data), settings.Settings{Nodes: []string{host}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = fetch()
+	if err != nil || !strings.Contains(got, "the chip images needed: esp32s3-eth\n") || strings.Contains(got, rolling.UnknownNeeds) ||
+		!strings.HasSuffix(got, ": esp32s3-eth\n") {
+		t.Fatalf("fetch those needed: %v\n%s", err, got)
+	}
+	// A node that doesn't answer: what it needs can't be told, so the ones imported too, said
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	if err := settings.Save(settings.Path(data), settings.Settings{Nodes: []string{host, strings.TrimPrefix(gone.URL, "http://")}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = fetch()
+	if err != nil || !strings.Contains(got, rolling.UnknownNeeds) || !strings.Contains(got, "the chip images needed: esp32p4-rev1, esp32s3-eth\n") ||
+		!strings.HasSuffix(got, ": esp32p4-rev1, esp32s3-eth\n") {
+		t.Fatalf("fetch with a node not answering: %v\n%s", err, got)
+	}
+	if _, err := fetch("-image", "esp32p4"); err == nil || !strings.Contains(err.Error(), "no chip image esp32p4") {
+		t.Fatalf("one not in the release: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "firmware", "images", "esp32p4-rev1", dist.ProvenanceDir, dist.SignerFile)); err != nil {
 		t.Error(err)
@@ -119,7 +164,7 @@ func TestReleaseFetch(t *testing.T) {
 	}
 	// Signed by another key than the project's: refused
 	_, other := releaseKey(t)
-	if _, err := runRelease(t, "", "fetch", "-data", t.TempDir(), "-pub", other, "-url", srv.URL+"/owner/espdns", "-version", "v0.0.4"); err == nil ||
+	if _, err := runRelease(t, "", "fetch", "-data", t.TempDir(), "-pub", other, "-url", srv.URL+"/owner/espdns", "-version", "v0.0.4", "-image", "esp32p4-rev1"); err == nil ||
 		!strings.Contains(err.Error(), "not the project's release key") {
 		t.Fatalf("fetch with another project key: %v", err)
 	}

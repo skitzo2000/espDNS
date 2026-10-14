@@ -1,4 +1,4 @@
-"""The firmware's version: version.cmake reads the repository's VERSION (MAJOR.MINOR.PATCH on
+"""The firmware's version: version.cmake reads firmware/VERSION (MAJOR.MINOR.PATCH on
 one line) for CMakeLists.txt, which makes it the app descriptor's version, and refuses anything
 else. Run by `make test` (cmake: ESP-IDF's, on PATH once its export.sh has run, as the image's
 entrypoint and CI's host-test job do)."""
@@ -38,7 +38,7 @@ class VersionTest(unittest.TestCase):
                 self.assertIn("VERSION", err)
 
     def test_repository_version(self):
-        out = subprocess.run(["cmake", f"-DVERSION_FILE={os.path.join(FIRMWARE, '..', 'VERSION')}", "-P", SCRIPT],
+        out = subprocess.run(["cmake", f"-DVERSION_FILE={os.path.join(FIRMWARE, 'VERSION')}", "-P", SCRIPT],
                              capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stderr)
 
@@ -46,7 +46,7 @@ class VersionTest(unittest.TestCase):
         with open(os.path.join(FIRMWARE, "CMakeLists.txt")) as f:
             cm = f.read()
         # Set before ESP-IDF's project.cmake, so the app descriptor takes it, not git describe
-        use = cm.index('espdns_version("${CMAKE_CURRENT_LIST_DIR}/../VERSION" PROJECT_VER)')
+        use = cm.index('espdns_version("${CMAKE_CURRENT_LIST_DIR}/VERSION" PROJECT_VER)')
         self.assertLess(use, cm.index("include($ENV{IDF_PATH}/tools/cmake/project.cmake)"))
 
 

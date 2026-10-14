@@ -56,11 +56,11 @@ func TestImportSigners(t *testing.T) {
 			t.Errorf("%s: %+v %v", c.name, imp, err)
 			continue
 		}
-		sig, err := readSigner(filepath.Join(images, "esp32c6"))
+		sig, err := readSigner(filepath.Join(images, "esp32p4"))
 		if err != nil || sig.Who != c.who || sig.PublicKey != hex.EncodeToString(pub) || sig.Version != "0.0.4" || sig.Imported == "" {
 			t.Errorf("%s: signer.json %+v %v", c.name, sig, err)
 		}
-		if o := ReadOrigin(filepath.Join(images, "esp32c6"), c.s); o.Kind != c.who ||
+		if o := ReadOrigin(filepath.Join(images, "esp32p4"), c.s); o.Kind != c.who ||
 			o.Label != map[string]string{SignerProject: "project release v0.0.4", SignerOwn: "your build v0.0.4"}[c.who] {
 			t.Errorf("%s: origin %+v", c.name, o)
 		}
@@ -190,7 +190,7 @@ func TestCheckProvenance(t *testing.T) {
 		t.Errorf("untrusted signer's origin: %+v", o)
 	}
 	// Your own build: no provenance, nothing to check
-	own := filepath.Join(fakeChips(t, "0.0.4", "esp32c6"), "esp32c6")
+	own := filepath.Join(fakeChips(t, "0.0.4", "esp32p4"), "esp32p4")
 	if o, err := CheckProvenance(own, []byte("anything"), Signers{}); err != nil || o.Kind != OriginBuild || o.Label != "your build" {
 		t.Errorf("own build: %+v %v", o, err)
 	}

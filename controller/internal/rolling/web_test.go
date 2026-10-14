@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -76,5 +78,54 @@ func TestWebEmptyZones(t *testing.T) {
 	}
 	if _, err := ParseWeb([]byte(`{"kind": "zones", "nodes": ["192.0.2.2"], "EmptyZones": true}`)); err == nil {
 		t.Error("EmptyZones from JSON")
+	}
+}
+
+// The chip images Get firmware gets by default: each node's, its board's image when it runs
+// that or its sibling (as an update moves it), else the one it runs; every chip image
+// already imported only when a listed node has no status; sorted, each once.
+func TestNeededImages(t *testing.T) {
+	dir, catalog := t.TempDir(), t.TempDir()
+	if got := NeededImages(dir, catalog, nil, false); len(got) != 0 {
+		t.Fatalf("nothing there: %v", got)
+	}
+	for name, img := range map[string]string{"ws-s3-eth": "esp32s3-eth", "p4": "esp32p4-rev1"} {
+		if err := os.WriteFile(filepath.Join(catalog, name+".json"), []byte(`{"image":"`+img+`"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "boards"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "boards", "mine.json"), []byte(`{"image":"esp32s3-quad"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, img := range []string{"esp32s3-octal", ".esp32p4.import"} {
+		if err := os.MkdirAll(filepath.Join(dir, ImagesDir, img), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, ImagesDir, img, "image.json"), []byte(`{}`), 0o600)
+	}
+	nodes := []release.NodeStatus{
+		{Board: "ws-s3-eth", Image: "esp32s3-octal"}, // its board's image, the sibling it moves to
+		{Board: "p4", Image: "esp32p4-rev1"},
+		{Board: "mine"},                     // a saved board, before chip images
+		{Board: "gone", Image: "esp32p4"},   // a board not here: the image it runs
+		{Board: "p4", Image: "esp32s3-eth"}, // not swappable: the image it runs
+		{},
+	}
+	want := []string{"esp32p4", "esp32p4-rev1", "esp32s3-eth", "esp32s3-quad"}
+	if got := NeededImages(dir, catalog, nodes, false); !slices.Equal(got, want) {
+		t.Errorf("%v, want %v", got, want)
+	}
+	// A node with no status: the imported one (esp32s3-octal) too
+	if got := NeededImages(dir, catalog, nodes, true); !slices.Equal(got, []string{"esp32p4", "esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad"}) {
+		t.Errorf("with a node unknown: %v", got)
+	}
+	if got := NeededImages(dir, catalog, nil, false); len(got) != 0 {
+		t.Errorf("no nodes: %v", got)
+	}
+	if got := NeededImages(dir, catalog, nil, true); !slices.Equal(got, []string{"esp32s3-octal"}) {
+		t.Errorf("no node known: %v", got)
 	}
 }

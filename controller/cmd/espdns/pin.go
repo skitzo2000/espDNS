@@ -20,7 +20,8 @@ import (
 // the one a /status gives. Adoption pins a node, and espdns recover the nodes it lists; pin
 // is for the rest: a node adopted before pins, or a replaced board at an adopted node's
 // address. The node must answer at -host as -node: its ID is read off its label, the Adopt
-// page or espdns discover, and the /status here only checks it is the one named.
+// page or espdns discover, and the /status here only checks it is the one named. Its node
+// key, as that /status gives it, is recorded with it: its Wi-Fi password is sealed to it.
 func cmdPin(args []string) (err error) {
 	fs := flag.NewFlagSet("pin", flag.ExitOnError)
 	dataDir := dataFlag(fs)
@@ -67,7 +68,16 @@ func pinNode(ctx context.Context, l *pins.Ledger, c *fleet.Client, host, node st
 	if !strings.EqualFold(st.NodeID, node) {
 		return "", fmt.Errorf("%s answers as node %q, not %s: not pinned", host, st.NodeID, node)
 	}
-	return l.Pin(node, host)
+	if st.NodeKey != "" {
+		if _, err := release.ParseNodeKey(st.NodeKey); err != nil {
+			return "", err
+		}
+	}
+	replaced, err := l.Pin(node, host)
+	if err != nil {
+		return "", err
+	}
+	return replaced, l.SetNodeKey(node, st.NodeKey) // its Wi-Fi password is sealed to it
 }
 
 func printPins(l *pins.Ledger) error {

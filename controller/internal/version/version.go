@@ -1,11 +1,13 @@
 // Package version is espDNS's version: the controller's own, and the semantic versions the
-// firmware and the controller are numbered by (0.0.x while
+// firmware and the controller are numbered by (docs/developer.md, Versions and releases; 0.0.x while
 // in alpha).
 //
-// One file says it: VERSION at the top of the repository, which the firmware's build reads
-// (firmware/CMakeLists.txt: the app descriptor's version, as /status and the image header
-// say it) and the controller's builds link in (controller/Makefile, controller/Dockerfile:
-// -ldflags -X .../internal/version.Version=<VERSION>). scripts/bump-version.sh changes it.
+// Each has its own: controller/VERSION, which the controller's builds link in
+// (controller/Makefile, controller/Dockerfile: -ldflags -X .../internal/version.Version=<VERSION>),
+// and firmware/VERSION, which the firmware's build reads (firmware/CMakeLists.txt: the app
+// descriptor's version, as /status and the image header say it). A controller release never
+// makes a node out of date: the nodes are compared with firmware releases only.
+// scripts/bump-version.sh changes either.
 package version
 
 import (
@@ -14,8 +16,7 @@ import (
 	"strings"
 )
 
-// Version is this controller's version, set at link time from the repository's VERSION
-// file. A build without it (go run, go test) is Dev.
+// Version is this controller's version, set at link time from controller/VERSION. A build without it (go run, go test) is Dev.
 var Version = Dev
 
 // Dev is the version of a build that wasn't given one.

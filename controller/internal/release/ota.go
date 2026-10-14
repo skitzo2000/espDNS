@@ -173,11 +173,10 @@ type FirmwareOptions struct {
 }
 
 // PushFirmware signs image as a firmware release for the node at host and posts it to
-// /ota, as tools/ota_push.py does (without its HMAC path for pre-manifest firmware). It
-// returns once the node took the image, before it runs it: internal/fleet waits for the
-// node to confirm it, or roll it back. Before it signs: the node must trust the key, the
-// image must keep the node's keys (FirmwareKeysCheck, on the /status read now), and
-// o.Check must pass.
+// /ota, as tools/ota_push.py does. It returns once the node took the image, before it runs
+// it: internal/fleet waits for the node to confirm it, or roll it back. Before it signs:
+// the node must trust the key, the image must keep the node's keys (FirmwareKeysCheck, on
+// the /status read now), and o.Check must pass.
 func (p *Pusher) PushFirmware(ctx context.Context, host string, image []byte, o FirmwareOptions) (Pushed, error) {
 	var out Pushed
 	if _, err := ParseAppDesc(image); err != nil {

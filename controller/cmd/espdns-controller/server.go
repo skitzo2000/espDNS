@@ -128,7 +128,7 @@ func (s *server) handler() (http.Handler, []string) {
 	updatesServer{dataDir: s.dataDir, catalog: s.catalog, store: s.changes, nodes: s.nodes}.routes(mux)
 	fleetBlocking{dataDir: s.dataDir, store: s.changes, nodes: s.nodes, refresh: s.refresh, runner: s.runner}.routes(mux)
 	refreshServer{dataDir: s.dataDir, refresh: s.refresh, runner: s.runner}.routes(mux)
-	setupServer{dataDir: s.dataDir, auth: s.auth, key: s.key, listed: s.listed, saveIf: s.saveSettings}.routes(mux)
+	setupServer{dataDir: s.dataDir, auth: s.auth, key: s.key, changes: s.changes, listed: s.listed, saveIf: s.saveSettings}.routes(mux)
 	s.push.routes(mux)
 	s.adopt.routes(mux)
 	addNodeServer{adopt: s.adopt, lookup: s.lookup}.routes(mux)

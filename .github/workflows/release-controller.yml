@@ -1,0 +1,175 @@
+# Controller release: on a controller tag (controller-v*), the controller's image, built from
+# the tagged commit, and the files that go with it, put on GitHub as a draft release
+# (docs/releasing.md):
+#
+#   - the controller's image, pushed to the GitHub container registry as
+#     ghcr.io/<owner>/espdns-controller:<version>, its digest in
+#     espdns-<version>-controller-image.txt;
+#   - compose.yaml: controller/compose.user.yaml with that image by digest, what a user
+#     downloads (releases/latest/download/compose.yaml) and runs with docker compose up -d;
+#   - SHA256SUMS over both.
+#
+# The chip images are release-firmware.yml's, on their own tag: a controller release never
+# makes a node out of date.
+#
+# Nothing here signs anything, and the release key is never here: a person signs
+# SHA256SUMS afterwards with one docker command, the key on standard input, adds
+# SHA256SUMS.sig to the draft and publishes it. The tag must be
+# controller-v<controller/VERSION> and CHANGELOG.md must have that version, or nothing is built.
+#
+# No secret to set: the jobs use the run's own token (GITHUB_TOKEN), each with only the
+# permissions it needs (the draft release, the image in the registry).
+#
+# Every image and action is pinned by digest or commit, as in ci.yml (controller/pins_test.go).
+name: Release controller
+
+on:
+  push:
+    tags: ['controller-v*']
+  # To run it again for a tag (after deleting its draft): run it on the tag. On a branch it
+  # stops at the first check.
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Each job asks for what it writes; none by default
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Tag, VERSION and CHANGELOG
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514  # controller/go.mod go
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0 (v4)
+
+      - name: The tag is controller-v<VERSION>, with its changelog
+        id: check
+        run: |
+          case "$GITHUB_REF" in
+          refs/tags/controller-v*) ;;
+          *) echo "::error::a controller release runs on a controller tag (controller-v<VERSION>), not $GITHUB_REF"; exit 1 ;;
+          esac
+          v=$(sh scripts/release/check-version.sh "${GITHUB_REF#refs/tags/}") || { echo "::error::the tag, controller/VERSION and CHANGELOG.md disagree"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  # The runner's own Docker builds and pushes the image (its FROM lines are pinned by digest,
+  # controller/pins_test.go); the step only runs the docker CLI.
+  controller-image:
+    name: Controller image
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0 (v4)
+
+      # The source label links the package to this repository on GitHub
+      - name: Build and push
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          registry=ghcr.io
+          ref=$registry/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/espdns-controller:$VERSION
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          trap 'docker logout "$registry" >/dev/null' EXIT
+          docker build --pull \
+            --build-context boards=boards --build-context keys=keys \
+            --label org.opencontainers.image.version="$VERSION" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            -t "$ref" controller
+          [ "$(docker run --rm --entrypoint /espdns "$ref" version)" = "$VERSION" ] || { echo "::error::the image's espdns is not version $VERSION"; exit 1; }
+          docker push "$ref"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" | sed -n "s|^${ref%:*}@||p" | head -n 1)
+          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $ref after the push"; exit 1 ;; esac
+          mkdir -p build/release
+          echo "$ref@$digest" | tee "build/release/espdns-$VERSION-controller-image.txt"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2 (v4)
+        with:
+          name: controller-image
+          path: build/release/espdns-${{ needs.version.outputs.version }}-controller-image.txt
+          retention-days: 7
+
+  release:
+    name: Release files
+    needs: [version, controller-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514  # controller/go.mod go
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0 (v4)
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0 (v4)
+        with:
+          path: build/release/artifacts
+
+      # The controller image's reference, compose.yaml (controller/compose.user.yaml with that
+      # image, by digest: what a user downloads and runs), SHA256SUMS; unsigned
+      - name: Release files
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir -p build/release/dist
+          ref=espdns-$VERSION-controller-image.txt
+          cp "build/release/artifacts/controller-image/$ref" build/release/dist/
+          sh scripts/release/user-compose.sh controller/compose.user.yaml "$(cat "build/release/dist/$ref")" > build/release/dist/compose.yaml
+          cd build/release/dist && sha256sum compose.yaml "$ref" > SHA256SUMS && sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2 (v4)
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: build/release/dist/
+          retention-days: 30
+
+  # The draft, on the runner itself (gh is there, not in the Go image): the files the job
+  # above built, as it checked them. A draft is seen only by the repository's writers.
+  draft:
+    name: Draft release
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0 (v4)
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0 (v4)
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: build/release/dist
+
+      # Its notes the version's changelog (scripts/release/notes.sh). A full release, 0.x
+      # too, published as the latest, so releases/latest/download/compose.yaml finds it. A
+      # release already there for the tag, draft or not, is refused, not changed: delete it first.
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          (cd build/release/dist && sha256sum -c SHA256SUMS)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::$GH_REPO already has a release for $tag: delete it first (a release is never changed in place)"; exit 1
+          fi
+          sh scripts/release/notes.sh "controller $VERSION" > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --draft --verify-tag --title "espDNS controller $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" build/release/dist/*
+          echo "draft release for $tag with $(find build/release/dist -type f | wc -l) files: sign its SHA256SUMS, add SHA256SUMS.sig, publish it (docs/releasing.md)"

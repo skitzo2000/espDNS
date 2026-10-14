@@ -25,8 +25,8 @@ us not to. Please give us a reasonable time to release a fix before you publish 
 
 ## Supported versions
 
-espDNS is alpha software. Only the newest 0.0.x release gets security fixes, with no
-backports: update to the newest release.
+espDNS is alpha software. Only the newest 0.0.x release gets security fixes. There are no
+backports, so update to the newest release.
 
 | Version | Security fixes |
 |---|---|
@@ -37,26 +37,26 @@ backports: update to the newest release.
 
 The full model is in [docs/security.md](docs/security.md).
 
-**Nodes**
+### Nodes
 
-- A node takes only **signed releases** (firmware, config, zones, blocklists, overrides,
+- A node takes only signed releases (firmware, config, zones, blocklists, overrides,
   control commands), ECDSA P-256, each naming the node (its chip ID), the chip image and a
   sequence number. Another node's or chip's release, a bad signature, or a sequence number
   not above the last one applied is refused, so replays and downgrades fail, even after a
   reboot.
-- A node trusts two **public keys**, yours, in its keys partition: a release key and an
+- A node trusts two public keys, both yours, in its keys partition: a release key and an
   offline recovery key, written by the controller's Install over USB. Firmware images hold
   no key and no secret. Over the network, only a release signed with the recovery key can
   change a node's keys (a key rotation).
-- A node accepts releases, serves its query log and recurses only for **private source
-  addresses**.
+- A node accepts releases, serves its query log and recurses only for private source
+  addresses.
 - A node's web server answers only requests whose `Host` names the node, which stops DNS
   rebinding from a browser on your network.
-- **A node never contacts the controller.** The controller always connects to the node.
+- A node never contacts the controller. The controller always connects to the node.
 
-**The controller**
+### The controller
 
-- It listens on **localhost only** (plain HTTP). Use it from the machine it runs on.
+- It listens on localhost only (plain HTTP). Use it from the machine it runs on.
 - One login, the password kept as an argon2id hash. Failed logins are slowed down. Backups
   and revealing a Wi-Fi password ask for the password again.
 - Every page sends a strict Content-Security-Policy and other security headers.
@@ -67,9 +67,9 @@ The full model is in [docs/security.md](docs/security.md).
   sequence numbers, not what the node's address claims.
 - Backups are encrypted with a passphrase.
 
-**Known gaps (alpha)**
+### Known gaps (alpha)
 
-- Releases travel to the nodes over **plain HTTP**: signed, not encrypted.
+- Releases travel to the nodes over plain HTTP: signed, not encrypted.
 - A node's `/status`, `/health` and `/metrics` are open to anyone who can reach it.
   `/metrics` holds no names clients looked up; `/status` does describe the node.
 - A node answers DNS from any address (recursion only for private ones), and any private

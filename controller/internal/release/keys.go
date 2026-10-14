@@ -9,7 +9,7 @@ import (
 )
 
 // A KEYS release (Kind Keys) rewrites one node's keys (firmware/main/keys.h): signed with the
-// node's current recovery key (KeyRecovery), addressed to its node ID (never AnyNode), its
+// node's current recovery key (KeyRecovery), addressed to its node ID, its
 // payload KeysPayload. The node writes the keys slot it isn't using with the next generation
 // and uses the new keys at once, no reboot. firmware/tools/release.py makes the same bytes
 // (firmware/tests/release_vectors.h checks all three).
@@ -78,11 +78,8 @@ func ParseKeysPayload(p []byte) (release, recovery []byte, keepRetired bool, err
 }
 
 // KeysManifest is the unsigned manifest of a KEYS release for one node: for the recovery
-// key, addressed to target (never AnyNode), for the chip image it runs.
+// key, addressed to target, for the chip image it runs.
 func KeysManifest(target [6]byte, image string, seq uint64, payload []byte) ([]byte, error) {
-	if target == AnyNode {
-		return nil, errors.New("a keys release is for one node, not any node")
-	}
 	if _, _, _, err := ParseKeysPayload(payload); err != nil {
 		return nil, err
 	}

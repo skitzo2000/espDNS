@@ -1,0 +1,31 @@
+# The latest release is always the newest controller release (controller-v*): its
+# compose.yaml is what releases/latest/download/compose.yaml, the install link, downloads.
+# A firmware release (firmware-v*) is made with --latest=false; whenever any release is
+# published, this marks the newest published controller release latest again, so no one has
+# to untick anything (docs/releasing.md).
+name: Latest release
+
+on:
+  release:
+    types: [published]
+
+# Each job asks for what it writes; none by default
+permissions: {}
+
+jobs:
+  latest:
+    name: The newest controller release is the latest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mark it latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag=$(gh release list --exclude-drafts --limit 100 --json tagName,createdAt \
+                --jq '[.[] | select(.tagName | startswith("controller-v"))] | sort_by(.createdAt) | last | .tagName // ""')
+          if [ -z "$tag" ]; then echo "no published controller release yet"; exit 0; fi
+          gh release edit "$tag" --latest
+          echo "latest release: $tag"

@@ -125,8 +125,7 @@ CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 # The containers. Each runs as you, with no network
 # unless it talks to something, the source (this directory) read-only and only what it writes
 # mounted writable over it, the board catalog (boards/ at the top of the repo) read-only at
-# /boards, the repository's VERSION read-only at /VERSION (the source's parent, where
-# CMakeLists.txt reads it) and the site defaults (if any) at /site/defaults.h. secrets/, the private keys, is
+# /boards and the site defaults (if any) at /site/defaults.h. secrets/, the private keys, is
 # covered by an empty read-only tmpfs in every container but the signing step's (SIGN): a
 # build, a test, the component fetch or a push never sees a key. The directories mounted are
 # made first, as you (docker would make a missing one as root, and can't make a mount point
@@ -142,7 +141,7 @@ CATALOG   := $(basename $(notdir $(wildcard ../boards/*.json)))
 #   KEYGEN      make keys: no network, writes keys/ and secrets/
 MOUNT_DIRS = build dist managed_components secrets
 CONTAINER = mkdir -p $(MOUNT_DIRS) && chmod 700 secrets && docker run --rm -u $(shell id -u):$(shell id -g) \
-         -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $(CURDIR)/../boards:/boards:ro -v $(CURDIR)/../VERSION:/VERSION:ro \
+         -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $(CURDIR)/../boards:/boards:ro \
          $(if $(SITE_DEFAULTS),-v $(abspath $(SITE_DEFAULTS)):/site/defaults.h:ro )$(if \
          $(KEYS_SEED),-v $(abspath $(KEYS_SEED)):/seed:ro )-w /project
 SRC       = -v $(CURDIR):/project:ro
@@ -181,7 +180,7 @@ IDF    = idf.py -B $(BUILD) -DIMAGE=$(IMAGE) -DBOARD=$(BOARD) -DBOARDS_DIR=$(BOA
 FETCHED = build/.components-$(TARGET)
 DEVICE = --device $(PORT) --group-add $(shell stat -c %g $(PORT) 2>/dev/null || echo 0)
 
-.PHONY: need-host build components FORCE images export-images boards print-address print-idf-image factory flash ota status boottime keys key-restore release-key-restore enclosure monitor log menuconfig clean test bench-board bench-board-run bench-ota
+.PHONY: need-host build components FORCE images export-images boards print-address print-idf-image factory flash ota status boottime keys release-key-restore enclosure monitor log menuconfig clean test bench-board bench-board-run bench-ota
 
 need-host:
 	$(need_host)
@@ -283,15 +282,6 @@ release-key-restore:
 	mkdir -p secrets && chmod 700 secrets
 	$(call SECRET_RUN,ESPDNS_RELEASE_KEY) sh -c 'umask 077; printf %s "$$ESPDNS_RELEASE_KEY" | base64 -d > secrets/release.pem'
 	@head -1 secrets/release.pem | grep -q "BEGIN PRIVATE KEY" && echo "restored secrets/release.pem"
-
-# Legacy HMAC key, needed only to push the first signed-release build to a node still
-# running pre-manifest firmware (ota_push.py detects this). Recovered from $DNS2_OTA_KEY
-# (base64 of the key).
-key-restore:
-	@test ! -e secrets/ota.key || { echo "secrets/ota.key already exists"; exit 1; }
-	mkdir -p secrets && chmod 700 secrets
-	$(call SECRET_RUN,DNS2_OTA_KEY) sh -c 'umask 077; printf %s "$$DNS2_OTA_KEY" | base64 -d > secrets/ota.key'
-	@test "$$(stat -c %s secrets/ota.key)" = 32 && echo "restored secrets/ota.key"
 
 # The fleet lock (controller/internal/fleetlock): ota and bench-ota push to a node, so they
 # hold it as the controller's fleet-* targets and jobs do, and refuse to run while one of

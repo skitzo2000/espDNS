@@ -1,10 +1,12 @@
 #include "server.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -37,7 +39,18 @@ static const char *TAG = "server";
 
 /* Sizes and counts are the dns service's share of the memory plan (memplan.h). */
 #define UDP_MAX_QUERY 1500
-#define TCP_IDLE_MS   10000
+/* Once a worker takes a TCP connection (not at accept: it may wait in the queue first), its
+ * client has TCP_FIRST_MS for its first message to begin, TCP_MSG_MS for each message,
+ * from its first byte, and TCP_IDLE_MS to take each reply; between messages it may idle
+ * TCP_IDLE_MS, but not while another connection waits for a worker (RFC 7766 §6.2.3), which
+ * an idle one looks for every TCP_POLL_MS. One client holds at most TCP_PER_CLIENT of the workers and places in the queue. */
+#define TCP_FIRST_MS   2000
+#define TCP_MSG_MS     3000
+#define TCP_IDLE_MS    10000
+#define TCP_POLL_MS    250
+#define TCP_QUEUE      (MP_TCP_WORKERS * 2)
+#define TCP_SLOTS      (MP_TCP_WORKERS + TCP_QUEUE)
+#define TCP_PER_CLIENT (TCP_SLOTS / 2)
 
 static server_stats_t s_st;
 static cache_t *s_cache;
@@ -55,12 +68,15 @@ static volatile bool s_udp_ok, s_tcp_ok, s_listen_failed;
 
 static uint32_t now_s(void) { return (uint32_t)(esp_timer_get_time() / 1000000); }
 
-/* Mirrors Technitium's AllowOnlyForPrivateNetworks for recursion. */
-static bool is_private(uint32_t src)
+/* Whether a query from src (IPv4, network order) is answered: a private address or one in
+ * the node config's allow list (cfg_src_allowed), or the primary's (its NOTIFY). Any other
+ * is dropped unanswered (UDP) or its connection closed (TCP), and counted. */
+static bool src_allowed(uint32_t src)
 {
-    uint32_t a = ntohl(src);
-    return (a >> 24) == 10 || (a >> 20) == (172 << 4 | 1) || (a >> 16) == (192 << 8 | 168) ||
-           (a >> 22) == (100 << 2 | 1) || (a >> 24) == 127 || (a >> 16) == (169 << 8 | 254);
+    if (src == settings()->primary || settings_src_allowed(src))
+        return true;
+    STAT(refused_source);
+    return false;
 }
 
 /* ---- upstream queries (upq.h): no worker waits on a forwarder ---- */
@@ -224,8 +240,10 @@ static size_t handle_notify(const dns_query_t *q, uint32_t src, uint8_t *out, si
 {
     STAT(notifies);
     NOTE(notify, true);
-    if (src != settings()->primary || q->qtype != DNS_T_SOA)
+    if (src != settings()->primary || q->qtype != DNS_T_SOA) {
+        STAT(refused);
         return dns_make_error(q, out, cap, DNS_R_REFUSED, 0);
+    }
     reg_rdlock();
     route_t r = reg_route(q->qname, q->qname_len);
     bool ours = (r.kind == ROUTE_AUTH || r.kind == ROUTE_AUTH_FAIL) && !r.hosted &&
@@ -256,6 +274,10 @@ static size_t handle(const uint8_t *m, size_t mlen, uint32_t src, bool tcp, uint
         q.qname_len = 0;
         return dns_make_error(&q, out, cap, DNS_R_FORMERR, 0);
     }
+    /* An EDNS version it doesn't speak: BADVERS, with its own, 0 (RFC 6891, 6.1.3). Logged as
+     * an error (not parsed, for the query log). */
+    if (q.has_edns && q.edns_version > 0)
+        return dns_make_error(&q, out, cap, DNS_R_BADVERS, 0);
     ql_note_t *note = querylog_note();
     if (note) {
         note->parsed = true;
@@ -279,7 +301,7 @@ static size_t handle(const uint8_t *m, size_t mlen, uint32_t src, bool tcp, uint
      * are. REFUSED, not SERVFAIL: it is this node's policy, not a failure, so a client asks
      * its next server at once instead of retrying, and nothing caches it as a failure. */
     bool forwarding = settings()->nfwd > 0;
-    bool recurse_ok = is_private(src) && (forwarding || reg_nfzones() > 0);
+    bool recurse_ok = forwarding || reg_nfzones() > 0; /* every client here may (src_allowed) */
     bool cd = (q.flags & DNS_F_CD) != 0;
     size_t limit = tcp ? cap : q.has_edns ? (q.edns_size < DNS_EDNS_SIZE ? q.edns_size : DNS_EDNS_SIZE) : 512;
     uint16_t flags = (uint16_t)(DNS_F_QR | (rd ? DNS_F_RD : 0) | (recurse_ok ? DNS_F_RA : 0) | (cd ? DNS_F_CD : 0));
@@ -535,6 +557,8 @@ static void udp_rx(void *arg)
             load_idle(&s_load, (int)uxQueueMessagesWaiting(s_udp_q), now_ms());
             continue;
         }
+        if (!src_allowed(it->from.sin_addr.s_addr))
+            continue; /* no reply, so nothing to reflect: the item is reused */
         STAT(udp);
         it->len = (uint16_t)n;
         it->rx_ms = now_ms();
@@ -550,41 +574,75 @@ static void udp_rx(void *arg)
 /* ---- TCP ---- */
 
 static QueueHandle_t s_tcp_q;
+/* Each connection's client, by slot (0: free; tcp_slot): taken by tcp_accept, given back by
+ * its worker. */
+static uint32_t s_tcp_held[TCP_SLOTS];
+
+typedef struct {
+    int c, slot;
+} tcp_conn_t;
+
+/* Waits up to ms for c's next message, or less once another connection waits for a worker.
+ * True if it came (or the connection ended or failed: the read sees). */
+static bool tcp_next(int c, int ms)
+{
+    for (; ms > 0; ms -= TCP_POLL_MS) {
+        fd_set r;
+        FD_ZERO(&r);
+        FD_SET(c, &r);
+        struct timeval tv = { .tv_usec = TCP_POLL_MS * 1000 };
+        if (select(c + 1, &r, NULL, NULL, &tv) != 0)
+            return true;
+        if (uxQueueMessagesWaiting(s_tcp_q))
+            break;
+    }
+    return false;
+}
+
+/* The last tcp_io_by ran out of time. */
+static bool too_slow(void) { return errno == EAGAIN || errno == EWOULDBLOCK; }
 
 static void tcp_worker(void *arg)
 {
     worker_t *w = arg;
-    int c;
+    tcp_conn_t t;
     t_w = w;
     for (;;) {
-        if (xQueueReceive(s_tcp_q, &c, portMAX_DELAY) != pdTRUE)
+        if (xQueueReceive(s_tcp_q, &t, portMAX_DELAY) != pdTRUE)
             continue;
-        struct sockaddr_in peer;
-        socklen_t pl = sizeof(peer);
-        getpeername(c, (struct sockaddr *)&peer, &pl);
-        struct timeval tv = { .tv_sec = TCP_IDLE_MS / 1000 };
-        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        for (;;) {
+        int c = t.c;
+        uint32_t src = s_tcp_held[t.slot];
+        for (int wait = TCP_FIRST_MS;; wait = TCP_IDLE_MS) {
+            if (!tcp_next(c, wait)) {
+                STAT(tcp_closed);
+                break;
+            }
+            int64_t end = fwd_now_us() + TCP_MSG_MS * 1000LL;
             uint8_t lp[2];
-            if (!tcp_read_full(c, lp, 2))
+            errno = 0;
+            size_t len = tcp_io_by(c, lp, 2, false, end) ? rd16(lp) : 0;
+            if (!len || !tcp_io_by(c, w->in, len, false, end)) {
+                if (too_slow())
+                    STAT(tcp_closed);
                 break;
-            size_t len = rd16(lp);
-            if (!len || !tcp_read_full(c, w->in, len))
-                break;
+            }
             STAT(tcp);
             /* Not while reading: a slow client's pauses are idle time. */
             power_hold(POWER_DNS);
-            size_t n = server_handle(w->in, len, peer.sin_addr.s_addr, true, w->out + 2, MP_TCP_MSG, w->scratch,
-                                     MP_SCRATCH, w->b);
+            size_t n = server_handle(w->in, len, src, true, w->out + 2, MP_TCP_MSG, w->scratch, MP_SCRATCH, w->b);
             if (n)
                 wr16(w->out, (uint16_t)n);
-            bool sent = n && tcp_write_full(c, w->out, n + 2);
+            errno = 0;
+            bool sent = n && tcp_io_by(c, w->out, n + 2, true, fwd_now_us() + TCP_IDLE_MS * 1000LL);
             power_release(POWER_DNS);
-            if (!sent)
+            if (!sent) {
+                if (n && too_slow())
+                    STAT(tcp_closed);
                 break;
+            }
         }
         close(c);
+        __atomic_store_n(&s_tcp_held[t.slot], 0, __ATOMIC_RELAXED);
     }
 }
 
@@ -608,13 +666,30 @@ static void tcp_accept(void *arg)
     boot_mark(BOOT_LISTEN); /* UDP was bound before this task started */
     for (;;) {
         supervisor_kick(s_acc_watch);
-        int c = accept(ls, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t pl = sizeof(peer);
+        int c = accept(ls, (struct sockaddr *)&peer, &pl);
         if (c < 0)
             continue;
-        if (xQueueSend(s_tcp_q, &c, 0) != pdTRUE) {
-            STAT(dropped);
-            close(c); /* all workers busy */
+        uint32_t src = peer.sin_addr.s_addr;
+        if (!src_allowed(src)) {
+            close(c); /* not answered */
+            continue;
         }
+        tcp_conn_t t = { c, tcp_slot(s_tcp_held, TCP_SLOTS, src, TCP_PER_CLIENT) };
+        if (t.slot == TCP_SLOT_CAP) {
+            STAT(tcp_closed);
+            close(c); /* one client may not take every worker and place in the queue */
+            continue;
+        }
+        if (t.slot >= 0) {
+            __atomic_store_n(&s_tcp_held[t.slot], src, __ATOMIC_RELAXED);
+            if (xQueueSend(s_tcp_q, &t, 0) == pdTRUE)
+                continue;
+            __atomic_store_n(&s_tcp_held[t.slot], 0, __ATOMIC_RELAXED);
+        }
+        STAT(dropped);
+        close(c); /* all workers busy */
     }
 }
 
@@ -682,7 +757,7 @@ void server_start(void)
     udp_item_t *items = share_alloc(SVC_DNS, pool, MP_UDP_ITEMS * sizeof(udp_item_t));
     s_udp_q = xQueueCreate(MP_UDP_QUEUE, sizeof(udp_item_t *));
     s_udp_free = xQueueCreate(MP_UDP_ITEMS, sizeof(udp_item_t *));
-    s_tcp_q = xQueueCreate(MP_TCP_WORKERS * 2, sizeof(int));
+    s_tcp_q = xQueueCreate(TCP_QUEUE, sizeof(tcp_conn_t));
     if (!ok || !items || !s_udp_q || !s_udp_free || !s_tcp_q) {
         /* The plan said it fits: the board definition is wrong. Loud: a fault. */
         ESP_LOGE(TAG, "no memory for the DNS workers' buffers (or the upstream query table): not listening");

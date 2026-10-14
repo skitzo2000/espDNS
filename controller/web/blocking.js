@@ -52,7 +52,7 @@ async function edit(body, said) {
     await refreshChanges();
     await readSetup();
     const cs = arr(r.changes);
-    toast(said || (cs.length ? `${str(cs[0].summary)}: added to the changes to apply` : "Added to the changes to apply"));
+    toast(said || (cs.length ? `${str(cs[0].summary)}: in the changes to apply` : "In the changes to apply"));
     return true;
   } catch (e) {
     toast(e.message);
@@ -136,7 +136,7 @@ function addListBox(box, primary) {
 
   function show() {
     open = true;
-    input = h("input", { class: "t", id: "lq", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "Add a blocklist: name, tag or web address",
+    input = h("input", { class: "t", id: "lq", type: "text", autocomplete: "off", spellcheck: "false", placeholder: "Name, tag or web address",
       role: "combobox", "aria-expanded": "true", "aria-controls": "lqlist", "aria-label": "Add a blocklist" });
     list = h("div", { class: "combo-list", id: "lqlist", role: "listbox", "aria-label": "Blocklists" });
     input.addEventListener("input", fill);
@@ -150,8 +150,7 @@ function addListBox(box, primary) {
     open = false;
     box.replaceChildren(button);
   }
-  // A click elsewhere closes the box, or, with something typed in it, only its list:
-  // the list would otherwise stay over the page.
+  // A click elsewhere closes the box, or, with something typed in it, only its list: the list would otherwise stay over the page.
   document.addEventListener("mousedown", e => {
     if (!open || box.contains(e.target) || document.querySelector(".drawer")) return;
     if (!input.value.trim()) close();
@@ -182,12 +181,12 @@ function addListBox(box, primary) {
         act = h("button", { class: "btn small", type: "button", "aria-label": `Add ${c.name}` }, "Add");
         act.addEventListener("click", async () => {
           act.disabled = true;
-          if (await edit({ op: "add", sources: [c.source] }, `Added ${c.name}: it's in the changes to apply`)) fill(); else act.disabled = false;
+          if (await edit({ op: "add", sources: [c.source] }, `Added ${c.name}: in the changes to apply`)) fill(); else act.disabled = false;
         });
       }
       opts.push(h("div", { class: "opt", role: "option" }, h("div", {}, h("b", {}, c.name), h("div", { class: "tagline" }, `${c.group} · ${c.what}`)), act));
     }
-    if (!opts.length) opts.push(h("div", { class: "opt" }, h("div", { class: "tagline" }, "No list called that. Paste a list's web address to add it.")));
+    if (!opts.length) opts.push(h("div", { class: "opt" }, h("div", { class: "tagline" }, "No list called that. Paste a web address to add one.")));
     opts.push(h("div", { class: "browse" }, h("button", { class: "btn link small", type: "button", onclick: () => picker(input.value.trim()) }, "Browse every list by what it blocks")));
     list.replaceChildren(...opts);
   }
@@ -227,7 +226,7 @@ function picker(q0) {
       return h("label", { class: "cat" }, cb, h("span", {}, h("b", {}, c.name), used ? [" ", h("span", { class: "tag" }, "in use")] : null,
         h("div", { class: "hint" }, `${c.what} · ${c.by}${group === "All" ? ` · ${c.group}` : ""}`)));
     }));
-    if (!shown.length) box.append(h("p", { class: "hint" }, "No list matches. Try another word, or add one by its web address below."));
+    if (!shown.length) box.append(h("p", { class: "hint" }, "No list matches. Try another word, or add one by its address below."));
   }
   search.addEventListener("input", () => { q = search.value.trim(); draw(); });
   go.addEventListener("click", async () => {
@@ -302,7 +301,7 @@ function renderAsk() {
   });
   box.hidden = false;
   box.replaceChildren(h("div", { class: "alert-box" }, h("strong", {}, "Your blocklists changed size more than usual"),
-    h("p", {}, sizeWords(q)), h("p", { class: "hint" }, "A list that shrinks a lot is often a list that failed to download. Nothing was sent to the nodes."),
+    h("p", {}, sizeWords(q)), h("p", { class: "hint" }, "A list that shrinks a lot often failed to download. Nothing was sent to the nodes."),
     h("div", { class: "row" }, take, keep)));
 }
 
@@ -341,23 +340,23 @@ function renderPause() {
   const a = active(), paused = a.filter(n => n.state === "paused");
   const maxPause = Number(obj(st.setup).pause_max_s) || 7 * 86400;
   if (!a.length) {
-    box.replaceChildren(h("span", { class: "muted" }, "No node is blocking now, so there is nothing to pause."));
+    box.replaceChildren(h("span", { class: "muted" }, "No node is blocking now: nothing to pause."));
     return;
   }
   if (paused.length) {
     const longest = Math.max(...paused.map(n => n.paused_s || 0));
     const resume = h("button", { class: "btn", type: "button", disabled: !can() || st.pausing, onclick: () => pauseAll(0, paused) }, st.pausing ? "Resuming…" : "Resume now");
     const text = paused.length === a.length
-      ? `Nothing is blocked until ${untilWords(longest)}, but your always-blocked sites.`
+      ? `Nothing is blocked until ${untilWords(longest)}, except your always-blocked sites.`
       : `Paused on ${andList(named(paused))} until ${untilWords(longest)}.`;
     box.replaceChildren(h("span", { class: "muted" }, text), h("div", { class: "row" }, resume));
     return;
   }
   const sel = h("select", { class: "t", id: "pausefor", "aria-label": "Pause for" }, PAUSES.map(([v, t]) => h("option", { value: String(v) }, t)));
-  sel.title = "Until I resume: at most a week. A pause ends at a node's restart too.";
+  sel.title = "Until I resume: a week at most. A node's restart ends a pause too.";
   const go = h("button", { class: "btn", type: "button", disabled: !can() || st.pausing }, st.pausing ? "Pausing…" : "Pause");
   go.addEventListener("click", () => pauseAll(Number(sel.value) || maxPause, a));
-  box.replaceChildren(h("span", { class: "muted" }, "Something not working? Pause blocking on every node for a while."), h("div", { class: "row" }, sel, go));
+  box.replaceChildren(h("span", { class: "muted" }, "Pause blocking on every node for a while."), h("div", { class: "row" }, sel, go));
 }
 
 // ---- check a site -----------------------------------------------------------------------
@@ -376,7 +375,7 @@ function askersBox(site, v) {
   const list = arr(v.askers);
   if (!list.length) {
     const reading = arr(v.nodes).some(n => n.enabled && n.state === "ok");
-    if (!reading && !v.held) return h("span", { class: "hint" }, "No node's query log is read now, so who asked for it isn't known.");
+    if (!reading && !v.held) return h("span", { class: "hint" }, "No node's query log is being read, so who asked isn't known.");
     const oldest = str(v.oldest);
     return h("span", { class: "hint" }, `Not in the nodes' recent query logs (the controller keeps their last ${Number(v.cap || 0).toLocaleString("en-US")} queries${oldest ? `; the oldest is from ${ago(oldest)}` : ""}).`);
   }
@@ -391,7 +390,7 @@ function askersBox(site, v) {
     const facts = [times(Number(a.queries) || 0), ago(str(a.last)), through.length ? `through ${andList(through)}` : ""].filter(Boolean).join(" · ");
     return h("li", {}, h("div", { class: "who" }, ...who, a.gateway ? h("span", { class: "tag" }, "your gateway") : null),
       h("span", { class: "small muted" }, facts),
-      a.gateway ? h("span", { class: "hint" }, "It asks for the devices behind it, so the device itself isn't shown. To see each device, have that network's DHCP hand out your nodes as DNS servers (",
+      a.gateway ? h("span", { class: "hint" }, "It asks for the devices behind it, so they aren't shown. To see each one, have that network's DHCP hand out your nodes as DNS servers (",
         h("a", { href: "./" }, "Copy DNS servers"), " on Nodes).") : null);
   });
   const more = Number(v.more) || 0;
@@ -452,11 +451,11 @@ async function checkSite(raw) {
       waitLine, h("div", { class: "row" }, btn(`Allow ${site}`, { op: "allow", site })));
   } else {
     const why = arr(c.entries).length ? "A list you use allows it." : !c.list ? "No blocklist is set up yet."
-      : c.indexed ? "No list you use has it." : "The lists can be looked into once a blocking change has been applied.";
+      : c.indexed ? "No list you use has it." : "The lists can be checked once a blocking change is applied.";
     v = h("div", { class: "verdict" }, h("b", {}, `${site} is not blocked`), h("span", {}, why),
       waitLine, h("div", { class: "row" }, btn(`Block ${site}`, { op: "block", site })));
   }
-  if (c.compiled && c.by !== "overrides") v.append(h("span", { class: "hint" }, `As the nodes were last sent the lists, ${ago(str(c.compiled))}.`));
+  if (c.compiled && c.by !== "overrides") v.append(h("span", { class: "hint" }, `From the lists sent to the nodes ${ago(str(c.compiled))}.`));
   const who = askersBox(site, asked);
   if (who) v.append(who);
   box.replaceChildren(v);
@@ -512,8 +511,8 @@ function ruleRow(kind) {
     if (!input.value.trim()) return;
     if (await edit({ op: kind, site: input.value })) { input.value = ""; input.blur(); renderRules(); }
   });
-  const empty = kind === "allow" ? "None. Allow a site here, or from \"Check a site\" when something you need is blocked." : "None. Block a site here when no list covers it.";
-  const hint = kind === "allow" ? "Never blocked, nor anything under them, whatever a list says." : "Blocked, and everything under them, even while blocking is paused.";
+  const empty = kind === "allow" ? "None. Allow a site here, or from Check a site." : "None. Block a site no list covers.";
+  const hint = kind === "allow" ? "Never blocked, nor anything under them, whatever the lists say." : "Blocked, and everything under them, even while blocking is paused.";
   const d = h("details", { class: "ex", "data-key": kind, open: sites.length > 0 },
     h("summary", {}, h("b", {}, kind === "allow" ? "Always allowed" : "Always blocked"), h("span", { class: "val" }, sites.length ? plural(sites.length, "site", "sites") : "None")),
     h("div", { class: "exb" }, form, sites.length ? h("div", {}, sites.map(x => siteRow(kind, x))) : h("p", { class: "hint" }, empty), h("p", { class: "hint" }, hint)));
@@ -527,7 +526,7 @@ function listRow(l) {
   const last = l.on && !l.allow && inUse().length === 1;
   const val = !l.on ? "Not in use" : l.waiting ? "after apply" : l.counted ? `${fmt(l.domains)} domains` : "–";
   const sw = h("button", { class: "sw", type: "button", role: "switch", "aria-checked": String(!!l.on), "aria-label": `Use ${l.title}`, disabled: !can() || last });
-  if (last) sw.title = "The last list in use: to stop blocking, pause it, or turn blocking off in a node's settings";
+  if (last) sw.title = "The last list in use: pause blocking instead, or turn it off in a node's settings";
   sw.addEventListener("click", async () => { sw.disabled = true; if (!await edit({ op: l.on ? "unuse" : "use", source: l.source })) sw.disabled = false; });
   const rm = h("button", { class: "btn small danger push-right", type: "button", disabled: !can() || last }, "Remove list");
   if (last) rm.title = sw.title;
@@ -557,9 +556,9 @@ function renderLists() {
   const rooms = nodesOf().filter(n => n.room >= 0).sort((a, b) => a.room - b.room);
   if (rooms.length) {
     const n = rooms[0];
-    hint.push(n.room > 0 ? `${nodeText(n.host)} has room for about ${short(n.room)} more domains.` : `${nodeText(n.host)} has no room for more domains in its memory.`);
+    hint.push(n.room > 0 ? `${nodeText(n.host)} has room for about ${short(n.room)} more domains.` : `${nodeText(n.host)} has no room for more domains.`);
   }
-  if (arr(s.others).length) hint.push(`Also defined, and left as they are: ${arr(s.others).join(", ")} (see Advanced).`);
+  if (arr(s.others).length) hint.push(`Also defined, left as they are: ${arr(s.others).join(", ")} (see Advanced).`);
   $("lists-hint").textContent = hint.join(" ");
 }
 
@@ -625,7 +624,7 @@ function renderRefresh() {
     });
     rows.push(h("div", { class: "stack", id: "refresh-refused" },
       h("p", { class: "bad" }, `Not updated: the new version changed more than its limit (${over.join(", ") || "its size"}).`),
-      h("p", { class: "hint" }, "A list that shrinks a lot is often one that failed to download. The nodes keep the lists they have, and the next check tries a newer version. If the change is expected, send it anyway."),
+      h("p", { class: "hint" }, "A list that shrinks a lot often failed to download. The nodes keep the lists they have, and the next check tries a newer version. If the change is expected, send it anyway."),
       h("div", { class: "row" }, take)));
   } else if (outcome === "failed" && msg) {
     rows.push(h("p", { class: "hint bad", id: "refresh-failed" }, `The last check failed: ${msg}. It's tried again within an hour; the nodes keep the lists they have.`));
@@ -751,15 +750,15 @@ function renderAdvanced() {
     h("summary", {}, h("b", {}, "Advanced"), h("span", { class: "val" }, "Each node, the files, the terminal")),
     h("div", { class: "exb" },
       h("h3", {}, "Each node"), h("div", { id: "adv-nodes" }, nodeRows()),
-      h("p", { class: "hint" }, "A pause ends when a node restarts. Going back uses the older copy a node keeps; the next apply sends the newest again."),
+      h("p", { class: "hint" }, "A pause ends when a node restarts. Older list and Older own rules use the copy the node keeps; the next apply sends the newest again."),
       h("h3", {}, "List definitions"),
-      h("p", { class: "hint" }, "Every list, its sources, the sources it allows, its popular and must-resolve names and its size limits, as JSON. The first list is the one this page sets up."),
+      h("p", { class: "hint" }, "Every list as JSON: its sources, allow sources, popular and must-resolve names and size limits. The first list is the one this page sets up."),
       defs.el,
       h("h3", {}, "Source files"),
       h("p", { class: "hint" }, "Lists kept here, one name a line: the always allowed and blocked sites are overrides-allow.txt and overrides.txt."),
       h("div", { class: "grid2" }, pick, newName), src.el,
       h("h3", {}, "The same from a terminal"),
-      h("p", { class: "hint" }, "What Apply compiles for the first list, as espdns does it."),
+      h("p", { class: "hint" }, "The command Apply runs for the first list."),
       cmd, h("div", { class: "row" }, copy)));
   d.addEventListener("toggle", () => { if (d.open) loadMore(); });
   box.replaceChildren(d);

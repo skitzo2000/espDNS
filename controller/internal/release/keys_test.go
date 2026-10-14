@@ -29,12 +29,9 @@ func TestKeysMatchesPython(t *testing.T) {
 	if err != nil || !bytes.Equal(rel, v["V_KEY2"]) || !bytes.Equal(rec, v["V_KEY3"]) || !keep {
 		t.Fatalf("VerifyKeys: %v", err)
 	}
-	// with the release key, for any node, for another node, another key, a changed payload
+	// with the release key, for another node, another key, a changed payload
 	if _, _, _, err := VerifyKeys(v["V_KEY0"], node, append(bytes.Clone(v["V_KEYS_REL0"]), v["V_KEYS_PAYLOAD"]...)); err == nil {
 		t.Error("a KEYS release signed with the release key verifies")
-	}
-	if _, _, _, err := VerifyKeys(v["V_KEY1"], node, append(bytes.Clone(v["V_KEYS_ANY"]), v["V_KEYS_PAYLOAD"]...)); err == nil {
-		t.Error("a KEYS release for any node verifies")
 	}
 	other := node
 	other[5] ^= 1
@@ -48,9 +45,6 @@ func TestKeysMatchesPython(t *testing.T) {
 	bad[HeaderLen+6] = 0
 	if _, _, _, err := VerifyKeys(v["V_KEY1"], node, bad); err == nil {
 		t.Error("a changed payload verifies")
-	}
-	if _, err := KeysManifest(AnyNode, "test-board", 4000, p); err == nil {
-		t.Error("a KEYS manifest for any node")
 	}
 }
 

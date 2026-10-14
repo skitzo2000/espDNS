@@ -56,6 +56,7 @@ static void park(flights_t *fl, flight_t *f, int i, flight_waiter_t *w)
         __atomic_store_n(&t->done, false, __ATOMIC_RELAXED);
     } else {
         fl->parked[f->group]++;
+        f->parked++;
         if (f->group != FLIGHT_GROUP_DEFAULT)
             fl->zones_parked++;
         set_waiting(fl, fl->waiting + 1);
@@ -85,6 +86,11 @@ flight_role_t flight_begin(flights_t *fl, const flight_query_t *q, flight_waiter
         /* Its group is the flight's (the same question routes the same way). */
         if (!w || !park_ok(fl, w, f->group))
             goto out;
+        /* A quarter of max_waiting per flight: one slow name, not its group, is full. */
+        if (!w->wake && f->parked >= flight_half(flight_half(fl->max_waiting))) {
+            role = FLIGHT_NAME_FULL;
+            goto out;
+        }
         park(fl, &fl->f[i], i, w);
         role = FLIGHT_JOINED;
         goto out;
@@ -161,6 +167,7 @@ static flight_waiter_t *end_locked(flights_t *fl, flight_t *f, const uint8_t *an
         }
     }
     f->head = f->tail = NULL;
+    f->parked = 0;
     f->state = FLIGHT_DONE;
     fl->parked[f->group] -= (uint16_t)n;
     if (f->group != FLIGHT_GROUP_DEFAULT)

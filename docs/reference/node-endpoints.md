@@ -11,22 +11,23 @@ Back to the [reference index](README.md).
 | GET | [`/status`](#status) | anyone | Everything the node reports, as JSON. |
 | GET | [`/metrics`](#metrics) | anyone | Prometheus metrics. |
 | GET | [`/querylog`](#querylog) | private addresses only | The node's query log. |
+| GET | [`/zone`](#zone) | private addresses only | A secondary zone's records, as the node holds them. |
 | POST | `/ota` | private addresses only | A signed firmware release. |
 | POST | [`/release`](#release-kinds) | private addresses only | Any other signed release (config, zones, blocklist, overrides, control, keys). |
 
 Rules for every request:
 
-- **Host check.** The `Host` header must name the node: its IPv4 address, its mDNS name
+- The `Host` header must name the node: its IPv4 address, its mDNS name
   (`<hostname>.local`), or the `name` from its node config, with or without a port. Anything
   else, an IPv6 literal, or no `Host` gets `421 Misdirected Request`, which stops DNS
   rebinding from a web page.
-- **No body on a GET.** A GET with a body gets `400`.
-- **Deadlines.** Each request has one deadline for its headers and reply; a slow client is
+- A GET with a body gets `400`.
+- Each request has one deadline for its headers and reply; a slow client is
   cut off.
-- **Private addresses.** `/querylog`, `/ota` and `/release` answer `403` unless the client's
+- `/querylog`, `/zone`, `/ota` and `/release` answer `403` unless the client's
   address is in a private IPv4 range (RFC 1918) or the shared address space (RFC 6598).
-- **Signed releases.** `/ota` and `/release` take only releases signed with a key the node
-  trusts, bound to the node's ID. Send them with the controller or the [espdns CLI](cli.md),
+- `/ota` and `/release` take only releases signed with a key the node
+  trusts, addressed to the node's own ID. Send them with the controller or the [espdns CLI](cli.md),
   never by hand. How they're signed and checked:
   [Architecture](../architecture.md#signed-releases-and-pins). A node with no keys (setup
   mode, health reason `no keys`) answers both `403` *this node has no keys: install it with
@@ -34,20 +35,22 @@ Rules for every request:
 
 ### Release kinds
 
-| Kind | Name | Endpoint | Signed with | Target |
-|---|---|---|---|---|
-| 1 | firmware | `/ota` | release key | this node, or any node |
-| 2 | config | `/release` | release key | this node only |
-| 3 | zones | `/release` | release key | this node, or any node |
-| 4 | blocklist | `/release` | release key | this node, or any node |
-| 5 | overrides | `/release` | release key | this node, or any node |
-| 6 | control | `/release` | release key | this node, or any node |
-| 7 | keys | `/release` | **recovery key only** | this node only |
+| Kind | Name | Endpoint | Signed with |
+|---|---|---|---|
+| 1 | firmware | `/ota` | release key |
+| 2 | config | `/release` | release key |
+| 3 | zones | `/release` | release key |
+| 4 | blocklist | `/release` | release key |
+| 5 | overrides | `/release` | release key |
+| 6 | control | `/release` | release key |
+| 7 | keys | `/release` | recovery key only |
 
-A **KEYS release** (kind 7) rewrites the keys the node trusts ([Security, Key
+Every kind names one node by its ID. A release for any other ID is refused.
+
+A KEYS release (kind 7) rewrites the keys the node trusts ([Security, Key
 rotation](../security.md#key-rotation)).
 
-- Refused `403`: one signed with the release key, addressed to any node, or with a seq not
+- Refused `403`: one signed with the release key, or with a seq not
   above the last KEYS one; and any KEYS release on a node whose keys aren't from its keys
   partition (`keys_source` other than `partition` or `seeded`).
 - Payload, 138 bytes: `EDKR`, version 1, flags (bit 0: keep the old release key as the
@@ -81,7 +84,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller querylog -host 19
 
 ## /health
 
-Small and cheap, for load balancers and monitoring. It holds no names.
+A small, cheap check for load balancers and monitoring. It holds no names.
 
 Status code: `200` while the node answers DNS (state `healthy`, `degraded` or `updating`),
 `503` otherwise. `Cache-Control: no-store`.
@@ -140,6 +143,7 @@ this order.
 | Field | Meaning |
 |-------|---------|
 | `project` | The firmware project name. |
+| `proto` | The protocol the node speaks to the controller, `1`. It goes up only when a change breaks what a controller expects; missing on firmware from before it, which speaks `1`. |
 | `version` | The firmware version. |
 | `elf_sha256` | The first 8 bytes of the firmware's ELF SHA-256, in hex. |
 | `built` | Build date and time. |
@@ -159,6 +163,7 @@ this order.
 | `keys_retired` | Fingerprint of the retired release key a KEYS release kept, or `null` ([Release kinds](#release-kinds)). It verifies only what the node stored before; never a push. |
 | `keys_gen` | The keys partition slot's generation, or `null` when the keys aren't from it. A KEYS release moves it on. |
 | `keys_error` | What is wrong with the keys, or `""`. |
+| `node_key` | The node key's public key, base64 of the 65-byte P-256 point; `""` if the node has none (a wired-only node, such as the P4). Made at the first boot; its private key never leaves the node. The controller pins it at adoption and seals a config's Wi-Fi password to it ([Security](../security.md#the-wi-fi-password)). |
 | `seq` | The highest release sequence number applied, per kind: `firmware`, `config`, `zones`, `blocklist`, `overrides`, `control`, `keys`. |
 | `degraded` | `true` while any degrading reason applies. |
 | `heap_free` | Free internal RAM, bytes. |
@@ -168,7 +173,15 @@ this order.
 
 Counters since boot: `total`, `udp`, `tcp`, `auth` (answered authoritatively, from the node's own zones),
 `forwarded`, `cache_hits`, `nxdomain`, `servfail`, `refused`, `notifies`, `dropped` (never
-answered).
+answered), `refused_source` (dropped unanswered, or the TCP connection closed: not from a
+private address nor one in the config's [`allow`](node-config.md#allow); not counted in
+`total`, `udp` or `tcp`), `tcp_closed` (TCP connections the node closed: no query within
+2 s or idle 10 s (either sooner while other connections wait), a query not all there within
+3 s of its first byte, a reply not taken within 10 s, or one client holding its share, 3 of
+the 6 places). The node has 2 TCP workers and a queue of 4; these times start when a worker
+takes the connection, so a connection that waited in the queue may be held longer.
+`servfail` counts a forwarder's SERVFAIL passed on too, and `refused` a refused NOTIFY
+(counted in `notifies` as well).
 
 ### net
 
@@ -188,7 +201,7 @@ On Wi-Fi only: `rssi` (dBm), `ap` (the access point's BSSID), `channel`, `connec
 |-------|---------|
 | `health` | `state`, `answering` and `reasons`, as in [/health](#health). |
 | `sd` | The SD card: `state` (`none`, `mounting`, `mounted`, `failed`), `timed_out`, `timeout_ms`. |
-| `led` | `kind` (`none`, `gpio`, `ws2812`, or `failed`) and `identify_s` (seconds of identify left). |
+| `led` | The status light in effect: `kind` (`none`, `gpio`, `ws2812` or `rgb`), `failed` (it didn't start), `pins` (its GPIO, or an RGB LED's red, green and blue), `active_low` (lit by a low level; a common anode), `from` (`config` or `board`), `board` (the board's own: `kind`, `pins`, `active_low`), and `identify_s` (seconds of identify left). |
 | `reset` | Why the chip last reset: `power_on`, `pin`, `software`, `panic`, `watchdog`, `brownout`, `usb`, `jtag` or `other`. |
 | `boot_ms` | Milliseconds from start to answering DNS; `null` until then. |
 | `boot_limit_ms` | The boot time the firmware aims to stay under. |
@@ -201,6 +214,8 @@ On Wi-Fi only: `rssi` (dBm), `ap` (the access point's BSSID), `channel`, `connec
 
 `forward_zones` lists the conditional forwarders the node runs (as of its last boot). Each
 entry: `name`, `forwarder`.
+
+`reads` lists what the node can hand over: `["zone"]` when it serves [`/zone`](#zone).
 
 ### services
 
@@ -287,7 +302,9 @@ Prometheus text format (`text/plain; version=0.0.4`). Open to anyone, like `/hea
 | `espdns_wifi_rssi_dbm` | gauge | | Wi-Fi signal (Wi-Fi nodes only). |
 | `espdns_clock_synced` | gauge | | 1 once the clock is set over SNTP. |
 | `espdns_queries_received_total` | counter | `transport` (`udp`, `tcp`) | DNS messages received. |
-| `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. |
+| `espdns_queries_total` | counter | `result` (`cache`, `forwarded`, `hosted`, `secondary`, `blocked`, `overridden`, `refused`, `servfail`, `error`, `notify`, `dropped`) | Queries by what answered them. A forwarder's SERVFAIL, passed on, is `servfail`; a refused NOTIFY counts as `notify` and `refused`; `error` is FORMERR, NOTIMP or BADVERS (an EDNS version other than 0). |
+| `espdns_queries_refused_source_total` | counter | | Queries dropped unanswered (UDP) or connections closed (TCP): not from a private address nor one in the config's `allow`. |
+| `espdns_tcp_closed_total` | counter | | TCP connections the node closed: no query in time, a query or reply too slow, idle, or one client holding its share of the connections (`/status` `queries.tcp_closed`). |
 | `espdns_responses_total` | counter | `rcode` (`NOERROR`, `FORMERR`, `SERVFAIL`, `NXDOMAIN`, `NOTIMP`, `REFUSED`, and others once seen) | Responses by rcode. NOTIFY replies not included. |
 | `espdns_query_duration_seconds` | histogram | | Time to answer a query, forwarders included. |
 | `espdns_upstream_queries_total` | counter | `upstream` (an address, or `other`) | Attempts at each forwarder. |
@@ -377,3 +394,44 @@ Each entry: `seq`, `uptime_ms`, `time` (Unix ms or `null`), `client` (an address
 when hidden), `transport` (`udp`, `tcp`), `qname`, `qtype`, `result` (as in
 `espdns_queries_total`), `rcode`, `latency_us`, and when they apply `rule` (`list`,
 `override`, `cname`, `allow`) and `truncated`.
+
+## /zone
+
+A secondary zone's records as the node holds them in memory, the data it answers from, a
+page at a time in the zone's canonical order. Private addresses only.
+
+Query parameters:
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `name` | | The zone, as in the node config. Required. |
+| `from` | `0` | The first record to return, counted from 0. |
+| `limit` | `200` | Records to return, 1 to 500 (higher is capped at 500). |
+| `gen` | | The `gen` from the first page. If the zone has changed since, the reply is `409`. |
+
+Reply:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | The zone. |
+| `serial` | Its SOA serial. |
+| `gen` | Goes up each time a refresh replaces the zone. |
+| `records` | Records in the zone. |
+| `from` | The `from` asked for. |
+| `rrs` | The records (below). |
+| `next` | The `from` for the next page. |
+| `more` | `true` when there are records after `next`. |
+
+Each record: `o` (the owner name; bytes other than printable ASCII, `"` and `\` show as
+`?`), `t` (the type, as a number), `ttl`, `d` (the rdata in hex, with names uncompressed).
+
+A page stops early once it holds about 32 KB, so a page of large records is shorter than
+`limit`, and a record over that is a page of its own. To read a whole zone, start at `from=0`,
+pass the `gen` from the first page on every page after it, and follow `next` while `more` is
+`true`. A `409` means the zone changed: start again from 0. If the zone changes during a
+page, the page ends after its last whole record (the next one gets the `409`), or the
+connection closes if it was inside one.
+
+Errors, as JSON with an `error` field: `400` for a missing name or a parameter that isn't a
+whole number, `404` when the node has no such secondary zone or no data for it yet, `409` as
+above.

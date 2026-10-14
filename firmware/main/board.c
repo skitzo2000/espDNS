@@ -79,15 +79,11 @@ static bool use_definition(const char *json, size_t len, char *why, size_t whyle
         snprintf(why, whylen, "board %s is for image %s, this is %s", b.name, b.image, ESPDNS_IMAGE);
         return false;
     }
-    for (int i = 0; i < 2; i++)
-        if (b.spi[i].bus == 3 && SOC_SPI_PERIPH_NUM < 3) {
-            snprintf(why, whylen, "board %s uses SPI3, which this chip doesn't have", b.name);
-            return false;
-        }
     int pins = SOC_GPIO_PIN_COUNT;
     const int *all[] = { &b.spi[0].sclk, &b.spi[0].mosi, &b.spi[0].miso, &b.spi[1].sclk, &b.spi[1].mosi,
                          &b.spi[1].miso, &b.eth.phy_reset, &b.eth.power_pin, &b.eth.mdc, &b.eth.mdio,
-                         &b.eth.rmii_clock_gpio, &b.eth.cs, &b.eth.irq, &b.eth.reset, &b.sd.cs, &b.led.pin };
+                         &b.eth.rmii_clock_gpio, &b.eth.cs, &b.eth.irq, &b.eth.reset, &b.sd.cs,
+                         &b.led.pin[0], &b.led.pin[1], &b.led.pin[2] };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
         if (*all[i] >= pins) {
             snprintf(why, whylen, "board %s: GPIO %d doesn't exist on this chip", b.name, *all[i]);
@@ -141,16 +137,8 @@ bool board_load(void)
     return false;
 }
 
-/* SPI bus number (2, 3) to ESP-IDF host (SPI2_HOST, SPI3_HOST). The C3 and C6 have no SPI3;
- * use_definition() refuses a board that asks for it there. */
-static spi_host_device_t spi_host(int bus)
-{
-#if SOC_SPI_PERIPH_NUM > 2
-    if (bus == 3)
-        return SPI3_HOST;
-#endif
-    return SPI2_HOST;
-}
+/* SPI bus number (2, 3) to ESP-IDF host (SPI2_HOST, SPI3_HOST). */
+static spi_host_device_t spi_host(int bus) { return bus == 3 ? SPI3_HOST : SPI2_HOST; }
 
 /* Brings up the board's SPI buses once. Every chip select on them is driven high first, so
  * a device that isn't set up yet (the W5500 while the SD card mounts) stays off the bus. */
@@ -202,7 +190,7 @@ static bool eth_new_emac(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
 {
 #if SOC_EMAC_SUPPORTED
     if (board.eth.power_pin != BOARD_NC) {
-        /* PHY or oscillator enable (WT32-ETH01: GPIO16, Olimex ESP32-POE: GPIO12) */
+        /* PHY or oscillator enable */
         gpio_set_direction(board.eth.power_pin, GPIO_MODE_OUTPUT);
         gpio_set_level(board.eth.power_pin, 1);
         vTaskDelay(pdMS_TO_TICKS(10));

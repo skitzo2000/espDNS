@@ -509,3 +509,45 @@ func TestMaskKeysAsParsed(t *testing.T) {
 		t.Errorf("duplicate key: parsed %q, put back %s (%v), masked %s", *c.Wifi.Password, back, err, m)
 	}
 }
+
+// A config's status light: refused by firmware that takes no "led", and by its catalog board
+// when a pin is taken there (the board's own LED pin is free for it).
+func TestRefusalLED(t *testing.T) {
+	newer := release.NodeStatus{Board: "ws-s3-eth", LED: &release.LEDStatus{From: "board"}}
+	for body, want := range map[string]string{
+		`{"name":"a"}`: "",
+		`{"led":{"kind":"rgb","red":21,"green":38,"blue":39,"common_anode":true}}`: "",
+		`{"led":{"kind":"rgb","red":21,"green":11,"blue":39}}`:                     "GPIO 11 used twice: SPI2 MOSI and LED green",
+		`{"led":{"kind":"gpio","pin":30}}`:                                         "LED: GPIO 30 is connected to the flash and PSRAM",
+	} {
+		s, err := ParseSpec("192.0.2.10", "a.json", []byte(body))
+		if err != nil {
+			t.Fatal(body, err)
+		}
+		err = s.Refusal(newer, "../../../boards")
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v, want %q", body, err, want)
+		}
+		if err := s.Refusal(release.NodeStatus{}, ""); s.Config.SetsLED() != (err != nil) ||
+			err != nil && !strings.Contains(err.Error(), "update its firmware first") {
+			t.Errorf("%s on firmware from before: %v", body, err)
+		}
+	}
+}
+
+// A config's "allow": refused by firmware from before it (no "refused_source" in /status).
+func TestRefusalAllow(t *testing.T) {
+	s, err := ParseSpec("192.0.2.10", "a.json", []byte(`{"allow":["198.51.100.0/24"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zero uint64
+	if err := s.Refusal(release.NodeStatus{Queries: &release.QueryCounts{RefusedSource: &zero}}, ""); err != nil {
+		t.Error(err)
+	}
+	for _, st := range []release.NodeStatus{{}, {Queries: &release.QueryCounts{}}} {
+		if err := s.Refusal(st, ""); err == nil || !strings.Contains(err.Error(), "update its firmware first") {
+			t.Errorf("firmware from before: %v", err)
+		}
+	}
+}

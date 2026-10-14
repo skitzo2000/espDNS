@@ -20,6 +20,7 @@
 #include "health_node.h"
 #include "hosted.h"
 #include "improv.h"
+#include "nodekey_node.h"
 #include "net.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -77,6 +78,7 @@ void app_main(void)
     power_init();       /* the clock holds (power.h); no scaling until the listeners are open */
     board_load();
     ota_trust();     /* the keys partition (seeded on the first boot), before any release is checked */
+    nodekey_node_load(); /* the node key (made on the first boot), which opens the config's Wi-Fi password */
     share_init();    /* the memory plan's board values, for the config check below */
     sd_start();      /* mounts while the settings load and the network comes up */
     settings_load(); /* node config over the board and firmware defaults; before anything uses it */

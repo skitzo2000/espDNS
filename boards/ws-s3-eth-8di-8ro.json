@@ -1,0 +1,12 @@
+{
+  "name": "ws-s3-eth-8di-8ro",
+  "title": "Waveshare ESP32-S3-ETH-8DI-8RO",
+  "image": "esp32s3-eth",
+  "flash_mb": 16,
+  "psram_mb": 8,
+  "tier": "community",
+  "spi": [{ "host": 2, "sclk": 15, "mosi": 13, "miso": 14 }],
+  "ethernet": { "kind": "w5500", "spi_host": 2, "cs": 16, "int": 12, "rst": 39, "mhz": 20 },
+  "led": { "kind": "ws2812", "pin": 38 },
+  "notes": "ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB octal PSRAM, SMA antenna). Soldered W5500 on SPI2: CS 16, INT 12, RST 39. Pins: Waveshare wiki, Waveshare Arduino demo (WS_ETH.h), ESPHome devices page; the wiki omits RST, the demo and the 8DI-8DO wiki give GPIO39. Also covers the PoE (ESP32-S3-POE-ETH-8DI-8RO) and CAN (-C) versions. The TF slot is wired for SDMMC 1-bit only (CLK 48, CMD 47, D0 45, no CS), which the S3 image can't use: zones and blocking live in RAM only. Relays behind a TCA9554 on I2C; DI on GPIO4-11."
+}

@@ -128,19 +128,34 @@ test("Nodes: the list renders from the controller's nodes", async ({ page }) => 
   const dns2 = rows.nth(0), dns3 = rows.nth(1), found = rows.nth(2);
   await expect(dns2.locator(".name")).toHaveText("dns2");
   await expect(dns2.locator(".ip")).toHaveText(DNS2);
-  await expect(dns2.locator(".led")).toHaveClass(/\bhealthy\b/);
-  await expect(dns2).toContainText("Update available: 0.0.1 → 0.0.4");
+  // One line each: the board on hovering the name, an out-of-date node's dot amber with its
+  // update's button beside it, a degraded one's with its reason, the link as an icon, the
+  // uptime in its own column.
+  await expect(dns2.locator(".name")).toHaveAttribute("title", "Guition JC-ESP32P4-M3-DEV");
+  await expect(dns2).not.toContainText("Guition");
+  await expect(dns2.locator(".led")).toHaveClass(/\btodo\b/);
+  await expect(dns2.locator(".led")).toHaveAttribute("aria-label", "Healthy · Update available: 0.0.1 → 0.0.4");
+  await expect(dns2.locator(".flag")).toHaveCount(0);
+  await expect(dns2.getByRole("button", { name: "Update dns2 from 0.0.1 to 0.0.4" })).toHaveText("Update 0.0.1 → 0.0.4");
+  await expect(dns2.getByRole("img", { name: "Wired", exact: true })).toBeVisible();
+  await expect(dns2).toContainText("2 h 41 m");
+  await expect(dns2).not.toContainText("Wired");
+  await expect(dns3.locator(".upd")).toHaveCount(0);
   await expect(dns2).not.toHaveClass(/r-warn|r-bad/);
   await expect(dns3.locator(".led")).toHaveClass(/\bdegraded\b/);
   await expect(dns3).toHaveClass(/\br-warn\b/);
-  await expect(dns3.locator(".led")).toHaveAttribute("title", /two amber blinks/);
+  await expect(dns3.locator(".led")).toHaveAttribute("title", "Degraded · Zone refresh failing");
+  await expect(dns3.locator(".flag")).toHaveText("Zone refresh failing");
   await expect(found).toHaveClass(/\br-new\b/);
   await expect(found).toContainText("New device found");
+  await expect(found.locator(".led")).toHaveClass(/\btodo\b/);
+  await expect(found.locator(".flag")).toHaveText("Not added yet");
+  await expect(found.getByRole("img", { name: "Wi-Fi", exact: true })).toBeVisible();
   await expect(found.locator(".ipc:not(.mac) .ip")).toHaveText(FOUND);
   await expect(dns2.locator(".name")).toHaveAttribute("href", `node.html#${encodeURIComponent("aa:bb:cc:00:00:02")}`);
 
   await expect(page.locator("#facts")).toContainText("2 of 2 nodes answering");
-  await expect(page.locator("#update")).toContainText("Firmware 0.0.4 for dns2");
+  await expect(page.getByRole("button", { name: "Update all" })).toBeHidden(); // one update: its row's button only
   await expect(page.locator("#minis .spark")).toHaveCount(3);
   await expect(page.locator("#copy-dns")).toHaveAttribute("title", `${DNS2}, ${DNS3}`);
   await page.waitForLoadState("networkidle");
@@ -375,7 +390,7 @@ test("+ Add node: a fixed address, and the config's gateway from another subnet 
   await expect(hint).not.toHaveClass(/\bbad\b/);
   await expect(go).toBeDisabled();
   await expect(gwHint).toHaveClass(/\bbad\b/);
-  await expect(gwHint).toHaveText("192.0.2.1 isn't in the node's own network, 198.51.100.0/24. The gateway is its next hop: an address in its own network, whatever routes lie beyond it.");
+  await expect(gwHint).toHaveText("192.0.2.1 isn't in the node's own network, 198.51.100.0/24. The gateway has to be in that network.");
   await gw.fill("");
   await expect(go).toBeDisabled();
   await gw.fill("198.51.100.1");
@@ -512,10 +527,9 @@ test("a panel closes with its x, Esc and a click outside", async ({ page }) => {
   }
 });
 
-// A node's MAC, to copy for a DHCP reservation or a static address: on a found node's row,
-// on a listed node's only while it is on DHCP, and in + Add node's view of the node chosen
-// or looked up; each copy button puts it on the clipboard.
-test("the MAC to copy: found nodes, nodes on DHCP, and + Add node", async ({ page, context }) => {
+// A node's MAC: on hovering its address in its row (found or listed; no MAC to copy there),
+// and to copy in + Add node's view of the node chosen or looked up.
+test("the MAC: on its row's address, and to copy in + Add node", async ({ page, context }) => {
   const violations = await watch(page);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await login(page);
@@ -524,27 +538,22 @@ test("the MAC to copy: found nodes, nodes on DHCP, and + Add node", async ({ pag
   const rows = page.locator("#nodes .r:not(.headr)");
   await expect(rows).toHaveCount(3);
   const dns2 = rows.nth(0), dns3 = rows.nth(1), found = rows.nth(2);
-  await expect(dns2.locator(".mac")).toHaveCount(0); // a static address: no MAC in its row
-  await expect(dns3.locator(".mac .ip")).toHaveText(MAC3);
-  await expect(found.locator(".mac .ip")).toHaveText(MACFOUND);
-  await expect(found.locator(".mac")).toHaveAttribute("title", /DHCP reservation.*static address/);
+  await expect(dns2.locator(".ip")).toHaveAttribute("title", `MAC ${MAC2}`);
+  await expect(dns3.locator(".ip")).toHaveAttribute("title", `MAC ${MAC3}`);
+  await expect(found.locator(".ip")).toHaveAttribute("title", `MAC ${MACFOUND}`);
+  await expect(page.locator("#nodes .mac")).toHaveCount(0);
   const clip = () => page.evaluate(() => navigator.clipboard.readText());
 
-  // The copy button copies the MAC, and doesn't open the row (no navigation at all).
+  // The address's copy button copies the address, and doesn't open the row.
   const navs = [];
   page.on("framenavigated", f => { if (f === page.mainFrame()) navs.push(f.url()); });
-  await found.getByRole("button", { name: `Copy MAC ${MACFOUND}` }).click();
-  await expect(page.locator("#toast")).toContainText(`Copied MAC ${MACFOUND}`);
-  expect(await clip()).toBe(MACFOUND);
-  await dns3.getByRole("button", { name: `Copy MAC ${MAC3}` }).click();
-  await expect(page.locator("#toast")).toContainText(`Copied MAC ${MAC3}`);
-  expect(await clip()).toBe(MAC3);
+  await found.getByRole("button", { name: `Copy ${FOUND}` }).click();
+  expect(await clip()).toBe(FOUND);
+  await dns3.getByRole("button", { name: `Copy ${DNS3}` }).click();
+  expect(await clip()).toBe(DNS3);
   await page.waitForLoadState("networkidle");
   expect(navs).toEqual([]);
   await expect(page).toHaveURL(/\/$|index\.html$/);
-  // The address's copy button still copies the address.
-  await found.getByRole("button", { name: `Copy ${FOUND}` }).click();
-  expect(await clip()).toBe(FOUND);
 
   // + Add node: the found node chosen, its MAC with the hint.
   await page.getByRole("button", { name: "+ Add node" }).click();
@@ -608,7 +617,7 @@ test("a found node on old firmware: its row opens its setup, Update over USB ope
   await expect(old.getByRole("button", { name: "Update over USB" })).toBeVisible();
 
   // A click anywhere on the row (its state, not a button) opens its setup panel.
-  await old.locator(".stw").click();
+  await old.locator(".flag").click();
   const d = page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" });
   await expect(d).toBeVisible();
   await expect(d).toContainText(OLD);
@@ -636,7 +645,7 @@ test("a found node ready to add: its row opens its setup, and Add node there ope
   await fake(page);
   await page.goto("./");
   const found = page.locator("#nodes .r.r-new").first();
-  await found.locator(".sub").first().click();
+  await found.locator(".flag").click();
   const d = page.getByRole("dialog");
   await expect(d).toContainText("Add it to your nodes");
   await d.getByRole("button", { name: "Add node" }).click();
@@ -715,26 +724,63 @@ test("+ Add node: every item acts on a click and on Enter", async ({ page }) => 
   expect(await violations()).toEqual([]);
 });
 
-// A later build of the version a node runs: said as that in its row, never "0.0.1 → 0.0.1",
-// and no banner; its row's Update opens the panel with it chosen.
-test("a newer build of the version a node runs: no banner, said in its row", async ({ page }) => {
+// An older version is an update, whatever the chip: a button in its row, opening its panel
+// (not the node's page) with the versions, nothing held for its chip.
+test("an older version: an update, whatever the chip", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
   await fake(page);
-  await page.route(/\/api\/updates$/, r => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ scheme: "version", builds: [], available: [], nodes: [
-    { host: DNS2, listed: true, online: true, runs: { version: "0.0.1", build: "a1" }, newest: { version: "0.0.1", build: "c1", source: "builds/p4-ip101" },
-      state: "available", rebuild: true, why: "A newer build of 0.0.1 (built Oct 7 2026 09:30)" },
+  await page.route(/\/api\/updates$/, r => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ scheme: "version", newest: "0.0.2", builds: [], available: [DNS2], nodes: [
+    { host: DNS2, listed: true, online: true, image: "esp32s3-octal", runs: { version: "0.0.1", build: "a1" }, newest: { version: "0.0.2" },
+      state: "available", why: "Update available: 0.0.1 → 0.0.2" },
   ] }) }));
   await page.goto("./");
   const dns2 = page.locator("#nodes .r:not(.headr)").nth(0);
-  await expect(dns2).toContainText("A newer build of 0.0.1 (built Oct 7 2026 09:30)");
-  await expect(page.locator("body")).not.toContainText("0.0.1 → 0.0.1");
-  await expect(page.locator("#update")).toBeHidden();
-  await dns2.getByRole("button", { name: "Update" }).click();
+  const b = dns2.getByRole("button", { name: "Update dns2 from 0.0.1 to 0.0.2" });
+  await expect(b).toHaveText("Update 0.0.1 → 0.0.2");
+  await b.focus();
+  await page.keyboard.press("Enter");
   const d = page.getByRole("dialog", { name: "Update firmware" });
   await expect(d.getByRole("checkbox", { name: "Update dns2" })).toBeChecked();
-  await expect(d).toContainText("A newer build of 0.0.1 (built Oct 7 2026 09:30)");
-  await expect(d).not.toContainText("0.0.1 → 0.0.1");
+  await expect(d).toContainText("0.0.1 → 0.0.2");
+  await expect(page).not.toHaveURL(/node\.html/);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// Two nodes out of date: a button in each row, its node alone ticked, and Update all by
+// + Add node, every one ticked; one waiting to apply says so in its row.
+test("two updates: one in each row, Update all in the head", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  const node = (host, v, more) => ({ host, listed: true, online: true, runs: { version: v }, newest: { version: "0.0.4" }, state: "available", why: "", ...more });
+  let nodes = [node(DNS2, "0.0.1"), node(DNS3, "0.0.2")];
+  await page.route(/\/api\/updates$/, r => r.fulfill({ status: 200, contentType: "application/json",
+    body: JSON.stringify({ scheme: "version", builds: [], available: [DNS2, DNS3], nodes }) }));
+  await page.goto("./");
+  const rows = page.locator("#nodes .r:not(.headr)");
+  const all = page.getByRole("button", { name: "Update all" });
+  await expect(all).toBeVisible();
+  await rows.nth(0).getByRole("button", { name: "Update dns2 from 0.0.1 to 0.0.4" }).click();
+  let d = page.getByRole("dialog", { name: "Update firmware" });
+  await expect(d.getByRole("checkbox", { name: "Update dns2" })).toBeChecked();
+  await expect(d.getByRole("checkbox", { name: "Update dns3" })).not.toBeChecked();
+  await d.getByRole("button", { name: "Not now" }).click();
+  await all.click();
+  d = page.getByRole("dialog", { name: "Update firmware" });
+  await expect(d.getByRole("checkbox", { name: "Update dns2" })).toBeChecked();
+  await expect(d.getByRole("checkbox", { name: "Update dns3" })).toBeChecked();
+  await expect(d).toContainText("One node at a time restarts; the others keep answering.");
+  await d.getByRole("button", { name: "Not now" }).click();
+
+  // dns2's waiting to apply: words in its row, and one left, so no Update all.
+  nodes = [node(DNS2, "0.0.1", { pending: true }), node(DNS3, "0.0.2")];
+  await page.reload();
+  await expect(rows.nth(0)).toContainText("Update waiting to apply: 0.0.1 → 0.0.4");
+  await expect(rows.nth(0).locator(".upd")).toHaveCount(0);
+  await expect(rows.nth(1).locator(".upd")).toBeVisible();
+  await expect(all).toBeHidden();
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

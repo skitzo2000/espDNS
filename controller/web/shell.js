@@ -28,10 +28,12 @@ export function h(tag, attrs, ...kids) {
   return e;
 }
 
-// icon draws one of the few line icons: copy, x.
+// icon draws one of the few line icons: copy, x, ethernet (a wired port), wifi.
 const ICONS = {
   copy: [16, ["rect", { x: 5, y: 5, width: 9, height: 9, rx: 1.5 }], ["path", { d: "M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" }]],
   x: [14, ["path", { d: "M2 2l10 10M12 2L2 12", "stroke-linecap": "round" }]],
+  ethernet: [16, ["path", { d: "M2.5 4.5h11v7h-3v2h-5v-2h-3zM5.5 7v1.5M8 7v1.5M10.5 7v1.5", "stroke-linejoin": "round" }]],
+  wifi: [16, ["path", { d: "M1.5 6a9.5 9.5 0 0 1 13 0M3.8 8.6a6.2 6.2 0 0 1 8.4 0M6 11.1a3 3 0 0 1 4 0", "stroke-linecap": "round" }], ["circle", { cx: 8, cy: 13.3, r: .9, fill: "currentColor" }]],
 };
 function icon(name) {
   const [size, ...parts] = ICONS[name];
@@ -58,10 +60,12 @@ const LEDTXT = {
   identify: "Its light: white flicker (identify)",
   unknown: "Old firmware: its light doesn't follow espDNS's patterns yet",
   out: "Out of service: the controller sends it nothing",
+  todo: "Something to do",
 };
-export function led(kind) {
+// led is the dot; tip, if given, says what it means instead of the pattern.
+export function led(kind, tip) {
   const k = Object.hasOwn(LEDTXT, kind) ? kind : "unknown";
-  return h("span", { class: `led ${k}`, role: "img", title: LEDTXT[k], "aria-label": LEDTXT[k] });
+  return h("span", { class: `led ${k}`, role: "img", title: tip || LEDTXT[k], "aria-label": tip || LEDTXT[k] });
 }
 
 // ---- copying ----------------------------------------------------------------------------
@@ -92,8 +96,15 @@ function copyable(text, what, cls) {
   return h("span", { class: cls }, h("span", { class: "ip" }, text), b);
 }
 
-// addr is an address shown prominently, with a copy button.
-export function addr(ip) { return copyable(ip, ip, "ipc"); }
+// addr is an address shown prominently, with a copy button; link ("ethernet" or "wifi") an
+// icon before it, and m a MAC said on hovering it.
+export function addr(ip, link, m) {
+  const c = copyable(ip, ip, "ipc");
+  const w = link === "ethernet" ? "Wired" : link === "wifi" ? "Wi-Fi" : "";
+  if (w) c.prepend(h("span", { class: "link", role: "img", title: w, "aria-label": w }, icon(link)));
+  if (m) c.querySelector(".ip").title = `MAC ${m}`;
+  return c;
+}
 
 // MACHINT says what a node's MAC is for.
 export const MACHINT = "For a DHCP reservation in your router, or to set a static address.";
@@ -246,7 +257,7 @@ function rolloutRow() {
   say();
   return h("details", { class: "ex" }, h("summary", {}, h("b", {}, "How it rolls out"), val),
     h("div", { class: "exb" },
-      h("p", { class: "small" }, "One node at a time: each is checked and watched before the next. If a node fails its checks, the apply stops there and the changes keep waiting."),
+      h("p", { class: "small" }, "One node at a time, each checked and watched before the next. If one fails its checks, the apply stops there and the changes keep waiting."),
       h("div", { class: "grid2" },
         ns.length ? h("label", { class: "f" }, h("span", {}, "Start with"), first) : null,
         h("label", { class: "f" }, h("span", {}, "Watch each node for"), watch))));
@@ -270,7 +281,7 @@ function openReview() {
     const rs = pending.restarts.map(x => nodeText(x));
     note.textContent = rs.length
       ? `${rs.join(", ")} restart${rs.length === 1 ? "s" : ""} for a few seconds, one at a time; the other nodes keep answering.`
-      : "No restart needed: DNS keeps answering throughout.";
+      : "No restart needed.";
     go.textContent = `Apply ${plural(pending.changes.length, "change", "changes")}`;
     go.disabled = discardAll.disabled = !canWrite;
   };
@@ -335,7 +346,7 @@ function followApply(j) {
   es.addEventListener("gone", () => {
     if (follow.es === es) follow.es = null;
     if (follow.id !== j.id) return;
-    follow.job = { ...follow.job, state: "failed", error: "The controller no longer has this apply: it may have restarted. The changes not sent are still waiting." };
+    follow.job = { ...follow.job, state: "failed", error: "The controller no longer has this apply: it may have restarted. Changes not sent are still waiting." };
     upd();
     refreshChanges();
   });
@@ -394,8 +405,8 @@ function openApply() {
     // The nodes out of service: skipped, said so.
     const skipped = arr(fleetNodes).filter(n => n.source === "settings" && n.out_of_service);
     if (skipped.length) out.push(h("p", { class: "hint" }, `Skipped: ${skipped.map(n => nodeText(n)).join(", ")} (out of service).`));
-    if (run) out.push(h("p", { class: "hint" }, "You can close this; progress stays at the top of every page."));
-    else if (j.state === "done") out.push(h("p", {}, skipped.length ? "Every node in service is answering with the new changes." : "Every node is answering with the new changes."));
+    if (run) out.push(h("p", { class: "hint" }, "You can close this; progress shows at the top of every page."));
+    else if (j.state === "done") out.push(h("p", {}, skipped.length ? "Every node in service has the changes and is answering." : "Every node has the changes and is answering."));
     else if (pr.outcome || j.error) out.push(h("p", {}, str(pr.outcome) || str(j.error)));
     if (!run && arr(pr.hints).length) out.push(h("ul", { class: "hint" }, arr(pr.hints).map(x => h("li", {}, str(x)))));
     after.replaceChildren(...out);
@@ -528,7 +539,7 @@ function searchBox() {
     const rs = arr(a.results), matched = obj(a.matched), out = [];
     opts = [];
     active = -1;
-    if (!rs.length) out.push(h("div", { class: "search-note", role: "status" }, `Nothing matches "${q}": no node, zone, record, device, site, list or change to apply.`));
+    if (!rs.length) out.push(h("div", { class: "search-note", role: "status" }, `Nothing matches "${q}".`));
     // By type, the type of the best result first.
     const by = new Map();
     for (const r of rs) {
@@ -558,7 +569,7 @@ function searchBox() {
         items));
     }
     const foot = [];
-    if (a.more) foot.push("Only the best matches are shown: type more to narrow it down.");
+    if (a.more) foot.push("Only the best matches are shown: type more to narrow it.");
     if (a.partial) foot.push("The search ran out of time: not every place was searched.");
     for (const p of arr(a.problems)) foot.push(h("div", { class: "bad" }, `Couldn't search ${str(p)}`));
     if (foot.length) out.push(h("div", { class: "search-foot" }, foot.map(x => (typeof x === "string" ? h("div", {}, x) : x))));
@@ -579,7 +590,7 @@ function searchBox() {
       else render(q, j);
     } catch (err) {
       if (mine !== seq || (err && err.name === "AbortError")) return;
-      note("The controller isn't answering, so nothing was searched.", "bad");
+      note("The controller isn't answering.", "bad");
     }
   }
 
@@ -656,7 +667,7 @@ export function shell(current) {
       // The setup page sets the password itself: no band there.
       if (current !== "setup.html") {
         sessBand = h("div", { class: "band warn" }, h("div", { class: "band-in" }, h("strong", {}, "Read-only."),
-          h("span", {}, "No password is set, so the controller takes no actions. ", h("a", { href: "setup.html" }, "Set one"), ", or use ", h("code", {}, "espdns passwd"), " (docs/developer.md).")));
+          h("span", {}, "No password is set, so the controller takes no actions. ", h("a", { href: "setup.html" }, "Set one"), ", or run ", h("code", {}, "espdns passwd"), " (docs/developer.md).")));
       }
     } else if (s.error) {
       sessBand = h("div", { class: "band bad" }, h("div", { class: "band-in" }, h("strong", {}, "The login can't be used."), h("span", {}, str(s.error))));

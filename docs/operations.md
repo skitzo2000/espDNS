@@ -33,22 +33,22 @@ docker compose run --rm --entrypoint /espdns espdns-controller rollout -h
 Every change to a node follows these, from the web page or the CLI. The page loosens none of
 them.
 
-- **One change at a time.** Every change takes the *fleet lock*. A second one stops at once
+- One change at a time. Every change takes the *fleet lock*. A second one stops at once
   with `the fleet is locked by <who> (<what>) ... since <time>`: wait and try again. The lock
   goes when its holder exits, even after a crash, so there's never a stale lock to clear.
-- **One node at a time.** Change one node, check it, watch it for a while (the *soak*), then
+- One node at a time. Change one node, check it, watch it for a while (the *soak*), then
   move on.
-- **The canary goes first.** Set a default with `"canary"` in `settings.json`, or pick one
+- The canary goes first. Set a default with `"canary"` in `settings.json`, or pick one
   per change. If the canary fails, nobody else is touched.
-- **Never the last healthy node.** Before each node, another node or a *DNS peer* (a resolver
+- Never the last healthy node. Before each node, another node or a *DNS peer* (a resolver
   your clients also use, such as your zone primary: `"dns_peers"` in `settings.json`) must be
   answering. A node that isn't adopted yet doesn't count, nor does one
   [out of service](#taking-a-node-out-of-service).
-- **Nobody else unwell.** If another node or DNS peer is unhealthy, a change that may reboot
+- Nobody else unwell. If another node or DNS peer is unhealthy, a change that may reboot
   a node (firmware, a config, a blocklist) doesn't start.
-- **Dry run first.** Apply and adding a node run their own. On the CLI, use `-dry-run` first.
+- Dry run first. Apply and adding a node run their own. On the CLI, use `-dry-run` first.
 
-So you need **at least two nodes, or one node and a DNS peer**, in `settings.json`. A lone
+So you need at least two nodes, or one node and a DNS peer, in `settings.json`. A lone
 node with no DNS peer has every change refused: `this is the only node clients use: they get
 no DNS while it reboots or if the change breaks it`.
 
@@ -92,37 +92,45 @@ controller is down.
 
 ### Versions
 
-The firmware and the controller share one version number. Each node gets a state from
-comparing its version with the newest firmware the controller holds for it:
+The firmware has its own version number, the same on every chip and board. The controller
+has another, so a new controller never makes your nodes out of date. Each node gets a state
+from comparing its version with the newest firmware release (or a newer firmware you
+imported):
 
 | State | Meaning |
 | --- | --- |
-| `available` | A newer build is there for this node. |
-| `current` | The node runs the newest build there. |
-| `newer` | The node runs a newer build than any the controller has. |
-| `unordered` | The node runs firmware from before version numbers. Update it with a rollout. |
-| `no_build` | The controller has no build for this node's chip image. |
-| `unknown` | The controller has not read the node yet. |
+| `available` | The node runs an older version: "Update available: 0.0.3 → 0.0.4". |
+| `current` | The node runs the newest version. |
+| `newer` | The node runs a newer version than the newest release. |
+| `unknown` | The controller hasn't read the node yet, its firmware is from before version numbers, no release is known yet, or the node's firmware and the controller don't fit together (it says which protocol each speaks; update the controller first). |
 
-Two builds of the same version are ordered by build time.
+The controller asks GitHub (or your `release_url`) for the newest firmware release when it
+starts, every 24 hours, and when a new node shows up. It keeps only the version number, in
+`firmware/latest` in the data directory, and downloads nothing. A node on an older version
+is offered the update, whatever its chip. The chip image it needs is downloaded and checked
+when you apply the update.
 
 ### Get the firmware into the controller
 
-The controller loads chip images only as a **signed release**: the project's (checked with
+The controller loads chip images only as a signed release: the project's (checked with
 `/keys/project.pub`) or your own (signed with your release key). Either way, your nodes only
 ever see your key: the controller signs every update with it, after checking again that the
 release still vouches for the app it sends.
 
-- **The project's release:** **Get firmware** in the account menu's Firmware (or in Install
-  over USB, for a board whose chip image isn't there yet), or:
+- The project's release: you don't need to do anything for updates, since applying one
+  downloads the chip image each node needs. To get the chip images now, press **Get
+  firmware** in the account menu's Firmware (or in Install over USB, for a board whose chip
+  image isn't there yet), or run:
 
   ```sh
   docker compose run --rm -T --entrypoint /espdns espdns-controller release fetch -data /data
   ```
 
-  It downloads the newest release (`-version v0.0.2` for another), checks the project's
-  signature and every file, and imports it as "project release v0.0.2".
-- **Your own build:** build, package, sign and import as in
+  It downloads the newest firmware release (`-version 0.0.3` for another), checks the
+  project's signature and every file, and imports it as "project release v0.0.3". It gets
+  only the chip images needed: in Install over USB, that board's; otherwise what your nodes
+  need (`-image esp32p4-rev1` names one).
+- Your own build: build, package, sign and import as in
   [Build your own firmware](developer.md#build-your-own-firmware). Remove
   `build/release/dist` first: `release build` only writes into a missing or empty directory.
 
@@ -143,7 +151,7 @@ build with keys built in), for a node in setup mode (reinstall it, or Write keys
 USB), and for a node on pre-keys-partition firmware when the image's keys seed isn't that
 node's keys.
 
-**A node on firmware from before the keys partition** (`/status` has no `keys_source`)
+A node on firmware from before the keys partition (`/status` has no `keys_source`)
 trusts keys built into it, so a key-neutral image is refused for it. Give it, once, your own
 build with its current public keys as the partition's seed: it writes them into its keys
 partition on first boot (`keys_source` `seeded`, same fingerprints), keeps everything it
@@ -155,9 +163,10 @@ its keys and erases its settings.
 Edits and firmware updates queue as *pending changes*. Nothing reaches a node until you
 apply.
 
-1. Open the controller, `http://127.0.0.1:8480`. **Nodes** says when an update is there,
-   e.g. "Update available: 0.0.2 → 0.0.3".
-2. Click **Update** (or **Update all**), check the from and to versions, and confirm.
+1. Open the controller, `http://127.0.0.1:8480`. On **Nodes**, a node with an update has an
+   amber dot and an **Update 0.0.3 → 0.0.4** button in its row. **Update all** sits by
+   **+ Add node** while two or more nodes have one.
+2. Click the button (or **Update all**), check the from and to versions, and confirm.
 3. Open the orange chip in the top bar ("2 changes to apply"). It lists each change, what it
    does and which nodes restart. You can discard one here.
 4. Open **How it rolls out**. Pick the canary and how long to watch each node: 1, 5 or 15
@@ -217,14 +226,14 @@ CLI rollout at once, leaving the current node as below.
 At most one node is changed or rolled back; the rest still answer. Look at every node first
 (the Nodes page, or `status -all` as above). Then:
 
-- **`not started: no other node or DNS peer is answering`** or **`another node is
-  unhealthy`**: nothing was pushed to that node. Fix the other node or DNS peer, then
+- `not started: no other node or DNS peer is answering` or `another node is
+  unhealthy`: nothing was pushed to that node. Fix the other node or DNS peer, then
   dry-run and roll out again. Nodes already updated are skipped.
-- **The node rolled back** (it's on its old firmware): it should be healthy. Don't push the
+- The node rolled back (it's on its old firmware): it should be healthy. Don't push the
   same build again until you know why it failed.
-- **The node took the update but isn't healthy yet**: wait and look again. A node on trial
+- The node took the update but isn't healthy yet: wait and look again. A node on trial
   rolls itself back within 90 seconds if it can't come up.
-- **A node shows `reboot pending`**: the rollout was cut off between push and reboot. Reboot
+- A node shows `reboot pending`: the rollout was cut off between push and reboot. Reboot
   it under the same rules from its details on the Nodes page (**Reboot (pending)**), or:
 
   ```sh
@@ -232,10 +241,10 @@ At most one node is changed or rolled back; the rest still answer. Look at every
     reboot -host 192.0.2.54 -if-pending -mdns 0 -data /data -key /data/keys/release.pem
   ```
 
-- **A blocklist was sent back** (`reverted (back on the copy each had): ...`): it failed its
+- A blocklist was sent back (`reverted (back on the copy each had): ...`): it failed its
   checks, so every node that took it went back to its previous list. Fix the list and start
   again from the dry run.
-- **A node didn't answer**: if it's in the `not touched` list, it was never changed. Find out
+- A node didn't answer: if it's in the `not touched` list, it was never changed. Find out
   why before you go on.
 
 > **Artie's tip:** a node that came home on its old firmware is doing its job. Find out why
@@ -252,13 +261,13 @@ On its node page:
   sends it nothing: an apply, a rollout, a blocklist refresh and a config push skip it and
   say so. It doesn't count for the safety rules either, up or down. Works while the node is
   offline. If it's up, it still answers DNS.
-- **Return to service.** The node must answer and trust the controller's release key. The
-  controller then sends it, on its own, what it missed: its settings, the hosted zones, the
-  allowed and blocked sites, its blocklist, and newer firmware if it's behind. Each gets a
-  dry run first, as an apply does. Only then does it count again. If it doesn't answer, it
-  stays out, and the page says why.
-- **Remove from the group.** It comes off your list of nodes. Its config file is kept, and
-  the node isn't touched: if it's up it keeps answering DNS, so take it off your router's
+- **Return to service.** The node must answer and trust your release key. The controller
+  then sends it what it missed: settings, hosted zones, allowed and blocked sites, its
+  blocklist, and newer firmware if it's behind and its chip image is here (else update it
+  from Nodes). Each is checked first, like an apply. If it doesn't answer, it stays out,
+  and the page says why.
+- **Remove from the group.** It comes off your list. Its config file is kept and the node
+  isn't touched: if it's up it keeps answering DNS, so take it off your router's
   DNS servers too. While it's on your network it shows up under New device found, and you
   can add it back the usual way.
 
@@ -274,7 +283,7 @@ From the command line: [`espdns node out|in|remove`](reference/cli.md#node).
 
 ## Pinned nodes
 
-The controller signs a release for a node only when it's **pinned** to its address. Pins
+The controller signs a release for a node only when it's *pinned* to its address. Pins
 live in `pins/` in the data directory, one file per node: its ID (the chip's MAC address),
 the pinned address, and the last sequence number (*seq*) signed for it, per kind of release.
 
@@ -309,12 +318,12 @@ yet, so you can find the board in your hand. At worst an LED flickers.
 
 A node trusts the two public keys in its keys partition, which Install over USB writes from
 the controller's `keys/release.pem` and `keys/recovery.pub` (no image is prepared until both
-are there). A node with no keys, or a damaged keys record, comes up in **setup mode**: it
+are there). A node with no keys, or a damaged keys record, comes up in *setup mode*: it
 answers DNS on its board's defaults, reports `no keys`, and refuses every release. Nothing
 over the network can give it keys.
 
-+ Add node shows it with **Write keys over USB**. Plug it in, choose **Write keys only (keeps
-settings)** and pick its port. The page writes the 8 KB keys partition at 0x1b000 and
+**+ Add node** shows it with **Write keys over USB**. Plug it in, choose **Write keys only
+(keeps settings)** and pick its port. The page writes the 8 KB keys partition at 0x1b000 and
 nothing else, reads it back, and restarts the board. If it can't reach the board, hold BOOT
 while you plug it in and try again.
 
@@ -327,9 +336,9 @@ node signed offline with the recovery key the nodes trust now. The why is in
 
 Rotate:
 
-- **routinely**, to retire a long-used release key or move to your own keys. Each node keeps
+- routinely, to retire a long-used release key or move to your own keys. Each node keeps
   the old key as its *retired key* until the push re-signs what it stores, right after;
-- **after a compromise** (the release key or data directory may have leaked), at once, with
+- after a compromise (the release key or data directory may have leaked), at once, with
   `-compromised`. The nodes drop the old key straight away. Rotate from a controller you
   trust again: rebuilt from an earlier backup, or from scratch.
 
@@ -348,7 +357,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 | Flag | Meaning |
 |------|---------|
 | `-new-release` | `generate`: a new release key, made in the controller. Or a private key file (PEM, or base64 of one). Leave it out to keep the release key. |
-| `-new-recovery` | The new recovery key's **public** half (`recovery.pub`, raw or PEM). Leave it out to keep the recovery key. |
+| `-new-recovery` | The new recovery key's public half (`recovery.pub`, raw or PEM). Leave it out to keep the recovery key. |
 | `-recovery-pub` | The recovery public key the nodes trust now, if the controller doesn't have it (`keys/recovery.pub`). |
 | `-compromised` | Drop the old release key on the nodes at once. Needs a new release key. |
 
@@ -431,10 +440,10 @@ or a file cut short is refused. A backup holds the fleet lock while it reads.
 
 ### Backup
 
-**On the web page:** **System**, then **Backup**. Type a passphrase and download. The page
+On the web page: **System**, then **Backup**. Type a passphrase and download. The page
 asks for your password first.
 
-**On the command line,** with the passphrase from an environment variable or a file's first
+On the command line, with the passphrase from an environment variable or a file's first
 line. The backup goes to standard output:
 
 ```sh
@@ -549,6 +558,8 @@ last one as long as the controller's clock is right.
 
 ## Releases
 
-A release is one version of firmware and controller together, its `SHA256SUMS` signed with
-the project's key; its chip images are key-neutral. [Releasing](releasing.md) covers what it
-holds and how to check one with `espdns release verify`.
+A firmware release holds the chip images and a controller release holds the controller's
+image, each with its own version and tag (`firmware-v0.0.3`, `controller-v0.0.3`). Each
+release's `SHA256SUMS` is signed with the project's key, and the chip images are
+key-neutral. [Releasing](releasing.md) covers what each holds and how to check one with
+`espdns release verify`.

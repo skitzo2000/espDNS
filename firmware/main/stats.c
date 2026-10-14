@@ -35,6 +35,12 @@ void st_hist_read(const st_hist_t *h, uint64_t cum[ST_NBUCKETS], uint64_t *sum_u
 
 void st_query(st_t *s, ql_result_t r, int rcode, uint32_t us)
 {
+    if (r == QR_NOTIFY) {
+        /* Counted in server.c (/metrics reads it there); a refused one is a refusal too. */
+        if (rcode == 5 /* REFUSED */)
+            ADD(&s->result[QR_REFUSED], 1);
+        return;
+    }
     if ((unsigned)r < QR_N)
         ADD(&s->result[r], 1);
     if (rcode >= 0 && rcode < 16)

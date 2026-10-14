@@ -10,8 +10,10 @@
 #include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "health_node.h"
 #include "hosted.h"
 #include "jsonw.h"
+#include "led.h"
 #include "mbedtls/sha256.h"
 #include "net.h"
 #include "nvs.h"
@@ -56,6 +58,14 @@ int settings_forwarders(uint32_t *out, int *timeout_ms)
     *timeout_ms = s_run->upstream_timeout_ms;
     taskEXIT_CRITICAL(&s_mux);
     return n;
+}
+
+bool settings_src_allowed(uint32_t ip)
+{
+    taskENTER_CRITICAL(&s_mux);
+    bool ok = cfg_src4_allowed(s_run, ip);
+    taskEXIT_CRITICAL(&s_mux);
+    return ok;
 }
 
 /* ---- NVS state ---- */
@@ -279,14 +289,15 @@ const char *settings_store(const uint8_t hdr[REL_HEADER_LEN], const rel_manifest
     } else if (!cfg_build(c, &board, (const char *)buf + REL_HEADER_LEN, len, err, sizeof(err))) {
         snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
         why = s_reply;
+    } else if (c->led_config && !led_check(&c->led, err, sizeof(err))) {
+        snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
+        why = s_reply;
     } else if (hosted_clash(c, err, sizeof(err)) != NULL) {
         snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
         why = s_reply;
     } else if (!share_check(c, err, sizeof(err))) {
         snprintf(s_reply, sizeof(s_reply), "config refused: memory plan: %s", err);
         why = s_reply;
-    } else if (memcmp(m->target, ota_trust()->node_id, 6) != 0) {
-        why = "a config is for one node, not any node";
     } else if (cfg_net_changed(s_run, c) && !state_set(KEY_TRIAL, m->seq)) {
         /* The trial is armed before the slot is written: whatever cuts this push short, a
          * config with a new address never boots without it. */
@@ -328,6 +339,8 @@ const char *settings_apply(const rel_manifest_t *m, char *msg, size_t cap, bool 
                  trial ? " (trial then: a DNS query must reach its new address within 90 s)" : "");
     } else {
         uint32_t before = svc_enabled(s_run);
+        const board_led_t *a = &s_run->led, *b = &s_pending->led;
+        bool led = a->kind != b->kind || a->active_low != b->active_low || memcmp(a->pin, b->pin, sizeof(a->pin));
         taskENTER_CRITICAL(&s_mux);
         cfg_copy_live(s_run, s_pending);
         taskEXIT_CRITICAL(&s_mux);
@@ -341,6 +354,8 @@ const char *settings_apply(const rel_manifest_t *m, char *msg, size_t cap, bool 
         power_apply(); /* clock scaling */
         services_apply(before, svc_enabled(s_run)); /* forwarding, hosted zones, blocking, the query log */
         querylog_apply();                           /* a stricter client setting: what it holds */
+        if (led)
+            health_led_apply(); /* the old LED stopped, the new one started */
         snprintf(msg, cap, "ok, config seq %llu applied live\n", (unsigned long long)m->seq);
     }
     ESP_LOGI(TAG, "%s", msg);

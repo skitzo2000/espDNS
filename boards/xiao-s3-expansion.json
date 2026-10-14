@@ -1,0 +1,13 @@
+{
+  "name": "xiao-s3-expansion",
+  "title": "Seeed XIAO ESP32S3 + Expansion Board",
+  "image": "esp32s3-octal",
+  "flash_mb": 8,
+  "psram_mb": 8,
+  "tier": "untested",
+  "spi": [{ "host": 2, "sclk": 7, "mosi": 9, "miso": 8 }],
+  "ethernet": { "kind": "none" },
+  "sd": { "kind": "spi", "spi_host": 2, "cs": 3 },
+  "led": { "kind": "gpio", "pin": 21, "active_low": true },
+  "notes": "Plain XIAO ESP32S3 (ESP32-S3R8, 8 MB flash, 8 MB octal PSRAM; not the Sense) on the XIAO Expansion Board Base, whose SD slot is CS D2/GPIO3 on SPI D8-D10 (GPIO 7/8/9): Seeed wiki (Expansion Board, XIAO ESP32S3 pinout), arduino-esp32 XIAO_ESP32S3 variant. The XIAO's LED on GPIO21, active low. Wi-Fi only."
+}

@@ -20,22 +20,22 @@ Run every command from the repository's `controller/` directory, where `compose.
 docker compose run --rm --entrypoint /espdns espdns-controller <command> -data /data [flags]
 ```
 
-- **Set up `.env` and the data directory first.** `docker compose run` reads the same
+- Set up `.env` and the data directory first. `docker compose run` reads the same
   `compose.yaml` as the controller, so it needs `ESPDNS_UID` and `ESPDNS_GID` in `.env` and
   an existing data directory (see [settings.md](settings.md#env-variables)).
-- **Always pass `-data /data`.** The default, `data`, doesn't exist in the container, and
+- Always pass `-data /data`. The default, `data`, doesn't exist in the container, and
   overriding the entrypoint drops the controller's own `-data /data`.
-- **Paths are inside the container.** Data directory: `/data`. Board catalog: `/catalog`.
+- Paths are inside the container. Data directory: `/data`. Board catalog: `/catalog`.
   The project's release public key: `/keys/project.pub` (it checks the project's releases;
   no node trusts it). Your own public keys aren't in the image: mount them
   (`-v "$HOME/espdns-keys:/mykeys:ro"`). The root filesystem is read-only, so write output
   under `/data`. Mount any other host files you need, for example `-v "$PWD/lists:/in:ro"`
   after `run`.
-- **Use `-T` when you pipe in.** It turns off the terminal so standard input comes from your
+- Use `-T` when you pipe in. It turns off the terminal so standard input comes from your
   pipe or file.
-- **The network is the host's.** `compose.yaml` uses host networking, so mDNS and the nodes
+- The network is the host's. `compose.yaml` uses host networking, so mDNS and the nodes
   on your LAN work from `docker compose run` too.
-- **One change at a time.** A command that changes nodes takes the fleet lock and fails at
+- One change at a time. A command that changes nodes takes the fleet lock and fails at
   once if the controller or another `espdns` holds it. It logs its start and result to the
   action log. A `-dry-run` takes no lock and isn't logged. Ctrl-C stops a change at once; a
   second Ctrl-C quits.
@@ -44,7 +44,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller <command> -data /
 
 Secrets never go in a command-line argument.
 
-**The release signing key** (for every command that sends a release), one of:
+The release signing key (for every command that sends a release) comes one of three ways:
 
 - The copy imported into the data directory with [`key import`](#key), given as a file:
   `-key /data/keys/release.pem`. The examples on this page use it:
@@ -76,7 +76,7 @@ CLI won't pick up the imported key by itself: use one of the three ways above.
 With `-recovery` (sign with the offline recovery key, key slot 1) the environment variable
 isn't read: use `-key -`.
 
-**The login password and backup passphrase** are asked on the terminal, or read from the first
+The login password and backup passphrase are asked on the terminal, or read from the first
 line of standard input when there is no terminal.
 
 ## Commands
@@ -185,7 +185,8 @@ One of `-host` or `-all` is required. Also takes the [fleet flags](#fleet-flags)
 
 ## adopt
 
-Gives an unadopted node its node config and address, and pins its ID to that address. The
+Gives an unadopted node its node config and address, and pins its ID to that address, with
+its node key (a Wi-Fi password is sealed to it: [security.md](../security.md#the-wi-fi-password)). The
 node is found at its current address; a new address is kept only once the node answers
 there.
 
@@ -556,9 +557,10 @@ says so: revoke that token on your primary.
 ## recover
 
 Rebuilds what it can of a data directory from the nodes, when you have no backup. Import
-the release key first ([`key import`](#key)). It only reads the nodes. It writes `settings.json` if there is none (the nodes in service that trust the
-key), pins each listed node to its address, saves each node's `/status` under
-`recovered/<time>/`, and says per node what can't come back.
+the release key first ([`key import`](#key)). It only reads the nodes. It writes
+`settings.json` if there is none (the nodes in service that trust the key), pins each listed
+node to its address, saves each node's `/status` under `recovered/<time>/`, and says per node
+what can't come back.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller recover -data /data -dry-run
@@ -576,7 +578,9 @@ docker compose run --rm --entrypoint /espdns espdns-controller recover -data /da
 
 Releases are signed only for the node ID pinned to an address, never for the ID a node
 reports. Adoption and `recover` pin nodes; use `pin` for the rest: a node adopted before pins
-existed, or a replacement board at an adopted node's address.
+existed, a replacement board at an adopted node's address, or a node installed again over
+USB, which has a new node key. `pin` also records the node key the node reports, which a
+config's Wi-Fi password is sealed to.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller pin -data /data
@@ -629,14 +633,15 @@ A release's files. See [releasing.md](../releasing.md) for the whole process.
 | `release sign` | Signs `SHA256SUMS` with a release key, read from standard input. Only the key that matches `-pub` is taken. |
 | `release verify` | Checks the signature with `-pub`, and every file against `SHA256SUMS`. |
 | `release import` | Takes a release signed by the project's key (`-pub`) or by the controller's own release key, and refuses any other; checks every file, then puts the release's chip images in `<data>/firmware/images`, each with its provenance, where the dashboard finds them. It says who signed it. |
-| `release fetch` | Downloads a published release's chip images, `SHA256SUMS` and its signature (GitHub, or a mirror), checks them with the project's key alone, and imports them as `release import` does. The dashboard's Get firmware runs the same. |
+| `release fetch` | Downloads a published release's `SHA256SUMS` and its signature from GitHub, checks the signature with the project's key alone, then downloads only the chip images needed, checks each, and imports them as `release import` does. Needed: the ones named with `-image`, else the boards' images of the nodes in `settings.json` (each node's `/status` read now). If a node doesn't answer, it can't tell what that node needs, so it says so and gets the chip images already imported too. Other imported chip images stay as they are. With nothing needed, it says so and fetches nothing. The dashboard's Get firmware runs the same. |
 
 ```sh
-docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
+docker compose run --rm -v "$PWD/../espdns-0.0.3:/release:ro" --entrypoint /espdns espdns-controller \
   release verify -dir /release -pub /keys/project.pub
-docker compose run --rm -v "$PWD/../espdns-0.0.2:/release:ro" --entrypoint /espdns espdns-controller \
+docker compose run --rm -v "$PWD/../espdns-0.0.3:/release:ro" --entrypoint /espdns espdns-controller \
   release import -dir /release -data /data
-docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -version v0.0.2
+docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -version 0.0.3
+docker compose run --rm --entrypoint /espdns espdns-controller release fetch -data /data -image esp32s3-eth
 ```
 
 Before every firmware update from an imported chip image, the controller checks its
@@ -654,12 +659,14 @@ provenance (your own export, or `firmware/builds/`) is your own build, sent as i
 | `-dir` | sign, verify, import (required) | The release's files, with `SHA256SUMS`. |
 | `-pub` | sign, verify (required); import, fetch | The public key of the key that signs the release, raw (65 bytes). For import and fetch: the project's, default `/keys/project.pub`; the controller's own release key is taken too by import, never by fetch. |
 | `-data` | import, fetch (required) | The data directory. |
-| `-version` | fetch | The release, `v0.0.2`. Default: the newest published. |
-| `-url` | fetch | The repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
+| `-version` | fetch | The firmware release: its version, `0.0.3`, or its tag, `firmware-v0.0.3` (`v0.0.2` and older: both parts together). Default: the newest published. |
+| `-url` | fetch | The GitHub repository releases are published on, `https://<host>/<owner>/<repo>`. Default: `settings.json`'s `release_url`, else `https://github.com/skitzo2000/espdns`. |
+| `-image` | fetch | A chip image to get, `esp32s3-eth`. Comma-separated or repeat. Default: the ones needed (above). |
+| `-catalog` | fetch | The board catalog, for each node's board's chip image. Default `/catalog`. |
 
 ## version
 
-Prints this build's version (the repository's `VERSION`). Takes no flags.
+Prints this build's version (`controller/VERSION`). Takes no flags.
 
 ```sh
 docker compose run --rm --entrypoint /espdns espdns-controller version

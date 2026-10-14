@@ -11,6 +11,7 @@
 //	log/jobs/<id>.json       each job's record and progress (internal/jobs)
 //	firmware/images/<image>/ chip images: imported releases (espdns release import, fetch; Get firmware), each with
 //	                         its provenance/ (internal/dist), or your own export (make export-images in firmware/)
+//	firmware/latest          the newest release version the forge lists (internal/updates)
 //	firmware/builds/<board>/ the production boards' builds, from make fleet-firmware (the rolling push)
 //	lists/                   blocklist and overrides files (the rolling push; the Blocking page compiles them)
 //	blocking/lists.json      the list definitions (internal/blocking): what each list is compiled from
@@ -129,6 +130,20 @@ func main() {
 		default:
 		}
 	})
+	// A node not seen before (its ID and address) has the newest release asked for (newRelease).
+	newNode := make(chan struct{}, 1)
+	seen := map[string]bool{}
+	reg.OnPoll(func(list []nodes.Node) {
+		for _, n := range list {
+			if k := n.ID + " " + n.Addr; n.Online && !seen[k] {
+				seen[k] = true
+				select {
+				case newNode <- struct{}{}:
+				default:
+				}
+			}
+		}
+	})
 	go obs.Run(ctx, polled)
 	go reg.Run(ctx, *browse)
 	// settings.json read again every 10 s: a node an adoption added (or one added by hand) is
@@ -191,7 +206,11 @@ func main() {
 	// The pending changes and the apply (changes.go, apply.go): every change sent as one
 	// rolling change.
 	pending := changes.New(*dataDir)
-	ak := applyKind{actions: act, catalog: *catalog, store: pending}
+	// Get firmware (firmware.go): a published release fetched, checked and imported; the
+	// apply gets an update's chip image so.
+	fetch := fetchKind{dataDir: *dataDir, forge: *releaseURL, catalog: *catalog, nodes: reg.List}
+	kinds["fetch-release"] = fetch.kind
+	ak := applyKind{actions: act, catalog: *catalog, store: pending, images: fetch}
 	kinds["apply"] = ak.kind
 	// The scheduled blocklist refresh (refresh.go): a downloaded list that changed, sent as
 	// an apply of it alone.
@@ -200,12 +219,23 @@ func main() {
 	for name, k := range (serviceKind{apply: ak, relist: relist, jobs: func() []jobs.Job { return runner.List() }}).kinds() {
 		kinds[name] = k
 	}
-	// Get firmware (firmware.go): a published release fetched, checked and imported.
-	kinds["fetch-release"] = fetchKind{dataDir: *dataDir, forge: *releaseURL}.kind
 	log.Printf("project key: %s", projectPubThere(*projectPub))
 	runner = jobs.New(*dataDir, kinds)
 	jobsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(jobsDone) }()
+	// The newest release, asked for at start, every day and when a new node shows up: an
+	// update to it is offered with nothing downloaded.
+	go func() {
+		for {
+			newRelease(ctx, fetch, log.Printf)
+			select {
+			case <-ctx.Done():
+				return
+			case <-newNode:
+			case <-time.After(releaseEvery):
+			}
+		}
+	}()
 	refresh := newRefresher(*dataDir, pending, runner)
 	go refresh.Run(ctx, refreshFirst+time.Duration(rand.Int64N(int64(refreshFirst))), refreshTick)
 

@@ -447,12 +447,13 @@ func (r *Runner) run(ctx context.Context, j *job) {
 		lk.Release()
 	}
 	r.mu.Lock()
-	j.State, j.Ended, j.Error, j.Result = rec.State, rec.Ended, rec.Error, rec.Result
-	rec = j.Job
-	rec.Log = slices.Clone(j.Log)
+	end := j.Job
+	end.State, end.Ended, end.Error, end.Result = rec.State, rec.Ended, rec.Error, rec.Result
+	end.Log = slices.Clone(j.Log)
 	r.mu.Unlock()
-	r.save(rec)
+	r.save(end)
 	r.mu.Lock()
+	j.State, j.Ended, j.Error, j.Result = end.State, end.Ended, end.Error, end.Result
 	r.changedLocked(j)
 	r.mu.Unlock()
 }

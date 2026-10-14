@@ -102,7 +102,7 @@ void keys_fingerprint(const uint8_t pub[KEYS_PUB_LEN], char out[17]);
  *     8    65  new release public key
  *    73    65  new recovery public key
  *
- * Signed with the node's current recovery key, for its node ID alone (rel_keys_check). The
+ * Signed with the node's current recovery key, for its node ID alone (rel_verify). The
  * node writes the slot it isn't using (keys_next: generation + 1, source 3, the release's
  * seq), reads it back, records the seq and uses the new keys at once; a power cut before
  * the write is complete leaves the old slot the valid one with the highest generation.

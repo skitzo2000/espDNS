@@ -3,10 +3,7 @@
 #include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "sdkconfig.h"
-#if CONFIG_SPIRAM
 #include "esp_psram.h"
-#endif
 #include "svc.h"
 
 static const char *TAG = "share";
@@ -25,10 +22,8 @@ void share_init(void)
 {
     /* The chip's PSRAM: what was found at boot, a fact of the hardware (not free memory). */
     int chip_kb = 0;
-#if CONFIG_SPIRAM
     if (esp_psram_is_initialized())
         chip_kb = (int)(esp_psram_get_size() / 1024);
-#endif
     mp_board(&board, board_image(), chip_kb, &s_board);
     ESP_LOGI(TAG,
              "board: %lu KB PSRAM, %lu KB internal for the services; cache %lu KB / %lu answers, lists %lu KB "

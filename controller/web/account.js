@@ -42,7 +42,7 @@ function row(title, val, ...body) {
   return h("details", { class: "ex" }, h("summary", {}, h("b", {}, title), val), h("div", { class: "exb" }, ...body));
 }
 
-// when is a time as the GUI says it: "Today 14:32", "Yesterday 18:19", "3 Oct 15:18".
+// when is a time in words: "Today 14:32", "Yesterday 18:19", "3 Oct 15:18".
 export function when(t, now = new Date()) {
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return "";
@@ -160,8 +160,8 @@ export async function openAccount(user, open) {
     if (pw1.value !== pw2.value) { say("The two passwords differ.", true); pw2.focus(); return; }
     pwGo.disabled = true;
     try {
-      say("Your password now, to change it…");
-      const grant = await askPassword("Enter the password you have now to change it.");
+      say("Your password, to change it…");
+      const grant = await askPassword("Enter your current password to change it.");
       if (!grant) { say("Not changed."); return; }
       say("Changing it…");
       await post("api/password", { password: pw1.value }, { "X-Reauth": grant });
@@ -190,8 +190,8 @@ export async function openAccount(user, open) {
   const more = h("details", { class: "sub-ex", id: "bp-more" }, h("summary", { class: "small" }, "More options"),
     h("div", { class: "stack" },
       h("label", { class: "f" }, h("span", {}, "Or encrypt it to an age key"), recip,
-        h("span", { class: "hint" }, "In place of the passphrase: restore it with the key's identity file (espdns restore -identity key.txt).")),
-      h("label", { class: "check" }, fw, h("span", {}, "Include the firmware (the boards' builds and chip images) ", fwSize)),
+        h("span", { class: "hint" }, "Instead of a passphrase; restore with the key's identity file (espdns restore -identity key.txt).")),
+      h("label", { class: "check" }, fw, h("span", {}, "Include the firmware (builds and chip images) ", fwSize)),
       h("b", { class: "small" }, "What a backup holds"), holds));
   const bForm = h("form", { class: "stack" },
     h("label", { class: "f" }, h("span", {}, "Backup passphrase"), bp, h("span", { class: "hint" }, `At least ${MIN} characters. Keep it apart from the file.`)),
@@ -210,7 +210,7 @@ export async function openAccount(user, open) {
       say("Your password, to download a backup…");
       const grant = await askPassword("A backup holds the release key and the Wi-Fi passwords: enter your password to download one.");
       if (!grant) { say("Not downloaded."); return; }
-      say("Writing the backup: a few seconds…");
+      say("Writing the backup…");
       const r = await api("api/backup", { method: "POST", headers: { "Content-Type": "application/json", "X-Reauth": grant },
         body: JSON.stringify({ ...(age ? { recipient: age } : { passphrase: bp.value }), firmware: fw.checked }) });
       if (r.status === 401) { location.href = "login.html"; return; }
@@ -241,10 +241,10 @@ export async function openAccount(user, open) {
   // mounts, is in the docs (a bare espdns restore here would be wrong for a compose setup).
   const restore = h("div", { class: "stack restore" },
     h("b", { class: "small" }, "Restoring a backup"),
-    h("p", { class: "small" }, "A restore replaces the login and the release key, so it isn't done from this page. Stop the controller, then restore from a terminal (",
+    h("p", { class: "small" }, "A restore replaces the login and the release key, so it's done from a terminal with the controller stopped (",
       h("code", {}, "espdns restore"), ": docs/operations.md, Restore)."),
-    h("p", { class: "small" }, "Without a backup: the nodes keep running. A new controller with the release key imported finds them again (",
-      h("code", {}, "espdns recover"), ": docs/operations.md, Recovering from the nodes); your zones and lists are copied back by hand."));
+    h("p", { class: "small" }, "Without a backup, the nodes keep running. A new controller with the release key imported finds them again (",
+      h("code", {}, "espdns recover"), ": docs/operations.md, Recovering from the nodes); zones and lists are copied back by hand."));
 
   // Recent changes
   const chVal = h("span", { class: "val", id: "changes-val" }, "Reading…");
@@ -272,7 +272,7 @@ export async function openAccount(user, open) {
     h("p", { class: "hint" }, "Keep recovery.pem offline, apart from the controller and its backups: the controller never has it."));
 
   const safeRow = row("Keep the controller safe", safeVal,
-    h("p", { class: "small" }, "The release key signs every change sent to a node; a backup holds it with everything else the controller keeps. With a backup, a new controller picks up where this one left off."),
+    h("p", { class: "small" }, "The release key signs every change sent to a node. A backup holds it and everything else the controller keeps, so a new controller can pick up from it."),
     keysBox, keyLine, bForm, restore);
   safeRow.id = "acct-safe";
   if (open === "safe") safeRow.open = true;
@@ -286,7 +286,7 @@ export async function openAccount(user, open) {
   const fwVal = h("span", { class: "val", id: "fw-val" }, "Reading…");
   const readFW = () => readFirmware().then(fw => { fwVal.textContent = summary(fw); }).catch(e => { fwVal.textContent = `Can't read: ${e.message}`; });
   const fwRow = row("Firmware", fwVal,
-    h("p", { class: "small" }, "The firmware Install over USB and updates use. A project release is checked with the project's release key when it is fetched and again before every update; your nodes only ever get it signed with your release key."),
+    h("p", { class: "small" }, "The firmware Install over USB and updates use. A project release is checked with the project's key when fetched and before every update; your nodes only get it signed with your release key."),
     firmwareBox({ id: "fw", done: readFW }));
   fwRow.id = "acct-firmware";
   if (open === "firmware") fwRow.open = true;
@@ -314,7 +314,7 @@ export async function openAccount(user, open) {
     if (k.present === false && k.missing) {
       keyLine.hidden = false;
       keyLine.className = "small bad";
-      keyLine.textContent = "No release key yet: the controller only reads the nodes until one is made or imported (the first run's Make your keys).";
+      keyLine.textContent = "No release key yet: the controller only reads the nodes until one is made or imported (Make your keys in the setup).";
       parts.push("No release key");
     } else if (k.present === false || k.error) {
       keyLine.hidden = false;
@@ -325,7 +325,7 @@ export async function openAccount(user, open) {
     relFP.textContent = k.present ? str(k.fingerprint) : "none yet";
     pubGo.disabled = !k.present;
     const rec = obj(k.recovery);
-    recFP.textContent = rec.present ? str(rec.fingerprint) : rec.missing === false && rec.error ? `can't be read: ${str(rec.error)}` : "none yet (the first run's Make your keys)";
+    recFP.textContent = rec.present ? str(rec.fingerprint) : rec.missing === false && rec.error ? `can't be read: ${str(rec.error)}` : "none yet (Make your keys in the setup)";
     if (!rec.present) parts.push("No recovery key");
     const ps = arr(b.parts);
     const fwp = ps.find(x => x.name === "firmware");

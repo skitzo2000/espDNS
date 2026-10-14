@@ -23,7 +23,7 @@ async function watch(page) {
 }
 
 const DNS2 = "192.0.2.53", DNS3 = "192.0.2.54", FOUND = "198.51.100.37", PRIMARY = "192.0.2.254";
-const ORDER = ["password", "keys", "primary", "first_node", "second_node", "router", "blocking"];
+const ORDER = ["password", "keys", "first_node", "second_node", "zones", "router", "blocking"];
 const RELFP = "a1b2c3d4e5f60718", RECFP = "0f1e2d3c4b5a6978";
 
 function node(addr, id, name) {
@@ -44,18 +44,34 @@ async function fake(page, done = []) {
     loggedIn: done.includes("password"), done: new Set(done), key: done.includes("keys"), recFP: done.includes("keys") ? RECFP : "",
     nodes: [], found: [{ host: FOUND, id: "aa:bb:cc:00:00:37", hostname: "espdns-000037.local", source: "mdns", online: true, read: true,
       board: "p4-ip101", version: "0.0.4", net: "ethernet", mac: "aa:bb:cc:00:00:3a", adopted: false, listed: false, configs: true, config: "dns2.json", next: "adopt" }],
-    primary: null, blocklists: 0, posts: [], sent: [],
+    blocklists: 0, posts: [], sent: [],
+    // The pending changes (what /api/changes lists), and the node configs as they make them:
+    // one per node, with no zones of its own. The controller counts a zone from either.
+    changes: [], configs: {},
   };
   if (done.includes("first_node")) state.nodes.push(node(`${DNS2}:80`, "aa:bb:cc:00:00:02", "dns2"));
   if (done.includes("second_node")) state.nodes.push(node(`${DNS3}:80`, "aa:bb:cc:00:00:03", "dns3"));
+  for (const n of state.nodes) state.configs[`${n.status.config.name}.json`] = JSON.stringify({ name: n.status.config.name, wifi: { ssid: "home", password: "••••••••" } }, null, 2);
   const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  // zones counts the zones of your own as the controller does: hosted zones waiting as
+  // pending changes, and the configs' secondary and forward zones.
+  const zones = () => {
+    const seen = new Set();
+    for (const c of state.changes) if (c.kind === "zone" && !c.delete) seen.add(`hosted ${c.name}`);
+    for (const t of Object.values(state.configs)) {
+      const cfg = JSON.parse(t);
+      for (const z of (cfg.secondary || {}).zones || []) seen.add(`secondary ${z}`);
+      for (const z of cfg.forward_zones || []) seen.add(`forward ${z.zone}`);
+    }
+    return seen.size;
+  };
   const setup = () => {
     const steps = ORDER.map(s => ({ step: s, done: s === "password" ? state.loggedIn : s === "keys" ? state.key && !!state.recFP && state.done.has("keys")
-      : s === "primary" ? !!state.primary || state.done.has("primary") : s === "first_node" ? state.nodes.length >= 1
-        : s === "second_node" ? state.nodes.length >= 2 : state.done.has(s), optional: s === "primary" || s === "blocking" || undefined }));
-    return { first_run: !state.loggedIn && !state.primary, password_set: state.loggedIn, settings_saved: !!state.primary, release_key: state.key,
-      recovery_key: !!state.recFP, keys_saved: state.done.has("keys"), primary: state.primary ? state.primary.address : "", nodes: state.nodes.length, steps,
-      done: steps.every(s => s.done), blocklists: state.blocklists };
+      : s === "first_node" ? state.nodes.length >= 1 : s === "second_node" ? state.nodes.length >= 2 : s === "zones" ? zones() > 0 || state.done.has("zones") : state.done.has(s),
+    optional: s === "zones" || s === "blocking" || undefined }));
+    return { first_run: !state.loggedIn, password_set: state.loggedIn, settings_saved: state.nodes.length > 0, release_key: state.key,
+      recovery_key: !!state.recFP, keys_saved: state.done.has("keys"), primary: "", nodes: state.nodes.length, steps,
+      done: steps.every(s => s.done), blocklists: state.blocklists, zones: zones() };
   };
   // GET /api/key as keysapi.go answers it.
   const key = () => ({ source: "file", ...(state.key ? { present: true, fingerprint: RELFP } : { present: false, missing: true, error: "no release key" }),
@@ -92,21 +108,49 @@ async function fake(page, done = []) {
     state.recFP = crypto.createHash("sha256").update(pub).digest("hex").slice(0, 16);
     return json(r, key());
   });
-  const settings = () => ({ settings: { nodes: state.nodes.map(n => n.addr), dns_peers: [], dns_peer_zones: [], canary: "", no_dhcp: [], primary: state.primary, internal_sources: [] },
-    version: state.primary ? "v1" : "", exists: !!state.primary,
-    primary: { set: !!state.primary, address: state.primary ? state.primary.address : "", allows: [], zones: [], uncovered: [] } });
+  // The settings as the shell reads them; the setup saves nothing here (a POST would show in
+  // posts). No zone primary: that is the Zones page's, not a step.
+  const settings = () => ({ settings: { nodes: state.nodes.map(n => n.addr), dns_peers: [], dns_peer_zones: [], canary: "", no_dhcp: [], primary: null, internal_sources: [] },
+    version: state.nodes.length ? "v1" : "", exists: state.nodes.length > 0,
+    primary: { set: false, address: "", allows: [], zones: [], uncovered: [] } });
   await page.route(/\/api\/settings$/, r => {
-    if (r.request().method() === "POST") {
-      const b = r.request().postDataJSON();
-      state.posts.push(["settings", b]);
-      state.primary = b.settings.primary;
-    }
+    if (r.request().method() === "POST") state.posts.push(["settings", r.request().postDataJSON()]);
     return json(r, settings());
   });
   await page.route(/\/api\/nodes$/, r => json(r, state.nodes));
   await page.route(/\/api\/nodes\/found$/, r => json(r, { nodes: state.found }));
   await page.route(/\/api\/boards$/, r => json(r, [{ board: { name: "p4-ip101", title: "ESP32-P4 with Ethernet" } }]));
-  await page.route(/\/api\/changes$/, r => json(r, { changes: [], restarts: [], apply: null }));
+  // Add your zone: the APIs + Add zone uses (addzone.js), as zones.spec.js's fake answers
+  // them: the lookup (no primary set up, so nothing is asked), a hosted zone's template, the
+  // configs and the pending changes.
+  await page.route(/\/api\/changes$/, r => {
+    if (r.request().method() !== "POST") return json(r, { changes: state.changes.map(({ text, ...c }) => c), restarts: [], apply: null });
+    const b = r.request().postDataJSON();
+    state.posts.push(["change", b]);
+    const c = { id: `c${state.changes.length + 1}`, kind: b.kind, name: b.name, delete: !!b.delete, summary: b.summary, text: b.text,
+      effect: b.kind === "zone" ? "Hosted zones: sent to every node, live (no restart)" : "live (no restart)" };
+    if (b.kind === "config") state.configs[b.name] = b.text;
+    state.changes.push(c);
+    return json(r, c, 201);
+  });
+  await page.route(/\/api\/changes\/file\?/, r => {
+    const u = new URL(r.request().url()), kind = u.searchParams.get("kind"), name = u.searchParams.get("name");
+    if (kind === "config") { const t = state.configs[name]; return json(r, { kind, name, exists: !!t, text: t, hash: t ? `h${t.length}` : "" }); }
+    const c = state.changes.find(x => x.kind === "zone" && x.name === name);
+    return json(r, c ? { kind, name, exists: true, pending: true, text: c.text, hash: `h${c.text.length}` } : { kind, name, exists: false, hash: "" });
+  });
+  await page.route(/\/api\/configs$/, r => json(r, { configs: Object.keys(state.configs).map(name => ({ name, nodes: [{ host: name === "dns2.json" ? DNS2 : DNS3, listed: true }] })), nodes: [] }));
+  await page.route(/\/api\/zone-inventory$/, r => json(r, { zones: [], counts: { hosted: 0, secondary: 0, forward: 0, records: 0 }, primaries: [], nodes: state.nodes.length,
+    fleet: state.nodes.length, primary: { set: false, address: "", allows: [], zones: [] } }));
+  await page.route(/\/api\/zone-lookup\?/, r => {
+    const name = new URL(r.request().url()).searchParams.get("name").toLowerCase().replace(/\.$/, "");
+    state.posts.push(["lookup", name]);
+    return json(r, { name, found: "none", tried: [], text: "" });
+  });
+  await page.route(/\/api\/zones\/[^/]+\/new$/, r => {
+    const name = decodeURIComponent(r.request().url().match(/\/api\/zones\/([^/]+)\/new$/)[1]);
+    return json(r, { name, text: `$TTL 3600\n@ IN SOA ns1 hostmaster ( 2026100701 3600 600 604800 300 )\n  IN NS ns1\n` });
+  });
   await page.route(/\/api\/updates$/, r => json(r, { nodes: [] }));
   await page.route(/\/api\/dashboard$/, r => json(r, { fleet: {} }));
   return state;
@@ -124,10 +168,11 @@ test("first run: the steps, then the password set from the browser", async ({ pa
   await login(page);
   const state = await fake(page);
   await page.goto("setup.html");
-  await expect(page.locator("h1")).toHaveText("Set up espDNS");
+  await expect(page.locator("h1")).toHaveText("Set up espDNS in 10 minutes");
   await expect(page.locator("#steps .s")).toHaveCount(7);
-  await expect(page.locator("#steps .s b")).toHaveText(["Set a password", "Make your keys", "Set up your zone primary",
-    "Add your first node", "Add a second node", "Tell your router", "Turn on blocking"]);
+  await expect(page.locator("#steps .s b")).toHaveText(["Set a password", "Make your keys",
+    "Add your first node", "Add a second node", "Add your zone", "Tell your router", "Turn on blocking"]);
+  await expect(page.locator("#steps")).not.toContainText(/zone primary/i);
   await expect(page.locator("#facts")).toHaveText("0 of 7 steps done");
   // The read-only band isn't shown here: this page sets the password.
   await expect(page.locator(".band")).toHaveCount(0);
@@ -235,8 +280,8 @@ test("Make your keys: the release key in the controller, the recovery key in the
   await expect(row(page, "keys")).toHaveClass(/\bdone\b/);
   await expect(row(page, "keys")).toContainText(`Release ${RELFP} · recovery ${state.recFP} · recovery.pem kept offline`);
   expect(state.posts.at(-1)).toEqual(["step", { step: "keys" }]);
-  // The next step opens; Back it up opens the account panel at the backup.
-  await expect(row(page, "primary").locator("#pa")).toBeVisible();
+  // The next step, the first node, opens; Back it up opens the account panel at the backup.
+  await expect(row(page, "first_node").getByRole("button", { name: "+ Add node" })).toBeVisible();
   await row(page, "keys").getByRole("button", { name: "Back it up" }).click();
   await expect(page.locator("aside.drawer #acct-safe")).toHaveAttribute("open", "");
   expect(await violations()).toEqual([]);
@@ -284,61 +329,10 @@ test("Make your keys: an existing fleet imports its keys", async ({ page }) => {
   expect(await violations()).toEqual([]);
 });
 
-// The zone primary: its address, the networks it allows zone transfers from (the nodes in
-// none of them said), the zones to copy; no API, token or certificate. Refused in place
-// before anything is sent when the address isn't one.
-test("the zone primary: its address, the networks it allows, the zones to copy", async ({ page }) => {
-  const violations = await watch(page);
-  await login(page);
-  const state = await fake(page, ["password", "keys", "first_node"]);
-  await page.goto("setup.html");
-  await row(page, "primary").getByRole("button", { name: "Start" }).click();
-  const r = row(page, "primary");
-  await expect(r).not.toContainText(/token|certificate|https/i);
-  await page.locator("#pa").fill("primary.example");
-  await r.getByRole("button", { name: "Save" }).click();
-  await expect(r.locator(".bad").filter({ hasText: "isn't an IPv4 address" })).toBeVisible();
-  expect(state.posts).toEqual([]);
-
-  await page.locator("#pa").fill(PRIMARY);
-  await expect(page.locator("#pn-uncovered")).toContainText(`Not in these networks: ${DNS2}. Allow its network on your primary (e.g. 192.0.2.0/24)`);
-  await page.locator("#pn").fill("192.0.2.0/24");
-  await page.locator("#pn-add").click();
-  await expect(page.locator("#pn-uncovered")).toHaveText("Every node's address is in these networks.");
-  await page.locator("#pz").fill("home.example");
-  await page.locator("#pz").press("Enter");
-  await expect(page.locator("#pz-list li .mono")).toHaveText(["home.example"]);
-  await r.getByRole("button", { name: "Save" }).click();
-  await expect(r).toHaveClass(/\bdone\b/);
-  expect(state.posts).toEqual([["settings", { version: "", settings: expect.objectContaining({
-    primary: { address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["home.example"] } }) }]]);
-  await expect(r).toContainText(`${PRIMARY} · allows 192.0.2.0/24 · 1 zone to copy`);
-  expect(await violations()).toEqual([]);
-});
-
-test("the zone primary skipped, then set up after all", async ({ page }) => {
-  const violations = await watch(page);
-  await login(page);
-  const state = await fake(page, ["password", "keys"]);
-  await page.goto("setup.html");
-  await row(page, "primary").getByRole("button", { name: "Start" }).click();
-  await page.getByRole("button", { name: "Skip: no zone primary" }).click();
-  await expect(row(page, "primary")).toHaveClass(/\bdone\b/);
-  await expect(row(page, "primary")).toContainText("Skipped");
-  expect(state.posts).toEqual([["step", { step: "primary" }]]);
-
-  await row(page, "primary").getByRole("button", { name: "Set up" }).click();
-  await page.locator("#pa").fill(PRIMARY);
-  await row(page, "primary").getByRole("button", { name: "Save" }).click();
-  await expect(row(page, "primary")).toContainText(PRIMARY);
-  expect(state.posts[1][1].settings.primary).toEqual({ address: PRIMARY, allows: [], zones: [] });
-  expect(await violations()).toEqual([]);
-});
-
 test("the nodes: + Add node lists the one found; the second step names the first node", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
-  await fake(page, ["password", "keys", "primary"]);
+  await fake(page, ["password", "keys"]);
   await page.goto("setup.html");
   await row(page, "first_node").getByRole("button", { name: "Start" }).click();
   await expect(row(page, "first_node")).toContainText("One node is on your network and not added yet.");
@@ -348,17 +342,82 @@ test("the nodes: + Add node lists the one found; the second step names the first
   await page.locator("#nq").press("Escape");
   expect(await violations()).toEqual([]);
 
-  const state2 = await fake(page, ["password", "keys", "primary", "first_node"]);
+  const state2 = await fake(page, ["password", "keys", "first_node"]);
   await open(page, "setup.html#next");
   await expect(row(page, "first_node")).toContainText(`dns2 at ${DNS2}`);
   await expect(row(page, "second_node").locator(".sb")).toContainText("dns2 is your first node");
   expect(state2.posts).toEqual([]);
 });
 
+// Add your zone: + Add zone as the Zones page has it. A zone typed and nowhere yet is
+// hosted here (the first offer): its template as a pending change, the step done and still
+// open to add another or go on; "Set it up myself" has copying from a primary. Or skipped,
+// then set up from the row.
+test("Add your zone: hosted here from the setup, or skipped", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  const state = await fake(page, ["password", "keys", "first_node", "second_node"]);
+  await page.goto("setup.html");
+  await expect(page.locator("#facts")).toHaveText("4 of 7 steps done");
+  const r = row(page, "zones");
+  await expect(r).toContainText("A name for your network, like home.example.");
+  await r.getByRole("button", { name: "Start" }).click();
+  const body = r.locator(".sb");
+  await expect(body).toContainText("Your devices get names in it");
+  await expect(body).not.toContainText("A name for your network");
+  await expect(body.locator("#zones-skip")).toBeVisible();
+  await expect(body.locator("#zones-next")).toHaveCount(0);
+  await body.getByRole("button", { name: "+ Add zone" }).click();
+  const q = body.locator("#zq"), res = body.locator("#zqres");
+  await expect(q).toBeFocused();
+  await q.fill("Home.Example");
+  await expect(res).toContainText("No primary is set up, so espDNS can host it.");
+  // Host it here is the one primary action; copying is under Set it up myself.
+  await expect(res.locator(".actions .btn.primary")).toHaveText(["Host it here"]);
+  await expect(res.locator(".manual")).toContainText("Set it up myself");
+  await expect(res.locator(".manual")).not.toHaveAttribute("open", "");
+  await res.locator(".manual summary").click();
+  await expect(res.locator("input[value=copy]")).toBeChecked({ checked: false });
+  await expect(res.locator("input[value=host]")).toBeChecked();
+  await expect(res.locator(".mopt", { hasText: "Copy it from a primary at" })).toBeVisible();
+  await res.getByRole("button", { name: "Host it here" }).click();
+  // The template as a pending change; the step done, open, with Next.
+  await expect(r).toHaveClass(/\bdone\b/);
+  await expect(r).toContainText("home.example hosted here");
+  const changes = state.posts.filter(([k]) => k === "change").map(([, b]) => b);
+  expect(changes).toHaveLength(1);
+  expect(changes[0]).toMatchObject({ kind: "zone", name: "home.example.zone", hash: "", summary: "Add zone home.example: hosted here" });
+  expect(changes[0].text).toMatch(/^\$TTL 3600\n@ IN SOA ns1 hostmaster/);
+  expect(state.posts.filter(([k]) => k === "step")).toEqual([]);
+  await expect(page.locator(".changes .chip-btn")).toHaveText("1 change to apply");
+  await expect(body).toContainText("Add another, or go on.");
+  await expect(body.getByRole("button", { name: "+ Add zone" })).toBeVisible();
+  await expect(body.locator("#zones-skip")).toHaveCount(0);
+  await expect(page.locator("#facts")).toHaveText("5 of 7 steps done");
+  await body.locator("#zones-next").click();
+  await expect(row(page, "router").locator(".sb .ip")).toHaveText([DNS2, DNS3]);
+  await expect(r.locator(".sb")).toHaveCount(0);
+  await expect(r.locator(".act")).toHaveText("Done");
+  expect(await violations()).toEqual([]);
+
+  // Skipped: marked, "Skipped" with Set up, which opens it again.
+  const state2 = await fake(page, ["password", "keys", "first_node", "second_node"]);
+  await open(page, "setup.html#next");
+  await row(page, "zones").locator("#zones-skip").click();
+  expect(state2.posts).toEqual([["step", { step: "zones" }]]);
+  await expect(row(page, "zones")).toHaveClass(/\bdone\b/);
+  await expect(row(page, "zones")).toContainText("Skipped");
+  await expect(row(page, "zones")).toContainText("None yet: add one from Zones whenever you like");
+  await expect(row(page, "router").getByRole("button", { name: "Done" })).toBeVisible();
+  await row(page, "zones").getByRole("button", { name: "Set up" }).click();
+  await expect(row(page, "zones").getByRole("button", { name: "+ Add zone" })).toBeVisible();
+  expect(await violations()).toEqual([]);
+});
+
 test("the router and blocking, then set up", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
-  const state = await fake(page, ["password", "keys", "primary", "first_node", "second_node"]);
+  const state = await fake(page, ["password", "keys", "first_node", "second_node", "zones"]);
   await page.goto("setup.html");
   await row(page, "router").getByRole("button", { name: "Start" }).click();
   const body = row(page, "router").locator(".sb");
@@ -388,11 +447,11 @@ test("Nodes: a first run goes to the setup; after it, a checklist until done", a
   state.done.add("keys");
   await page.goto("./");
   const left = page.locator("#setup-left");
-  await expect(left).toContainText("2 of 7 steps done · next: set up your zone primary");
+  await expect(left).toContainText("2 of 7 steps done · next: add your first node");
   await expect(left.getByRole("link", { name: "Continue" })).toHaveAttribute("href", "setup.html#next");
   await left.getByRole("link", { name: "Continue" }).click();
-  await expect(row(page, "primary").locator("#pa")).toBeVisible();
-  for (const s of ["primary", "router", "blocking"]) state.done.add(s);
+  await expect(row(page, "first_node").getByRole("button", { name: "+ Add node" })).toBeVisible();
+  for (const s of ["zones", "router", "blocking"]) state.done.add(s);
   state.nodes = [node(`${DNS2}:80`, "aa:bb:cc:00:00:02", "dns2"), node(`${DNS3}:80`, "aa:bb:cc:00:00:03", "dns3")];
   await page.goto("./");
   await expect(page.locator("#sentence")).toHaveText("DNS is answering on both nodes");
@@ -456,20 +515,23 @@ for (const scheme of ["light", "dark"]) {
       await shot("keys-made");
       state = await fake(page, ["password", "keys"]);
       await open(page, "setup.html#next");
-      await page.locator("#pa").fill(PRIMARY);
-      await page.locator("#pn").fill("192.0.2.0/24");
-      await page.locator("#pn-add").click();
-      await shot("primary");
-      state = await fake(page, ["password", "keys", "primary"]);
-      await open(page, "setup.html#next");
       await row(page, "first_node").getByRole("button", { name: "+ Add node" }).click();
       await expect(page.locator("#nqres")).toContainText(FOUND);
       await shot("first-node");
-      state = await fake(page, ["password", "keys", "primary", "first_node", "second_node"]);
+      state = await fake(page, ["password", "keys", "first_node", "second_node"]);
+      await open(page, "setup.html#next");
+      await row(page, "zones").getByRole("button", { name: "+ Add zone" }).click();
+      await page.locator("#zq").fill("home.example");
+      await expect(page.locator("#zqres")).toContainText("Host it here");
+      await shot("zones");
+      await page.locator("#zqres").getByRole("button", { name: "Host it here" }).click();
+      await expect(row(page, "zones")).toContainText("home.example hosted here");
+      await shot("zones-added");
+      state = await fake(page, ["password", "keys", "first_node", "second_node", "zones"]);
       await open(page, "setup.html#next");
       await expect(row(page, "router").locator(".ip")).toHaveCount(2);
       await shot("router");
-      state = await fake(page, ["password", "keys", "primary", "first_node", "second_node", "router"]);
+      state = await fake(page, ["password", "keys", "first_node", "second_node", "zones", "router"]);
       await open(page, "setup.html#next");
       await shot("blocking");
       state.done.add("blocking");

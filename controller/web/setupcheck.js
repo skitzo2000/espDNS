@@ -6,8 +6,8 @@ import { h, arr, obj } from "./shell.js";
 import { getJSON } from "./common.js";
 
 const NEXT = {
-  password: "set a password", keys: "make your keys", primary: "set up your zone primary",
-  first_node: "add your first node", second_node: "add a second node", router: "tell your router", blocking: "turn on blocking",
+  password: "set a password", keys: "make your keys",
+  first_node: "add your first node", second_node: "add a second node", zones: "add your zone", router: "tell your router", blocking: "turn on blocking",
 };
 
 // setupCheck puts the row before the element before (or sends a first run to the setup).

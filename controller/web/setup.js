@@ -3,37 +3,41 @@
 // opening in place with Start: the password (POST /api/setup/password: only while none is
 // set, only from the controller's own machine; it logs in), the keys (GET /api/key: the
 // release key made in the controller or imported, the recovery key made in this browser with
-// only its public half sent, recovery.pem saved offline; keys.js), the zone primary (optional: POST /api/settings with its address, the
-// networks it allows zone transfers from and the zones to copy, primary.js), the first and the second node (+ Add node, addnode.js), telling the
-// router (the nodes' addresses to copy), and blocking (optional: the Blocking page). What is
-// done comes from GET /api/setup; the steps the controller can't see done, and the ones
-// skipped, are marked with POST /api/setup/step. The Nodes page sends a first run here and
-// keeps a checklist until every step is done (setupcheck.js).
+// only its public half sent, recovery.pem saved offline; keys.js), the first and the second
+// node (+ Add node, addnode.js), your zone (optional: + Add zone, addzone.js, as the Zones
+// page has it: a zone of your own hosted here first, or copied from a DNS server you run, or
+// forwarded; a pending change until Apply), telling the router (the nodes' addresses to
+// copy), and blocking (optional: the Blocking page). What is done comes from GET /api/setup;
+// the steps the controller can't see done, and the ones skipped, are marked with POST
+// /api/setup/step. The Nodes page sends a first run here and keeps a checklist until every
+// step is done (setupcheck.js).
 // Everything from a node or the controller is put in as text.
 import { shell, h, arr, obj, str, hostOnly, addr, copyText, toast, getJSON, post, api, session, nodeText, refreshChanges, openAccountPanel } from "./shell.js";
 import { onNodes, every, loggedIn } from "./common.js";
 import { addNode } from "./addnode.js";
-import { primaryFields } from "./primary.js";
+import { addZone, zoneEditor, readConfigs, primaryIP } from "./addzone.js";
 import { canMake, makeRecovery, readPublic, save, base64 } from "./keys.js";
 
 shell("setup.html");
 
 const $ = id => document.getElementById(id);
-const data = { setup: null, error: null, key: null, settings: null, nodes: null, found: [], boards: new Map(), sess: {} };
+const data = { setup: null, error: null, key: null, nodes: null, found: [], boards: new Map(), sess: {} };
 // recovery: the recovery key made in this page ({pem, pub, fp}), to download again until the
 // page is left; saved: "I saved recovery.pem" ticked.
 const ui = { open: null, sig: "", bodies: new Map(), recovery: null, saved: false };
 
 // The steps in words; the order is /api/setup's.
 const STEPS = {
-  password: ["Set a password", "Only you can change your DNS."],
-  keys: ["Make your keys", "The release key signs every change; the recovery key, kept offline, can replace it."],
-  primary: ["Set up your zone primary", "Optional: the DNS server your zones come from, if you have one."],
+  password: ["Set a password", "Every change needs it."],
+  keys: ["Make your keys", "Your nodes take only changes signed with them."],
   first_node: ["Add your first node", "Plug a board into this computer, or pick one found on the network."],
   second_node: ["Add a second node", "Two nodes keep DNS answering while one restarts."],
-  router: ["Tell your router", "Give clients both nodes as their DNS servers."],
+  zones: ["Add your zone", "A name for your network, like home.example."],
+  router: ["Tell your router", "So every device on your network asks espDNS."],
   blocking: ["Turn on blocking", "Optional: block ads and trackers."],
 };
+// The optional steps stay open once done, to add more or go on.
+const STAYS_OPEN = ["zones", "blocking"];
 
 const listed = () => arr(data.nodes).filter(n => n.source === "settings");
 const andList = xs => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -42,16 +46,16 @@ const steps = () => arr(obj(data.setup).steps).filter(s => Object.hasOwn(STEPS, 
 const isDone = s => !!s.done;
 const current = () => { const s = steps().find(x => !isDone(x)); return s ? s.step : null; };
 const boardName = b => data.boards.get(str(b)) || str(b);
-const primaryOf = () => obj(obj(obj(data.settings).settings).primary);
 
 // ---- the page ---------------------------------------------------------------------------
 
 function render(force) {
-  const sig = JSON.stringify([data.setup, data.error, keySig(), obj(data.settings).version, ui.open, data.sess.logged_in,
-    listed().map(n => [n.addr, nodeText(n)]), data.found.length]);
+  const sig = JSON.stringify([data.setup, data.error, keySig(), ui.open, data.sess.logged_in,
+    listed().map(n => [n.addr, nodeText(n)]), data.found.length, zones.added.length]);
   if (!force && sig === ui.sig) return;
-  // Not while + Add node is open: it would lose what is typed; it says when it's done.
-  if (!force && document.querySelector("#steps .ncombo")) return;
+  // Not while + Add node or + Add zone is open: it would lose what is typed; it says when
+  // it's done.
+  if (!force && document.querySelector("#steps .zcombo")) return;
   ui.sig = sig;
   renderHead();
   const box = $("steps");
@@ -74,14 +78,15 @@ function renderHead() {
     $("title").textContent = "espDNS is set up";
     $("artie").hidden = true; // he welcomes the first run only
     const ns = listed();
+    $("intro").hidden = false;
     $("intro").textContent = ns.length
-      ? `DNS is answered by ${andList(ns.map(n => nodeText(n)))}. Your nodes, zones, blocking and query log are on the pages above.`
-      : "Your nodes, zones, blocking and query log are on the pages above.";
+      ? `DNS is answered by ${andList(ns.map(n => nodeText(n)))}. The rest is on the pages above.`
+      : "The rest is on the pages above.";
     actions.replaceChildren(h("a", { class: "btn primary", href: "./" }, "Go to your nodes"));
   } else {
-    $("title").textContent = "Set up espDNS";
+    $("title").textContent = "Set up espDNS in 10 minutes";
     $("artie").hidden = false;
-    $("intro").textContent = "Seven steps, about 15 minutes with two boards and a USB cable.";
+    $("intro").hidden = true;
     actions.replaceChildren();
   }
 }
@@ -89,7 +94,7 @@ function renderHead() {
 function stepRow(s, i, now) {
   const [title, why] = STEPS[s.step];
   const done = isDone(s);
-  const open = ui.open === s.step && (!done || s.step === "primary" || s.step === "blocking");
+  const open = ui.open === s.step && (!done || STAYS_OPEN.includes(s.step));
   const skipped = done && skippedStep(s.step);
   let act = null;
   if (done && !open) {
@@ -115,10 +120,13 @@ function stepRow(s, i, now) {
 
 // skippedStep: an optional step marked done without what it sets up.
 function skippedStep(step) {
-  if (step === "primary") return !!data.settings && !primaryOf().address;
   if (step === "blocking") return !obj(data.setup).blocklists;
+  if (step === "zones") return !obj(data.setup).zones;
   return false;
 }
+
+// zoneWords is how a zone added here lives, in words.
+const zoneWords = z => (z.kind === "copy" ? `copied from ${z.ip}` : z.kind === "fwd" ? `forwarded to ${z.ip}` : "hosted here");
 
 // What a step that is done set up, in words.
 function doneText(step) {
@@ -129,13 +137,15 @@ function doneText(step) {
       const fp = str(obj(data.key).fingerprint), rfp = str(recOf().fingerprint);
       return fp && rfp ? `Release ${fp} · recovery ${rfp} · recovery.pem kept offline` : "Made";
     }
-    case "primary": {
-      const p = primaryOf(), nets = arr(p.allows).map(str), zs = arr(p.zones).length;
-      if (!p.address) return "None: your zones are only on espDNS";
-      return [str(p.address), nets.length ? `allows ${nets.join(", ")}` : "", zs ? `${zs} zone${zs === 1 ? "" : "s"} to copy` : ""].filter(Boolean).join(" · ");
-    }
     case "first_node": return ns[0] ? `${nodeText(ns[0])} at ${hostOnly(ns[0].addr)}` : "";
     case "second_node": return ns[1] ? `${nodeText(ns[1])} at ${hostOnly(ns[1].addr)}` : "";
+    case "zones": {
+      const n = Number(obj(data.setup).zones) || 0;
+      if (!n) return "None yet: add one from Zones whenever you like";
+      // The zones added on this page, else the count: /api/setup names none.
+      if (zones.added.length) return andList(zones.added.map(z => `${z.name} ${zoneWords(z)}`));
+      return `${n} zone${n === 1 ? "" : "s"} · on the Zones page`;
+    }
     case "router": return "Your router hands out your nodes as its DNS servers";
     case "blocking": {
       const n = Number(obj(data.setup).blocklists) || 0;
@@ -147,7 +157,6 @@ function doneText(step) {
 
 function openStep(step) {
   ui.open = step;
-  if (step === "primary") ui.bodies.delete("primary");
   render(true);
   const b = document.querySelector(`#step-${step} .sb`);
   const f = b && b.querySelector("input, select, button.primary, a.primary");
@@ -169,8 +178,8 @@ function openNext() {
 // typed survives a render.
 function bodyOf(step) {
   for (const k of ui.bodies.keys()) if (k !== step) ui.bodies.delete(k);
-  if (ui.bodies.has(step) && step !== "router" && step !== "first_node" && step !== "second_node" && step !== "keys") return ui.bodies.get(step);
-  const make = { password: passwordBody, keys: keyBody, primary: primaryBody, first_node: nodeBody, second_node: nodeBody, router: routerBody, blocking: blockingBody }[step];
+  if (ui.bodies.has(step) && step !== "router" && step !== "first_node" && step !== "second_node" && step !== "zones" && step !== "keys") return ui.bodies.get(step);
+  const make = { password: passwordBody, keys: keyBody, first_node: nodeBody, second_node: nodeBody, zones: zonesBody, router: routerBody, blocking: blockingBody }[step];
   const b = h("div", { class: "sb" }, ...(needsLogin(step) ? loginFirst() : make(step)));
   ui.bodies.set(step, b);
   return b;
@@ -178,7 +187,7 @@ function bodyOf(step) {
 
 const needsLogin = step => step !== "password" && !data.sess.logged_in;
 function loginFirst() {
-  return [h("p", {}, obj(data.setup).password_set ? "Log in to go on." : "Set a password first: the steps after it need you logged in."),
+  return [h("p", {}, obj(data.setup).password_set ? "Log in to go on." : "Set a password first; the rest needs you logged in."),
     obj(data.setup).password_set ? h("div", { class: "row" }, h("a", { class: "btn primary", href: "login.html?next=%2Fsetup.html" }, "Log in")) : null];
 }
 
@@ -205,7 +214,7 @@ function passwordBody() {
   const msg = status();
   const go = h("button", { class: "btn primary", type: "submit" }, "Set password");
   const form = h("form", { class: "stack", novalidate: true },
-    h("p", { class: "small" }, "With it, only you can change your DNS: every change, here or from the terminal, needs it. You can change it later from your account."),
+    h("p", { class: "small" }, "You can change it later from your account."),
     h("div", { class: "grid2" }, field("User name", user, "Your choice; admin will do."), h("span", {})),
     h("div", { class: "grid2" }, field("Password", pw1, "At least 12 characters."), field("Again", pw2)),
     msg, h("div", { class: "row" }, go));
@@ -270,7 +279,7 @@ function keyBody() {
   // 1. The release key.
   const relBox = h("div", { class: "stack", id: "keys-release" });
   if (k.present) {
-    relBox.append(h("p", { class: "small" }, h("b", {}, "Release key"), " · fingerprint ", h("span", { class: "fp", id: "keys-release-fp" }, str(k.fingerprint))));
+    relBox.append(h("p", { class: "small" }, h("b", {}, "Release key"), " · fingerprint ", h("span", { class: "fp", id: "keys-release-fp" }, str(k.fingerprint)), " · the controller keeps it; nothing to download"));
   } else {
     const make = h("button", { class: "btn primary", type: "button", id: "keys-release-make" }, "Make the release key");
     make.addEventListener("click", async () => {
@@ -303,7 +312,7 @@ function keyBody() {
           : "The key goes in on standard input, never as an argument. No node is added yet, so any key but the recovery key is taken."),
         h("div", { class: "row" }, copy, again)));
     put(relBox,
-      h("p", { class: "small" }, h("b", {}, "Release key"), ": signs every change the controller sends to a node. The controller keeps it."),
+      h("p", { class: "small" }, h("b", {}, "Release key"), ": signs every change. The controller keeps it."),
       k.error && k.missing === false ? h("p", { class: "bad" }, `The controller has a release key it can't use: ${str(k.error)}`) : null,
       listedNodes
         ? h("p", { class: "hint" }, "Your nodes trust a release key already: import that one. A new one would sign changes they all refuse.")
@@ -370,7 +379,7 @@ function keyBody() {
       } catch (e) { msg.className = "hint bad"; msg.textContent = e.message; file.value = ""; }
     });
     put(recBox,
-      h("p", { class: "small" }, h("b", {}, "Recovery key"), ": replaces the release key if it's ever lost or stolen. It's made here in your browser and downloaded as recovery.pem; the controller gets only its public half."),
+      h("p", { class: "small" }, h("b", {}, "Recovery key"), ": replaces the release key if it's lost or stolen. Your browser makes it and downloads recovery.pem; the controller gets only the public half."),
       !k.present ? h("p", { class: "hint" }, "First the release key.") : null,
       h("div", { class: "row" }, make),
       h("details", { class: "sub-ex", id: "keys-recovery-import", open: listedNodes },
@@ -386,54 +395,15 @@ function keyBody() {
   saved.addEventListener("change", () => { ui.saved = saved.checked; done.disabled = !(saved.checked && k.present && rec.present); });
   done.addEventListener("click", () => mark("keys", done, msg));
   return [
-    h("p", { class: "small" }, "Two keys keep your nodes yours. A node takes a change only when it's signed with your release key, and a key only from your recovery key or a USB cable."),
     relBox, recBox,
     h("label", { class: "check" }, saved, h("span", {}, "I saved recovery.pem somewhere safe, off this computer")),
-    h("p", { class: "hint" }, "A USB stick in a drawer, or your password manager: not in Downloads, and apart from the controller and its backups. It is what replaces a lost or stolen release key; the controller never has it."),
+    h("p", { class: "hint" }, "A USB stick in a drawer, or your password manager. Not Downloads, and not with the controller's backups."),
     msg,
     h("div", { class: "row" }, done),
   ];
 }
 
-// ---- 3. the zone primary ----------------------------------------------------------------
-
-function primaryBody() {
-  if (!data.settings) return [h("p", { class: "hint" }, "Reading the settings…")];
-  const cur = primaryOf();
-  const f = primaryFields(cur, () => listed().map(n => hostOnly(n.addr)), arr(cur.zones).map(str));
-  const msg = status();
-  const skip = h("button", { class: "btn", type: "button" }, "Skip: no zone primary");
-  skip.addEventListener("click", () => mark("primary", skip, msg));
-  const save = h("button", { class: "btn primary", type: "submit" }, "Save");
-  const form = h("form", { class: "stack", novalidate: true },
-    h("p", { class: "small" }, "If your zones already live on a DNS server, the nodes copy them from it by zone transfer, and Zones shows them. If not, skip this: you can host zones on espDNS, or set one up later from Zones."),
-    f.el, msg, h("div", { class: "row" }, skip, save));
-  form.addEventListener("submit", async e => {
-    e.preventDefault();
-    msg.className = "hint bad";
-    msg.textContent = "";
-    const v = f.value();
-    if (v.err) { msg.textContent = v.err; if (v.focus) v.focus.focus(); return; }
-    if (!v.primary || !v.primary.address) { msg.textContent = "Give your primary's address, or skip this step."; return; }
-    save.disabled = skip.disabled = true;
-    msg.className = "hint";
-    msg.textContent = "Saving…";
-    try {
-      data.settings = await post("api/settings", { settings: { ...obj(data.settings.settings), primary: v.primary }, version: str(data.settings.version) });
-      await readSetup();
-      toast("Zone primary saved");
-      openNext();
-      return;
-    } catch (err) {
-      msg.className = "hint bad";
-      msg.textContent = err.message;
-    }
-    save.disabled = skip.disabled = false;
-  });
-  return [form];
-}
-
-// ---- 4, 5. the nodes --------------------------------------------------------------------
+// ---- 3, 4. the nodes --------------------------------------------------------------------
 
 // One + Add node for both steps, moved into the step open.
 const nodeBox = h("div", { class: "setup-box" });
@@ -450,14 +420,59 @@ function nodeBody(step) {
     });
   }
   const out = [];
-  if (step === "first_node") {
-    out.push(h("p", { class: "small" }, "A board that has never run espDNS is installed over USB from this computer. One already running espDNS on your network is listed when you open + Add node; pick it, give it a name and an address, and it's added."));
-  } else {
-    out.push(h("p", { class: "small" }, `${ns[0] ? `${nodeText(ns[0])} is your first node. ` : ""}A second one keeps DNS answering while the other restarts or updates; a wired one is best. Add it the same way.`));
+  if (step === "second_node") {
+    out.push(h("p", { class: "small" }, `${ns[0] ? `${nodeText(ns[0])} is your first node. ` : ""}Add the second the same way; wired is best.`));
   }
   if (arr(data.found).length) out.push(h("p", { class: "hint" }, `${arr(data.found).length === 1 ? "One node is" : `${arr(data.found).length} nodes are`} on your network and not added yet.`));
   out.push(nodeBox);
   return out;
+}
+
+// ---- 5. your zone -----------------------------------------------------------------------
+// + Add zone as the Zones page has it (addzone.js), moved into the step: a zone typed is
+// looked up; one nowhere yet is hosted here first (espDNS is its primary), one a DNS server
+// you run has is copied from it, and "Set it up myself" offers each. A zone added is a
+// pending change, as everywhere; the controller counts it (GET /api/setup "zones") and the
+// step is done, open still, to add another or go on. Or skipped: marked.
+
+const zoneBox = h("div", { class: "setup-box" });
+let zoneAdder = null;
+// cfgs, inv: the node configs as the pending changes make them and the zone inventory, which
+// adding a copied or forwarded zone edits; added: the zones added on this page.
+const zones = { cfgs: null, inv: null, added: [] };
+async function readZoneSources() {
+  const [c, i] = await Promise.allSettled([readConfigs(), getJSON("api/zone-inventory")]);
+  if (c.status === "fulfilled") zones.cfgs = c.value;
+  if (i.status === "fulfilled") zones.inv = i.value;
+}
+function zonesBody() {
+  const msg = status();
+  if (!zoneAdder) {
+    const editor = zoneEditor({
+      cfgs: () => zones.cfgs,
+      inv: () => zones.inv,
+      readConfigs: async () => { zones.cfgs = await readConfigs(); },
+      after: async () => { await Promise.all([refreshChanges(), readSetup(), readZoneSources()]); },
+    });
+    zoneAdder = addZone(zoneBox, {
+      editor,
+      canWrite: () => !!data.sess.logged_in,
+      primaryIP: () => primaryIP(zones.inv),
+      zoneHref: name => `zones.html#zone=${encodeURIComponent(name)}`,
+      added: (name, kind, ip) => { zones.added.push({ name, kind, ip }); render(true); },
+    });
+  }
+  readZoneSources();
+  const done = isDone(obj(steps().find(s => s.step === "zones")));
+  const skip = h("button", { class: "btn", type: "button", id: "zones-skip" }, "Skip: no zones of your own");
+  skip.addEventListener("click", () => mark("zones", skip, msg));
+  const next = h("button", { class: "btn primary", type: "button", id: "zones-next", onclick: openNext }, "Next");
+  return [
+    h("p", { class: "small" }, zones.added.length ? "Add another, or go on." : "Your devices get names in it, like nas.home.example."),
+    zoneBox,
+    msg,
+    h("div", { class: "row" }, done ? next : skip),
+  ];
 }
 
 // ---- 6. the router ----------------------------------------------------------------------
@@ -474,9 +489,9 @@ function routerBody() {
   const done = h("button", { class: "btn primary", type: "button" }, "Done");
   done.addEventListener("click", () => mark("router", done, msg));
   return [
-    h("p", { class: "small" }, "In your router's settings (often LAN or DHCP), set the DNS servers it gives out to these addresses, so every device on your network asks espDNS. Give it all of them: when one node restarts, devices ask the other."),
+    h("p", { class: "small" }, "In your router's DHCP settings, set the DNS servers to these addresses and remove any others."),
     h("div", { class: "addrs" }, ns.map(n => h("div", {}, h("span", { class: "small muted" }, nodeText(n)), addr(hostOnly(n.addr))))),
-    h("p", { class: "hint" }, "Devices pick up the change when they next renew their address, or when they reconnect. One that has its DNS servers set by hand keeps them."),
+    h("p", { class: "hint" }, "Devices pick it up when they next renew or reconnect. One with DNS set by hand keeps its own."),
     msg,
     h("div", { class: "row" }, copy, done),
   ];
@@ -489,7 +504,7 @@ function blockingBody() {
   const skip = h("button", { class: "btn", type: "button" }, "Skip: no blocking");
   skip.addEventListener("click", () => mark("blocking", skip, msg));
   return [
-    h("p", { class: "small" }, "Block ads, trackers or other kinds of sites on every node. You pick the lists from a catalogue of well-known ones, or add one by its web address; nothing is chosen for you. You can turn it off, or pause it, at any time."),
+    h("p", { class: "small" }, "Pick a list or two from the catalogue, or add one by its address. Pause it or turn it off any time."),
     msg,
     h("div", { class: "row" }, skip, h("a", { class: "btn primary", href: "blocklists.html" }, "Choose lists")),
   ];
@@ -508,9 +523,6 @@ async function readKey() {
   try { data.key = await getJSON("api/key"); } catch (e) { data.key = { present: false, error: e.message }; }
   render();
 }
-async function readSettings() {
-  try { data.settings = await getJSON("api/settings"); } catch { /* the step says it's reading */ }
-}
 async function readFound() {
   if (!data.sess.logged_in) return;
   try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); } catch { /* kept */ }
@@ -524,7 +536,7 @@ getJSON("api/boards").then(bs => {
 
 session.then(async s => {
   data.sess = s;
-  await Promise.all([readSetup(), readKey(), readSettings()]);
+  await Promise.all([readSetup(), readKey()]);
   if (location.hash === "#next") {
     history.replaceState(null, "", location.pathname + location.search);
     ui.open = current();

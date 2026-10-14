@@ -1,0 +1,12 @@
+{
+  "name": "espressif-p4-func-ev",
+  "title": "Espressif ESP32-P4-Function-EV-Board",
+  "image": "esp32p4-rev1",
+  "flash_mb": 16,
+  "psram_mb": 32,
+  "tier": "community",
+  "ethernet": { "kind": "emac", "phy": "ip101", "addr": 1, "reset": 51 },
+  "sd": { "kind": "sdmmc", "slot": 0, "width": 4, "ldo": 4 },
+  "led": { "kind": "none" },
+  "notes": "ESP32-P4NRW32 (32 MB PSRAM), 16 MB flash, silicon v1.x (board v1.5); the ESP32-C6 companion isn't used. IP101GRI on the chip's MAC with IDF's P4 defaults (MDC 31, MDIO 52, REF_CLK in on GPIO50), PHY reset on GPIO51. Pins: esp-idf ethernet example (v5.5) and ethernet_init defaults, esp-bsp esp32_p4_function_ev_board (SDMMC slot 0, 4-bit, LDO channel 4). Earlier esp-idf (v5.3) had MDIO 27 and reset 26 for an early board revision. No LED the firmware can drive. A silicon v3 respin (ESP32-P4X) needs the esp32p4 image."
+}

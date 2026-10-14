@@ -1,6 +1,8 @@
 /* Host tests for the portable DNS core: gcc + ASan/UBSan, no hardware. */
 #include <assert.h>
+#include <ctype.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -35,8 +37,13 @@
 #include "reboot.h"
 #include "hzone.h"
 #include "keys.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/ecp.h"
+#include "mbedtls/gcm.h"
+#include "mbedtls/hkdf.h"
 #include "mbedtls/sha256.h"
 #include "memplan.h"
+#include "nodekey.h"
 #include "release.h"
 #include "release_vectors.h"
 #include "sup.h"
@@ -645,7 +652,7 @@ static void test_flights(void)
     sem_destroy(&t2.sem);
 }
 
-/* The caps (test 1): a group holds at most half the slots and half the parked
+/* The caps: a group holds at most half the slots and half the parked
  * queries, the forward zones together half as well, so a dead forwarder can't take the
  * table: past them, FULL (SERVFAIL at once). */
 static void test_flight_caps(void)
@@ -681,10 +688,17 @@ static void test_flight_caps(void)
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), NULL, &slot) == FLIGHT_FULL);
     flight_free(&fl, slots[0]);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), NULL, &slots[0]) == FLIGHT_OPENED);
-    /* Parked queries: 4 of the 8 on the default forwarders' flights... */
+    /* Parked queries: 2 of the 8 on a flight (a quarter), the next NAME_FULL... */
     kl = NAME("d%d.example.org", 1);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 2; i++)
         CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
+    CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[11].fw, &slot) == FLIGHT_NAME_FULL);
+    CHECK(flight_slot(&fl, slots[1])->parked == 2 && flight_waiting(&fl) == 2);
+    /* ...while another name's queries still park: 4 on the default forwarders' flights... */
+    kl = NAME("d%d.example.org", 2);
+    for (int i = 2; i < 4; i++)
+        CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[i].fw, &slot) == FLIGHT_JOINED);
+    kl = NAME("d%d.example.org", 3);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[4].fw, &slot) == FLIGHT_FULL);
     /* ...4 on the zones' (any zone's flight, the zones together)... */
     for (int i = 0; i < 4; i++) {
@@ -698,13 +712,16 @@ static void test_flight_caps(void)
     fake_tcp_t t;
     fake_tcp_init(&t, buf, sizeof(buf));
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_ZONE(0)), &t.t.w, &slot) == FLIGHT_JOINED);
-    /* Ending a flight gives its parked queries' places back to its group. */
-    kl = NAME("d%d.example.org", 1);
-    CHECK(flight_end(&fl, slots[1], NULL, -1) != NULL && fl.parked[FLIGHT_GROUP_DEFAULT] == 0);
-    kl = NAME("d%d.example.org", 2);
+    /* Ending a flight gives its parked queries' places back to its group, and its own count
+     * goes to zero; freeing one still open (failed) does too. */
+    CHECK(flight_end(&fl, slots[1], NULL, -1) != NULL && fl.parked[FLIGHT_GROUP_DEFAULT] == 2);
+    CHECK(flight_slot(&fl, slots[1])->parked == 0);
+    kl = NAME("d%d.example.org", 3);
     CHECK(begin(&fl, fq(k, kl, DNS_T_A, false, FLIGHT_GROUP_DEFAULT), &it[10].fw, &slot) == FLIGHT_JOINED);
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 8; i++) {
         flight_free(&fl, slots[i]);
+        CHECK(flight_slot(&fl, slots[i])->parked == 0);
+    }
     CHECK(t.wakes == 1 && t.t.len == -1);
     CHECK(flight_waiting(&fl) == 0 && fl.zones_held == 0 && fl.zones_parked == 0);
     for (int g = 0; g < FLIGHT_GROUPS; g++)
@@ -814,7 +831,7 @@ static void test_flight_counts(void)
 #undef OPEN
 }
 
-/* The budget expiring (test 6): at the flight's deadline it ends as failed, every
+/* The budget expiring: at the flight's deadline it ends as failed, every
  * waiter with it: the parked ones handed back for SERVFAIL, the TCP ones woken with none. */
 static void test_flight_expiry(void)
 {
@@ -877,7 +894,7 @@ static void test_flight_expiry(void)
     sem_destroy(&t.sem);
 }
 
-/* A TCP waiter giving up races cleanly with its flight ending (test 7): exactly
+/* A TCP waiter giving up races cleanly with its flight ending: exactly
  * one of them happens, and the table never touches the waiter after either. Each waiter is
  * on the heap and freed the moment its query is done with, so a late copy or wake into it is
  * a use after free under ASan. */
@@ -1078,6 +1095,7 @@ typedef enum {
     FAKE_SERVFAIL,  /* answers SERVFAIL */
     FAKE_WRONG_ID,  /* answers from the right address and port, with another ID */
     FAKE_RECORD,    /* answers with an A record (192.0.2.1, TTL 300): an answer to cache */
+    FAKE_LOWER,     /* answers with the question in lowercase: a server that doesn't keep case */
 } fake_fwd_mode_t;
 
 typedef struct {
@@ -1086,6 +1104,7 @@ typedef struct {
     int udp, tcp, stray;
     bool stop;
     int queries, tcp_queries;
+    int cased; /* queries whose name has a capital (0x20) */
     size_t tcp_len; /* FAKE_TCP, FAKE_UDP_BIG: the TCP answer's length, padded (at least the query's) */
     bool tcp_wrong_name; /* FAKE_TCP: the TCP answer's question names another name */
     pthread_t th;
@@ -1120,10 +1139,9 @@ static void fake_fwd_tcp(fake_fwd_t *f)
     if (c < 0)
         return;
     fcntl(c, F_SETFL, fcntl(c, F_GETFL, 0) & ~O_NONBLOCK);
-    struct timeval tv = { .tv_sec = 1 };
-    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    int64_t end = fwd_now_us() + 1000000;
     uint8_t *m = malloc(2 + 65535), lp[2];
-    if (m && tcp_read_full(c, lp, 2) && rd16(lp) >= DNS_HDR_LEN && tcp_read_full(c, m + 2, rd16(lp))) {
+    if (m && tcp_io_by(c, lp, 2, false, end) && rd16(lp) >= DNS_HDR_LEN && tcp_io_by(c, m + 2, rd16(lp), false, end)) {
         size_t n = rd16(lp), want = __atomic_load_n(&f->tcp_len, __ATOMIC_RELAXED), len = want > n ? want : n;
         memset(m + 2 + n, 0, len - n);
         wr16(m + 4, (uint16_t)(DNS_F_QR | DNS_F_RD | DNS_F_RA));
@@ -1131,7 +1149,7 @@ static void fake_fwd_tcp(fake_fwd_t *f)
             m[2 + DNS_HDR_LEN + 1] ^= 1; /* the first label's first letter */
         wr16(m, (uint16_t)len);
         __atomic_add_fetch(&f->tcp_queries, 1, __ATOMIC_RELAXED);
-        tcp_write_full(c, m, len + 2);
+        tcp_io_by(c, m, len + 2, true, fwd_now_us() + 1000000);
     }
     free(m);
     close(c);
@@ -1152,6 +1170,15 @@ static void *fake_fwd_run(void *p)
         ssize_t n = recvfrom(f->udp, m, sizeof(m), 0, (struct sockaddr *)&from, &fl);
         if (n >= DNS_HDR_LEN) {
             __atomic_add_fetch(&f->queries, 1, __ATOMIC_RELAXED);
+            /* The name's letters (a length byte, at most 63, is never one). */
+            bool cap = false;
+            for (size_t i = DNS_HDR_LEN; i < (size_t)n && m[i]; i++) {
+                cap |= isupper(m[i]) != 0;
+                if (f->mode == FAKE_LOWER)
+                    m[i] = (uint8_t)tolower(m[i]);
+            }
+            if (cap)
+                __atomic_add_fetch(&f->cased, 1, __ATOMIC_RELAXED);
             asker = from;
             asked = true;
             last = mono_ms();
@@ -1557,7 +1584,7 @@ static void obs_reset(void)
     pthread_mutex_unlock(&s_obs.m);
 }
 
-/* Test 2: an answer completes its flight, to every query waiting on it. */
+/* An answer completes its flight, to every query waiting on it. */
 static void test_fwdq_complete(void)
 {
     fake_fwd_t up;
@@ -1610,7 +1637,7 @@ static void test_fwdq_complete(void)
     fake_fwd_stop(&up);
 }
 
-/* Test 3: from a forwarder that doesn't answer to one that does, within the budget;
+/* From a forwarder that doesn't answer to one that does, within the budget;
  * and a forwarder that doesn't answer holds up no other query. */
 static void test_fwdq_failover(void)
 {
@@ -1679,7 +1706,7 @@ static void test_fwdq_failover(void)
     fake_fwd_stop(&down2);
 }
 
-/* Test 4: a truncated answer is asked again over TCP, one at a time into the TCP
+/* A truncated answer is asked again over TCP, one at a time into the TCP
  * buffer, which a big answer holds until its slot is given back. */
 static void test_fwdq_tcp(void)
 {
@@ -1780,7 +1807,7 @@ static void test_fwdq_tcp_queue_budget(void)
     fake_fwd_stop(&quick);
 }
 
-/* Test 5: strays (from another port, or with another ID) neither end a try nor
+/* Strays (from another port, or with another ID) neither end a try nor
  * restart its wait. */
 static void test_fwdq_strays(void)
 {
@@ -1831,7 +1858,7 @@ static void test_fwdq_alive(void)
     fqh_stop(h);
 }
 
-/* Test 8: 200 queries for names a silent forwarder is asked, among 1,000 answered
+/* 200 queries for names a silent forwarder is asked, among 1,000 answered
  * from the cache, on four workers as server.c runs them: the cached ones are answered with no
  * wait, the silent ones past their group's half of the table SERVFAIL at once (shed), and
  * those asked fail by their budget. */
@@ -1971,6 +1998,56 @@ static void test_fwd_random_port(void)
     CHECK(seq <= 1);
     for (int i = 0; i < 32; i++)
         fwd_up_close(&u[i]);
+}
+
+/* 0x20: each upstream query's name in random letter case, and only an answer naming it in
+ * that very case is taken. One off only in case (a server that doesn't keep case, or a
+ * forger) is no answer: the name is asked once more as is, and that answer taken in any case. */
+static void test_fwd_0x20(void)
+{
+    fake_fwd_t ok, low;
+    fake_fwd_start(&ok, FAKE_ANSWER, 41);
+    fake_fwd_start(&low, FAKE_LOWER, 42);
+    srandom(4242);
+    uint32_t ms;
+    for (int i = 0; i < 8; i++)
+        CHECK(ask_up(&ok.addr, 1, 300, &ms) > 0);
+    CHECK(cnt(&ok.queries) == 8 && cnt(&ok.cased) == 8);
+    /* The answer taken names its question as asked, not in the case sent upstream: names
+     * compressed against it (a CNAME's target) keep their own case. */
+    uint8_t pn[256], pa[1232];
+    int pl = N("popular.example.org", pn);
+    CHECK(fwd_query(&ok.addr, 1, pn, pl, DNS_T_A, DNS_C_IN, false, pa, sizeof(pa), 300) > 0 &&
+          memcmp(pa + DNS_HDR_LEN, pn, (size_t)pl) == 0);
+    CHECK(ask_up(&low.addr, 1, 300, &ms) > 0 && cnt(&low.queries) == 2 && cnt(&low.cased) == 1);
+    /* Asked in capitals by its client (a resolver that uses 0x20 itself): the second answer,
+     * in lowercase, is taken all the same. */
+    uint8_t cn[256], ca[1232];
+    int cl = N("POPULAR.Example.ORG", cn);
+    CHECK(fwd_query(&low.addr, 1, cn, cl, DNS_T_A, DNS_C_IN, false, ca, sizeof(ca), 300) > 0 &&
+          cnt(&low.queries) == 4);
+    fake_fwd_stop(&ok);
+    fake_fwd_stop(&low);
+
+    /* The client's answer names its question in its own case, whatever case upstream's. */
+    uint8_t m[512], qb[512], out[512], name[DNS_MAX_NAME];
+    size_t len = make_query(m, "wWw.ExAMple.oRg", DNS_T_A, false);
+    static const uint8_t rr[] = { 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 1, 44, 0, 4, 192, 0, 2, 1 };
+    memcpy(m + len, rr, sizeof(rr));
+    len += sizeof(rr);
+    wr16(m + 2, DNS_F_QR | DNS_F_RD | DNS_F_RA);
+    wr16(m + 6, 1);
+    dns_query_t q;
+    size_t ql = make_query(qb, "WWW.example.ORG", DNS_T_A, false);
+    CHECK(dns_query_parse(qb, ql, &q) == 0);
+    dns_builder_t b;
+    dnsb_init(&b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    CHECK(dnsb_relay(&b, m, len, 0, false, false) == 0);
+    size_t ol = dnsb_finish(&b), pos = DNS_HDR_LEN;
+    CHECK(dns_name_read(out, ol, &pos, name) == q.qname_len && !memcmp(name, q.qname, (size_t)q.qname_len));
+    pos += 4;
+    CHECK(rd16(out + 6) == 1 && dns_name_read(out, ol, &pos, name) == q.qname_len &&
+          !memcmp(name, q.qname, (size_t)q.qname_len));
 }
 
 /* select() failing at once, again and again: the loop backs off instead of spinning, and goes
@@ -2195,7 +2272,7 @@ static bool cached(cache_t *c, const char *name)
     return cache_get(c, qn, ql, DNS_T_A, DNS_C_IN, false, 1000, out, sizeof(out), &n, &age);
 }
 
-/* Part 3: a flight's answer reaches every query waiting on it, the one that opened
+/* A flight's answer reaches every query waiting on it, the one that opened
  * it too; it is cached once (as its CNAMEs allow), counted once for the forwarders' health,
  * and a worker is woken once for any number of flights finished meanwhile. */
 static void test_upq(void)
@@ -2322,6 +2399,28 @@ static void test_upq(void)
     }
     upq_stats(u, &us);
     CHECK(us.table.held_all == 0 && !us.table.busy && us.expired[UPQ_DEFAULT] == 17 && us.expired[UPQ_ZONES] == 17);
+    /* Past one flight's cap (a quarter of 32, the one opening it among them): shed, counted,
+     * but not noted for health: one slow name isn't the forwarders slow. */
+    flight_waiter_t ws[9];
+    memset(ws, 0, sizeof(ws));
+    CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[0]) == FLIGHT_OPENED);
+    for (int i = 1; i < 8; i++)
+        CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[i]) ==
+              FLIGHT_JOINED);
+    CHECK(upq_ask_name(u, "slow.example.org", FLIGHT_GROUP_DEFAULT, &down.addr, 1, 100, true, &ws[8]) == FLIGHT_FULL);
+    upq_stats(u, &us);
+    CHECK(us.shed[UPQ_DEFAULT] == 2);
+    health_upstream_get(&u->health, fwd_now_ms(), &f);
+    CHECK(f.shed == 1);
+    /* It ends by its budget with its 8 handed back. */
+    int back = 0;
+    for (uint32_t w0 = mono_ms(); mono_ms() - w0 < 2000 && !upq_take(u, &d, fwd_now_ms(), 1000);)
+        usleep(1000);
+    for (flight_waiter_t *w = d.parked; w; w = w->next)
+        back++;
+    CHECK(back == 8);
+    upq_release(u, &d);
+    CHECK(flight_waiting(&u->fl) == 0);
     upqh_stop(h);
     cache_free(c);
     sem_destroy(&t.sem);
@@ -2329,7 +2428,7 @@ static void test_upq(void)
     fake_fwd_stop(&down);
 }
 
-/* Part 3: the node's UDP path on four worker threads as server.c runs them (one
+/* The node's UDP path on four worker threads as server.c runs them (one
  * queue of received queries, a NULL on it to take the finished flights), with every forwarder
  * silent. The cached queries keep being answered at once while the uncached ones wait on
  * their flights off the workers: no worker ever waits on a forwarder. Each uncached query is
@@ -2758,6 +2857,135 @@ static void test_query_parse(void)
     size_t n = dns_make_error(&q, out, sizeof(out), DNS_R_REFUSED, 0);
     parsed_t p;
     CHECK(parse_resp(out, n, &p) && p.h.id == 0x1234 && DNS_RCODE(p.h.flags) == DNS_R_REFUSED && p.h.ar == 1);
+
+    /* An EDNS version over 0 is read; BADVERS (16) goes out as rcode 0 with 1 in the OPT's
+     * upper rcode bits, version 0, DO echoed (RFC 6891, 6.1.3). */
+    qb[ql - 11 + 6] = 1; /* the OPT's version */
+    CHECK(dns_query_parse(qb, ql, &q) == 0 && q.has_edns && q.edns_version == 1);
+    n = dns_make_error(&q, out, sizeof(out), DNS_R_BADVERS, 0);
+    CHECK(parse_resp(out, n, &p) && DNS_RCODE(p.h.flags) == 0 && p.h.an == 0 && p.h.ar == 1 &&
+          p.rr[0].type == DNS_T_OPT && p.rr[0].ttl == (0x01000000u | 0x8000));
+
+    /* OPT only in the additional section, and once (RFC 6891, 6.1.1): else FORMERR. */
+    ql = make_query(qb, "x.test", DNS_T_A, true);
+    wr16(qb + 10, 0);
+    wr16(qb + 6, 1); /* in the answer section */
+    CHECK(dns_query_parse(qb, ql, &q) == DNS_R_FORMERR);
+    wr16(qb + 6, 0);
+    wr16(qb + 8, 1); /* in authority */
+    CHECK(dns_query_parse(qb, ql, &q) == DNS_R_FORMERR);
+    wr16(qb + 8, 0);
+    wr16(qb + 10, 1);
+    CHECK(dns_query_parse(qb, ql, &q) == 0 && q.has_edns);
+    memcpy(qb + ql, qb + ql - 11, 11); /* two */
+    wr16(qb + 10, 2);
+    CHECK(dns_query_parse(qb, ql + 11, &q) == DNS_R_FORMERR);
+}
+
+/* An upstream answer to www.example.org TXT: a CNAME (compressed), then a TXT of rdlen bytes. */
+static size_t big_resp(uint8_t *m, uint16_t rdlen)
+{
+    uint8_t n[256];
+    int nl = N("www.example.org", n);
+    memset(m, 0, 12);
+    wr16(m + 2, DNS_F_QR | DNS_F_RD | DNS_F_RA);
+    wr16(m + 4, 1);
+    wr16(m + 6, 2);
+    size_t p = 12;
+    memcpy(m + p, n, (size_t)nl);
+    p += (size_t)nl;
+    wr16(m + p, DNS_T_TXT);
+    wr16(m + p + 2, DNS_C_IN);
+    p += 4;
+    m[p] = 0xC0, m[p + 1] = 12;
+    wr16(m + p + 2, DNS_T_CNAME);
+    wr16(m + p + 4, DNS_C_IN);
+    wr32(m + p + 6, 300);
+    wr16(m + p + 10, 6);
+    memcpy(m + p + 12, "\003txt\xC0\x10", 6); /* txt.example.org */
+    p += 18;
+    size_t target = p - 6;
+    wr16(m + p, 0xC000 | (uint16_t)target);
+    wr16(m + p + 2, DNS_T_TXT);
+    wr16(m + p + 4, DNS_C_IN);
+    wr32(m + p + 6, 300);
+    wr16(m + p + 10, rdlen);
+    p += 12;
+    for (uint16_t i = 0; i < rdlen; i += 256) {
+        uint16_t l = rdlen - i < 256 ? rdlen - i : 256;
+        m[p + i] = (uint8_t)(l - 1);
+        memset(m + p + i + 1, 'a' + i / 256 % 26, l - 1);
+    }
+    return p + rdlen;
+}
+
+/* RRs of any size are relayed whole within the reply's limit, or the reply is truncated;
+ * a malformed message leaves nothing of itself behind. */
+static void test_relay_sizes(void)
+{
+    static uint8_t m[8192], out[8192];
+    uint8_t qb[512];
+    dns_query_t q;
+    size_t ql = make_query(qb, "www.example.org", DNS_T_TXT, true);
+    CHECK(dns_query_parse(qb, ql, &q) == 0);
+    dns_builder_t *b = malloc(sizeof(*b));
+    parsed_t p;
+
+    /* Over TCP: a 3000-byte TXT, past what the relay once took (1024), goes whole. */
+    size_t len = big_resp(m, 3000);
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    size_t ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && p.h.an == 2 && p.h.ar == 1 && !(p.h.flags & DNS_F_TC));
+    CHECK(p.rr[0].type == DNS_T_CNAME && p.rr[1].type == DNS_T_TXT && p.rr[1].rdlen == 3000 &&
+          !memcmp(out + p.rr[1].rdata_off, m + len - 3000, 3000));
+    uint8_t want[256], got[256];
+    int wl = N("txt.example.org", want);
+    size_t off = p.rr[0].rdata_off;
+    CHECK(dns_name_read(out, ol, &off, got) == wl && dns_name_eq(got, wl, want, wl));
+
+    /* Over UDP it doesn't fit: TC, nothing partial, the OPT kept. */
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(ol <= DNS_EDNS_SIZE && parse_resp(out, ol, &p) && (p.h.flags & DNS_F_TC) && p.h.an == 0 && p.h.ar == 1);
+    /* One that just fits, the OPT's room left: whole. */
+    len = big_resp(m, 1);
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    size_t fixed = dnsb_finish(b) - 1; /* the reply, OPT and all, but the TXT's rdata */
+    len = big_resp(m, (uint16_t)(DNS_EDNS_SIZE - fixed));
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(ol == DNS_EDNS_SIZE && parse_resp(out, ol, &p) && !(p.h.flags & DNS_F_TC) && p.h.an == 2);
+    /* A byte more: truncated. */
+    len = big_resp(m, (uint16_t)(DNS_EDNS_SIZE - fixed + 1));
+    dnsb_init(b, out, sizeof(out), DNS_EDNS_SIZE, &q, DNS_F_QR);
+    dnsb_opt(b, DNS_EDNS_SIZE, q.do_bit);
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == 0);
+    ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && (p.h.flags & DNS_F_TC) && p.h.an == 0);
+
+    /* Malformed after the CNAME: -1, and the RR already copied is gone. */
+    len = big_resp(m, 600);
+    wr16(m + len - 600 - 2, 700); /* the TXT runs past the end */
+    dnsb_init(b, out, sizeof(out), sizeof(out), &q, DNS_F_QR);
+    uint8_t a[4] = { 10, 0, 0, 1 };
+    uint8_t own[256];
+    int owl = N("local.example.org", own);
+    CHECK(dnsb_rr(b, DNSB_ANSWER, own, owl, DNS_T_A, DNS_C_IN, 60, a, 4));
+    size_t before = b->len;
+    int nct = b->nctab;
+    CHECK(dnsb_relay(b, m, len, 0, false, true) == -1);
+    CHECK(b->len == before && b->an == 1 && b->nctab == nct && !b->truncated);
+    ol = dnsb_finish(b);
+    CHECK(parse_resp(out, ol, &p) && p.h.an == 1 && p.rr[0].type == DNS_T_A);
+    free(b);
 }
 
 /* Releases signed by tools/release.py (see gen_release_vectors.py) verify here. */
@@ -3215,11 +3443,15 @@ static void test_release(void)
     other.sibling = "test-boar";
     CHECK(rel_verify(V_FW, &other, 0, UINT64_MAX, &m) != NULL);
 
-    /* recovery key, addressed to any node, so it also passes on another node */
+    /* recovery key, for this node alone */
     CHECK(rel_verify(V_BL, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_BLOCKLIST && m.key_id == 1);
     other = t;
     other.node_id[0] = 0x02;
-    CHECK(rel_verify(V_BL, &other, 0, UINT64_MAX, &m) == NULL);
+    why = rel_verify(V_BL, &other, 0, UINT64_MAX, &m);
+    CHECK(why && strstr(why, "another node"));
+    /* a release for ff:ff:ff:ff:ff:ff is for no node: refused */
+    why = rel_verify(V_BCAST, &t, 0, UINT64_MAX, &m);
+    CHECK(why && strstr(why, "another node"));
     /* ... but not when that key slot is empty, or the wrong key is in it */
     other = t;
     other.keys[1] = NULL;
@@ -3643,6 +3875,43 @@ static char *read_file(const char *path, size_t *len)
     return buf;
 }
 
+/* ---- the node key (nodekey.c): setup ---- */
+
+static int test_rng(void *ctx, unsigned char *out, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        out[i] = (unsigned char)rand();
+    return 0;
+}
+
+/* tests/nodekey_vectors.json, sealed by the controller (internal/release, TestSealVector) for
+ * V_NODE; its node key opens the sealed passwords in the config tests. */
+static cJSON *s_nk_vec;
+static uint8_t s_nk_priv[NODEKEY_PRIV_LEN], s_nk_pub[NODEKEY_PUB_LEN];
+
+static const char *nk_field(const char *k) { return cJSON_GetObjectItem(s_nk_vec, k)->valuestring; }
+
+static const char *test_unseal(const uint8_t *blob, size_t n, char *out, size_t cap)
+{
+    return nodekey_open(s_nk_priv, V_NODE, blob, n, out, cap, test_rng, NULL);
+}
+
+static void nodekey_setup(void)
+{
+    size_t len, n = 0;
+    char *text = read_file("nodekey_vectors.json", &len);
+    CHECK(text);
+    s_nk_vec = cJSON_ParseWithLength(text, len);
+    free(text);
+    CHECK(s_nk_vec && !strcmp(nk_field("node_id"), "30:ed:a0:00:00:01"));
+    for (int i = 0; i < NODEKEY_PRIV_LEN; i++)
+        sscanf(nk_field("node_priv") + 2 * i, "%2hhx", &s_nk_priv[i]);
+    const char *pub = nk_field("node_key");
+    CHECK(mbedtls_base64_decode(s_nk_pub, sizeof(s_nk_pub), &n, (const unsigned char *)pub, strlen(pub)) == 0 &&
+          n == NODEKEY_PUB_LEN);
+    cfg_set_unseal(test_unseal);
+}
+
 static uint32_t ip4(const char *s);
 
 static bool parse(const char *json, board_desc_t *b, char *err)
@@ -3675,80 +3944,116 @@ static void test_board_defs(void)
           b.eth.mdc == BOARD_NC && b.eth.rmii_clock == BOARD_CLK_DEFAULT);
     CHECK(b.sd.kind == BOARD_SD_SDMMC && b.sd.width == 4 && b.sd.ldo == 4 && b.led.kind == BOARD_LED_NONE);
 
-    /* A classic ESP32 board: LAN8720 with its clock from GPIO0 and an oscillator enable pin. */
-    CHECK(parse("{\"name\":\"wt32-eth01\",\"image\":\"esp32\",\"ethernet\":{\"kind\":\"emac\",\"phy\":\"lan87xx\","
-                "\"addr\":1,\"power\":16,\"mdc\":23,\"mdio\":18,\"rmii_clock\":{\"mode\":\"in\",\"gpio\":0}}}", &b, err));
+    /* A LAN8720 with its clock in from a GPIO and an oscillator enable pin. */
+    CHECK(parse("{\"name\":\"p-lan\",\"image\":\"esp32p4\",\"ethernet\":{\"kind\":\"emac\",\"phy\":\"lan87xx\","
+                "\"addr\":1,\"power\":16,\"mdc\":31,\"mdio\":52,\"rmii_clock\":{\"mode\":\"in\",\"gpio\":50}}}", &b, err));
     CHECK(b.eth.phy == BOARD_PHY_LAN87XX && b.eth.power_pin == 16 && b.eth.rmii_clock == BOARD_CLK_IN &&
-          b.eth.rmii_clock_gpio == 0);
+          b.eth.rmii_clock_gpio == 50);
 
     /* Malformed definitions say why. */
     CHECK(!parse("[1,2]", &b, err) && strstr(err, "not a JSON object"));
-    CHECK(!parse("{\"image\":\"esp32\"}", &b, err) && strstr(err, "name: missing"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"ethernet\":{\"kind\":\"enc28j60\"}}", &b, err) &&
+    CHECK(!parse("{\"image\":\"esp32s3-quad\"}", &b, err) && strstr(err, "name: missing"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"ethernet\":{\"kind\":\"enc28j60\"}}", &b, err) &&
           strstr(err, "kind: unknown value"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"ethernet\":{\"kind\":\"w5500\",\"spi_host\":2,"
                  "\"cs\":14}}", &b, err) && strstr(err, "no such SPI bus"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"spi\":[{\"host\":2,\"sclk\":7,\"mosi\":9,"
                  "\"miso\":8}],\"sd\":{\"kind\":\"spi\",\"spi_host\":2,\"cs\":21},\"led\":{\"kind\":\"gpio\",\"pin\":21}}",
                  &b, err) && strstr(err, "GPIO 21 used twice"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"led\":{\"kind\":\"gpio\",\"pin\":99}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"led\":{\"kind\":\"gpio\",\"pin\":99}}", &b, err) &&
           strstr(err, "out of range"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"wifi\":{\"tx_power_dbm\":25}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"wifi\":{\"tx_power_dbm\":25}}", &b, err) &&
           strstr(err, "tx_power_dbm"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"sd\":{\"kind\":\"sdmmc\",\"width\":2.5}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"sd\":{\"kind\":\"sdmmc\",\"width\":2.5}}", &b, err) &&
           strstr(err, "not an integer"));
-    CHECK(!parse("{\"name\":\"a-name-that-is-far-too-long\",\"image\":\"esp32\"}", &b, err) && strstr(err, "name"));
+    CHECK(!parse("{\"name\":\"a-name-that-is-far-too-long\",\"image\":\"esp32s3-quad\"}", &b, err) && strstr(err, "name"));
     /* Memory budgets: board data, the firmware's default when left out. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && b.mem.hosted_zones_kb == -1 && b.psram_mb == -1 &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && b.mem.hosted_zones_kb == -1 && b.psram_mb == -1 &&
           b.mem.internal_kb == -1 && b.mem.cache_kb == -1 && b.mem.cache_entries == -1 && b.mem.blocklist_kb == -1 &&
           b.mem.blocklist_index_kb == -1 && b.mem.secondary_zones_kb == -1 && b.mem.fwd_pending == -1);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"psram_mb\":8,\"memory\":{\"hosted_zones_kb\":256,"
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"psram_mb\":8,\"memory\":{\"hosted_zones_kb\":256,"
                 "\"internal_kb\":100,\"cache_kb\":2048,\"cache_entries\":4096,\"blocklist_kb\":3000,"
                 "\"blocklist_index_kb\":0,\"secondary_zones_kb\":128}}", &b, err) &&
           b.mem.hosted_zones_kb == 256 && b.psram_mb == 8 && b.mem.internal_kb == 100 && b.mem.cache_kb == 2048 &&
           b.mem.cache_entries == 4096 && b.mem.blocklist_kb == 3000 && b.mem.blocklist_index_kb == 0 &&
           b.mem.secondary_zones_kb == 128);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"hosted_zones_kb\":8}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"hosted_zones_kb\":8}}", &b, err) &&
           strstr(err, "hosted_zones_kb"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"cache_entries\":4}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"cache_entries\":4}}", &b, err) &&
           strstr(err, "cache_entries"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"blocklist_kb\":0}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"blocklist_kb\":0}}", &b, err) &&
           strstr(err, "blocklist_kb"));
     /* fwd_pending, a count: at least 2 (each half of the table has a slot), left out -1. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":2}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":2}}", &b, err) &&
           b.mem.fwd_pending == 2);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":1}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":1}}", &b, err) &&
           strstr(err, "fwd_pending"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"fwd_pending\":1025}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"fwd_pending\":1025}}", &b, err) &&
           strstr(err, "fwd_pending"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"internal_kb\":1.5}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"internal_kb\":1.5}}", &b, err) &&
           strstr(err, "not an integer"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"psram_mb\":128}", &b, err) && strstr(err, "psram_mb"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":7}", &b, err) && strstr(err, "memory"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"psram_mb\":128}", &b, err) && strstr(err, "psram_mb"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":7}", &b, err) && strstr(err, "memory"));
     /* A key this firmware doesn't know (from a newer catalog) is left for the newer firmware. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"memory\":{\"query_log_kb\":64}}", &b, err));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"memory\":{\"query_log_kb\":64}}", &b, err));
     /* The node's address, which the builder adds when it flashes a node; DHCP only if asked. */
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && !b.net.set);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"192.0.2.52/25\","
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && !b.net.set);
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"192.0.2.52/25\","
                 "\"gateway\":\"192.0.2.1\"}}", &b, err) &&
           b.net.set && !b.net.dhcp && b.net.ip == ip4("192.0.2.52") && b.net.netmask == ip4("255.255.255.128") &&
           b.net.gateway == ip4("192.0.2.1"));
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"dhcp\"}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"dhcp\"}}", &b, err) &&
           b.net.set && b.net.dhcp && !b.net.ip);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"203.0.113.5/24\","
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"203.0.113.5/24\","
                  "\"gateway\":\"192.0.2.1\"}}", &b, err) && strstr(err, "another address in the node's network"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"203.0.113.5/24\"}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"203.0.113.5/24\"}}", &b, err) &&
           strstr(err, "gateway: required"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"gateway\":\"203.0.113.1\"}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"gateway\":\"203.0.113.1\"}}", &b, err) &&
           strstr(err, "network.address: required"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":{\"address\":\"dhcp\",\"dns\":1}}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":{\"address\":\"dhcp\",\"dns\":1}}", &b, err) &&
           strstr(err, "network.dns: unknown setting"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"network\":\"dhcp\"}", &b, err) &&
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"network\":\"dhcp\"}", &b, err) &&
           strstr(err, "network: an object"));
+
+    /* The status LED: a plain RGB LED on three GPIOs; a node config's in place of the board's,
+     * its pins checked against the board's others (the board's own LED pin free for it). */
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":5,\"blue\":6,"
+                "\"common_anode\":true}}", &b, err) &&
+          b.led.kind == BOARD_LED_RGB && b.led.pin[0] == 4 && b.led.pin[1] == 5 && b.led.pin[2] == 6 && b.led.active_low);
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":5}}", &b, err) &&
+          strstr(err, "led: blue: required"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"led\":{\"kind\":\"rgb\",\"red\":4,\"green\":4,\"blue\":6}}",
+                 &b, err) && strstr(err, "GPIO 4 used twice: led red and led green"));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-octal\",\"spi\":[{\"host\":2,\"sclk\":7,\"mosi\":9,\"miso\":8}],"
+                "\"sd\":{\"kind\":\"spi\",\"spi_host\":2,\"cs\":21},\"led\":{\"kind\":\"ws2812\",\"pin\":38}}", &b, err));
+    static cfg_t cf, run;
+    CHECK(cfg_build(&run, &b, NULL, 0, err, sizeof(err)) && run.led.kind == BOARD_LED_WS2812 && run.led.pin[0] == 38 &&
+          !run.led_config);
+    const char *lj = "{\"led\":{\"kind\":\"rgb\",\"red\":38,\"green\":39,\"blue\":40,\"common_anode\":true}}";
+    CHECK(cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && cf.led.kind == BOARD_LED_RGB && cf.led.pin[0] == 38 &&
+          cf.led.pin[2] == 40 && cf.led.active_low && cf.led_config);
+    CHECK(cfg_reboot_reasons(&run, &cf) == 0); /* live */
+    cfg_copy_live(&run, &cf);
+    CHECK(run.led.kind == BOARD_LED_RGB && run.led.pin[1] == 39 && run.led_config);
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":21,\"active_low\":true}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: GPIO 21 used twice: sd cs and led") &&
+          cf.led.kind == BOARD_LED_WS2812 && !cf.led_config);
+    lj = "{\"led\":{\"kind\":\"rgb\",\"red\":1,\"green\":2,\"blue\":9}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "GPIO 9 used twice: spi mosi and led blue"));
+    lj = "{\"led\":{\"kind\":\"rgb\",\"red\":1,\"green\":2}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: blue: required"));
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":60}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: pin: GPIO 60 out of range"));
+    lj = "{\"led\":{\"kind\":\"gpio\",\"pin\":2,\"colour\":\"red\"}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led.colour: unknown setting"));
+    lj = "{\"led\":{\"kind\":\"rainbow\"}}";
+    CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: kind: unknown value"));
+    lj = "{\"led\":{\"kind\":\"none\"}}";
+    CHECK(cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && cf.led.kind == BOARD_LED_NONE && cf.led_config);
 
     /* The partition: header and CRC (vector: zlib.crc32(b"123456789") = 0xCBF43926). */
     CHECK(board_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
-    static const char def[] = "{\"name\":\"x\",\"image\":\"esp32\"}";
+    static const char def[] = "{\"name\":\"x\",\"image\":\"esp32s3-quad\"}";
     uint8_t part[BOARD_PART_SIZE];
     memset(part, 0xFF, sizeof(part));
     uint32_t n = sizeof(def) - 1, crc = board_crc32((const uint8_t *)def, n);
@@ -3760,7 +4065,7 @@ static void test_board_defs(void)
     const char *json, *why;
     size_t len;
     CHECK(board_part_open(part, sizeof(part), &json, &len, &why) && len == n && memcmp(json, def, n) == 0);
-    CHECK(board_def_parse(json, len, &b, err, sizeof(err)) && strcmp(b.image, "esp32") == 0);
+    CHECK(board_def_parse(json, len, &b, err, sizeof(err)) && strcmp(b.image, "esp32s3-quad") == 0);
     part[BOARD_PART_HDR + 3] ^= 1;
     CHECK(!board_part_open(part, sizeof(part), &json, &len, &why) && strstr(why, "CRC"));
     uint8_t erased[BOARD_PART_SIZE];
@@ -4357,6 +4662,104 @@ static uint32_t ip4(const char *s)
     return v;
 }
 
+/* Who a node answers (cfg_src_allowed): private sources by default, plus the config's
+ * "allow" networks. The private addresses are built, not written (no private address in a
+ * test: .github/workflows/ci.yml). */
+static uint32_t v4(unsigned a, unsigned b, unsigned c, unsigned d)
+{
+    uint8_t q[4] = { (uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d };
+    uint32_t v;
+    memcpy(&v, q, 4);
+    return v;
+}
+
+static bool v6_allowed(const cfg_t *c, const char *s)
+{
+    uint8_t a[16];
+    CHECK(inet_pton(AF_INET6, s, a) == 1);
+    return cfg_src_allowed(c, a);
+}
+
+static void test_client_allow(void)
+{
+    static cfg_t c, d;
+    char err[160];
+    CHECK(cfg_build(&c, NULL, NULL, 0, err, sizeof(err)) && c.nallow == 0);
+
+    /* IPv4: the private ranges in, at their edges; the rest out */
+    static const struct {
+        uint8_t q[4];
+        bool ok;
+    } V[] = {
+        { { 10, 0, 0, 1 }, true },        { { 10, 255, 255, 255 }, true },  { { 11, 0, 0, 1 }, false },
+        { { 172, 16, 0, 1 }, true },      { { 172, 31, 255, 255 }, true },  { { 172, 32, 0, 1 }, false },
+        { { 172, 15, 255, 255 }, false }, { { 192, 168, 1, 1 }, true },     { { 192, 169, 0, 1 }, false },
+        { { 100, 64, 0, 1 }, true },      { { 100, 127, 255, 255 }, true }, { { 100, 128, 0, 1 }, false },
+        { { 169, 254, 1, 1 }, true },     { { 169, 253, 1, 1 }, false },    { { 127, 0, 0, 1 }, true },
+        { { 192, 0, 2, 1 }, false },      { { 198, 51, 100, 7 }, false },   { { 8, 8, 8, 8 }, false },
+        { { 0, 0, 0, 0 }, false },
+    };
+    for (size_t i = 0; i < sizeof(V) / sizeof(V[0]); i++) {
+        bool ok = cfg_src4_allowed(&c, v4(V[i].q[0], V[i].q[1], V[i].q[2], V[i].q[3]));
+        if (ok != V[i].ok)
+            fprintf(stderr, "allow: %u.%u.%u.%u\n", V[i].q[0], V[i].q[1], V[i].q[2], V[i].q[3]);
+        CHECK(ok == V[i].ok);
+    }
+    /* IPv6: loopback, unique local, link-local in; the rest out */
+    CHECK(v6_allowed(&c, "::1") && v6_allowed(&c, "fd12:3456::1") && v6_allowed(&c, "fc00::1") &&
+          v6_allowed(&c, "fe80::1") && v6_allowed(&c, "febf::1"));
+    CHECK(!v6_allowed(&c, "::2") && !v6_allowed(&c, "::") && !v6_allowed(&c, "fec0::1") && !v6_allowed(&c, "fe00::1") &&
+          !v6_allowed(&c, "2001:db8::1"));
+    /* IPv4-mapped: judged by its IPv4 address; IPv4-compatible (::a.b.c.d) is not mapped */
+    uint8_t m[16] = { [10] = 0xff, [11] = 0xff, [12] = 10, [13] = 1, [14] = 2, [15] = 3 };
+    CHECK(cfg_src_allowed(&c, m));
+    m[12] = 192, m[13] = 0, m[14] = 2, m[15] = 1;
+    CHECK(!cfg_src_allowed(&c, m) && !v6_allowed(&c, "::ffff:192.0.2.1"));
+    m[10] = m[11] = 0, m[12] = 10;
+    CHECK(!cfg_src_allowed(&c, m));
+
+    /* "allow" adds networks to the private ones, live */
+    CHECK(cfg_try(&d, "{\"allow\":[\"198.51.100.0/24\",\"203.0.113.128/25\",\"2001:db8:1::/48\",\"192.0.2.7/32\"]}", err));
+    CHECK(d.nallow == 4 && !cfg_needs_reboot(&c, &d));
+    cfg_copy_live(&c, &d);
+    CHECK(c.nallow == 4 && cfg_src4_allowed(&c, v4(198, 51, 100, 9)) && cfg_src4_allowed(&c, v4(198, 51, 100, 255)) &&
+          !cfg_src4_allowed(&c, v4(198, 51, 101, 1)));
+    CHECK(cfg_src4_allowed(&c, v4(203, 0, 113, 200)) && !cfg_src4_allowed(&c, v4(203, 0, 113, 127)));
+    CHECK(cfg_src4_allowed(&c, v4(192, 0, 2, 7)) && !cfg_src4_allowed(&c, v4(192, 0, 2, 8)));
+    CHECK(v6_allowed(&c, "::ffff:198.51.100.1")); /* mapped, by its IPv4 address */
+    CHECK(v6_allowed(&c, "2001:db8:1:ffff::1") && !v6_allowed(&c, "2001:db8:2::1"));
+    CHECK(cfg_src4_allowed(&c, v4(10, 9, 8, 7)) && v6_allowed(&c, "fe80::1")); /* the private ones still */
+    CHECK(cfg_try(&d, "{\"allow\":[\"0.0.0.0/0\"]}", err) && cfg_src4_allowed(&d, v4(8, 8, 8, 8)) &&
+          !v6_allowed(&d, "2001:db8::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[\"::/0\"]}", err) && v6_allowed(&d, "2001:db8::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[\"2001:db8::/31\"]}", err) && v6_allowed(&d, "2001:db9::1") &&
+          !v6_allowed(&d, "2001:dba::1"));
+    CHECK(cfg_try(&d, "{\"allow\":[]}", err) && d.nallow == 0);
+    char many[1024] = "{\"allow\":[";
+    for (int i = 0; i < CFG_MAX_ALLOW; i++)
+        snprintf(many + strlen(many), sizeof(many) - strlen(many), "%s\"198.51.100.%d/32\"", i ? "," : "", i);
+    strcat(many, "]}");
+    CHECK(cfg_try(&d, many, err) && d.nallow == CFG_MAX_ALLOW);
+
+    /* refused: not a network, host bits set, a bad length, too many */
+    static const char *const bad[] = { "198.51.100.0", "198.51.100.1/24", "198.51.100.0/33", "198.51.100.0/",
+                                       "198.51.100.0/024", "198.51.100.0/-1", "198.51.100.0/24 ", "2001:db8::/129",
+                                       "2001:db8::1/32", "2001:db8::/x", "example.com/24", "/24", "1.2.3/24",
+                                       "2001:db8:::/32" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char j[96];
+        snprintf(j, sizeof(j), "{\"allow\":[\"%s\"]}", bad[i]);
+        bool ok = cfg_try(&d, j, err);
+        if (ok)
+            fprintf(stderr, "allow: %s taken\n", bad[i]);
+        CHECK(!ok && strstr(err, "allow: networks as"));
+    }
+    CHECK(!cfg_try(&d, "{\"allow\":[24]}", err) && strstr(err, "allow: networks as"));
+    CHECK(!cfg_try(&d, "{\"allow\":\"198.51.100.0/24\"}", err) && strstr(err, "allow: a list of at most 16"));
+    strcpy(many + strlen(many) - 2, ",\"203.0.113.0/24\"]}");
+    CHECK(!cfg_try(&d, many, err) && strstr(err, "allow: a list of at most 16"));
+}
+
 static void test_config(void)
 {
     static cfg_t c, d; /* big: not on the stack */
@@ -4416,19 +4819,21 @@ static void test_config(void)
     CHECK(!strcmp(cfg_addr_kind(&d), "none") && !strcmp(cfg_addr_from(&d), "none"));
 
     /* A full node config: what it gives replaces the lower layers, what it leaves out stays. */
-    CHECK(cfg_try(&c,
+    static char full[1024];
+    snprintf(full, sizeof(full),
                   "{\"format\":1,\"name\":\"dns-a\",\"network\":{\"address\":\"203.0.113.53/24\",\"gateway\":\"203.0.113.1\"},"
-                  "\"wifi\":{\"ssid\":\"home\",\"password\":\"secret123\",\"power_save\":true},"
+                  "\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\",\"power_save\":true},"
                   "\"forwarders\":[\"1.1.1.1\",\"9.9.9.9\"],\"upstream_timeout_ms\":900,"
                   "\"forward_zones\":[{\"zone\":\"Corp.Example.\",\"forwarder\":\"203.0.113.2\"}],"
                   "\"secondary\":{\"zones\":[\"example.com\"],\"soa_poll_s\":120},"
                   "\"time\":{\"ntp\":[\"pool.ntp.org\",\"203.0.113.1\"],\"tz\":\"EST5EDT,M3.2.0,M11.1.0\"},"
-                  "\"blocking\":{\"answer\":\"nxdomain\",\"ttl\":30}}", err));
+                  "\"blocking\":{\"answer\":\"nxdomain\",\"ttl\":30}}", nk_field("sealed"));
+    CHECK(cfg_try(&c, full, err));
     if (err[0])
         fprintf(stderr, "config: %s\n", err);
     CHECK(!strcmp(c.name, "dns-a") && c.ip == ip4("203.0.113.53") && c.netmask == ip4("255.255.255.0") &&
           c.gateway == ip4("203.0.113.1"));
-    CHECK(!strcmp(c.wifi_ssid, "home") && !strcmp(c.wifi_pass, "secret123") && c.wifi_power_save);
+    CHECK(!strcmp(c.wifi_ssid, "home") && !strcmp(c.wifi_pass, nk_field("password")) && c.wifi_power_save);
     CHECK(c.nfwd == 2 && c.fwd[1] == ip4("9.9.9.9") && c.upstream_timeout_ms == 900);
     CHECK(c.nfzones == 1 && !strcmp(c.fzones[0].zone, "corp.example")); /* lowercased, no trailing dot */
     CHECK(c.nzones == 1 && !strcmp(c.zones[0], "example.com") && c.primary == ip4("192.0.2.254"));
@@ -4501,8 +4906,11 @@ static void test_config(void)
         { "{\"secondary\":{\"zones\":[\"x.com\",\"X.com.\"]}}", "x.com twice" },
         { "{\"forward_zones\":[{\"zone\":\"local\",\"forwarder\":\"1.1.1.1\"}]}", "both a secondary zone and a forward zone" },
         { "{\"forward_zones\":[{\"zone\":\"x.com\"}]}", "forwarder: required" },
-        { "{\"wifi\":{\"password\":\"12345678\"}}", "only with wifi.ssid" },
-        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"short\"}}", "at least 8" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"12345678\"}}", "never in plain text" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"password\":\"\"}}", "never in plain text" },
+        { "{\"wifi\":{\"sealed\":\"AAAA\"}}", "only with wifi.ssid" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"sealed\":\"!!!!\"}}", "not base64" },
+        { "{\"wifi\":{\"ssid\":\"x\",\"sealed\":\"AAAA\"}}", "wrong length" },
         { "{\"wifi\":{\"tx_power_dbm\":21}}", "from 2 to 20" },
         { "{\"time\":{\"tz\":\"5EST\"}}", "POSIX TZ" },
         /* Only the characters POSIX TZ uses: nothing that could break /status */
@@ -5328,17 +5736,15 @@ static void test_cpuplan(void)
     CHECK(cp_idle_mhz(&p, true, false) == 80 && cp_idle_mhz(&p, true, true) == 80);
     p.min_mhz = 40; /* Wi-Fi awake keeps 80; the W5500 holds it only while it transfers */
     CHECK(cp_idle_mhz(&p, true, false) == 40 && cp_idle_mhz(&p, true, true) == 80);
-    cp_board(NULL, "esp32", &p); /* a wired ESP32 would never clock down */
-    CHECK(cp_idle_mhz(&p, true, true) == 240 && cp_idle_mhz(&p, true, false) == 40);
 
     /* The board definition's "cpu": its shape, and the reasons. */
     board_desc_t b;
     char err[160];
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32\"}", &b, err) && b.cpu.dfs == -1 && b.cpu.min_mhz == -1);
-    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32c3\",\"cpu\":{\"dfs\":false,\"min_mhz\":40}}", &b, err) &&
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\"}", &b, err) && b.cpu.dfs == -1 && b.cpu.min_mhz == -1);
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":{\"dfs\":false,\"min_mhz\":40}}", &b, err) &&
           b.cpu.dfs == 0 && b.cpu.min_mhz == 40);
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"cpu\":true}", &b, err) && strstr(err, "cpu: an object"));
-    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32\",\"cpu\":{\"dfs\":1}}", &b, err) && strstr(err, "dfs"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":true}", &b, err) && strstr(err, "cpu: an object"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"cpu\":{\"dfs\":1}}", &b, err) && strstr(err, "dfs"));
     CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-rev1\",\"cpu\":{\"min_mhz\":100}}", &b, err) &&
           !strcmp(err, "cpu min_mhz: 90, 180 on esp32p4-rev1, or leave it out for the image's 180"));
 }
@@ -5359,6 +5765,108 @@ static bool in_list(const cJSON *a, const char *name)
     return false;
 }
 
+/* ---- the node key (nodekey.c) ---- */
+
+/* Seals pw to the node key pub for node as the controller does (release.Seal), base64 into
+ * out: for the round trip, and the configs in the tests. */
+static const char *seal_pw(const uint8_t pub[NODEKEY_PUB_LEN], const uint8_t node[6], const char *pw, char *out,
+                           size_t cap)
+{
+    uint8_t e[NODEKEY_PRIV_LEN], blob[NODEKEY_PUB_LEN + 64 + NODEKEY_TAG_LEN], z[NODEKEY_PUB_LEN], okm[44];
+    uint8_t info[sizeof(NODEKEY_INFO) - 1 + 6];
+    size_t len = strlen(pw), n = 0;
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point q, p;
+    mbedtls_mpi d;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&q);
+    mbedtls_ecp_point_init(&p);
+    mbedtls_mpi_init(&d);
+    CHECK(len < 64 && nodekey_gen(e, blob, test_rng, NULL)); /* the one-time key E, first */
+    CHECK(mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) == 0 && mbedtls_mpi_read_binary(&d, e, sizeof(e)) == 0 &&
+          mbedtls_ecp_point_read_binary(&grp, &q, pub, NODEKEY_PUB_LEN) == 0 &&
+          mbedtls_ecp_mul(&grp, &p, &d, &q, test_rng, NULL) == 0 &&
+          mbedtls_ecp_point_write_binary(&grp, &p, MBEDTLS_ECP_PF_UNCOMPRESSED, &n, z, sizeof(z)) == 0);
+    mbedtls_mpi_free(&d);
+    mbedtls_ecp_point_free(&p);
+    mbedtls_ecp_point_free(&q);
+    mbedtls_ecp_group_free(&grp);
+    memcpy(info, NODEKEY_INFO, sizeof(NODEKEY_INFO) - 1);
+    memcpy(info + sizeof(NODEKEY_INFO) - 1, node, 6);
+    CHECK(mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), NULL, 0, z + 1, 32, info, sizeof(info), okm,
+                       sizeof(okm)) == 0);
+    mbedtls_gcm_context g;
+    mbedtls_gcm_init(&g);
+    CHECK(mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, okm, 256) == 0 &&
+          mbedtls_gcm_crypt_and_tag(&g, MBEDTLS_GCM_ENCRYPT, len, okm + 32, 12, NULL, 0, (const uint8_t *)pw,
+                                    blob + NODEKEY_PUB_LEN, NODEKEY_TAG_LEN, blob + NODEKEY_PUB_LEN + len) == 0);
+    mbedtls_gcm_free(&g);
+    CHECK(mbedtls_base64_encode((unsigned char *)out, cap, &n, blob, NODEKEY_PUB_LEN + len + NODEKEY_TAG_LEN) == 0);
+    return out;
+}
+
+/* A config's wifi.password as the controller sends it: sealed to the test node key (an empty
+ * one left out). */
+static void seal_wifi(cJSON *cfg)
+{
+    cJSON *w = cJSON_GetObjectItem(cfg, "wifi"), *pw = w ? cJSON_GetObjectItem(w, "password") : NULL;
+    char b64[256];
+    if (pw && pw->valuestring[0])
+        cJSON_AddStringToObject(w, "sealed", seal_pw(s_nk_pub, V_NODE, pw->valuestring, b64, sizeof(b64)));
+    if (pw)
+        cJSON_DeleteItemFromObject(w, "password");
+}
+
+static void test_nodekey(void)
+{
+    static const uint8_t other_id[6] = { 0x30, 0xed, 0xa0, 0x00, 0x00, 0x02 };
+    static cfg_t c;
+    uint8_t blob[200], priv2[NODEKEY_PRIV_LEN], pub2[NODEKEY_PUB_LEN];
+    char pw[64], b64[256], json[512], err[160];
+    size_t n = 0;
+    const char *sealed = nk_field("sealed"), *want = nk_field("password");
+
+    /* The controller's seal opens here, with this node's key and ID alone. */
+    CHECK(mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)sealed, strlen(sealed)) == 0);
+    CHECK(!nodekey_open(s_nk_priv, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !strcmp(pw, want));
+    CHECK(nodekey_open(s_nk_priv, other_id, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
+    CHECK(nodekey_gen(priv2, pub2, test_rng, NULL));
+    CHECK(nodekey_open(priv2, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !pw[0]);
+    /* Altered anywhere (E, the password, the tag): refused; an E off the curve before any
+     * use of the key (an invalid-curve point). */
+    size_t at[] = { 1, NODEKEY_PUB_LEN + 1, n - 1 };
+    for (size_t i = 0; i < 3; i++) {
+        blob[at[i]] ^= 1;
+        const char *why = nodekey_open(s_nk_priv, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL);
+        CHECK(why && !pw[0] && (i > 0 || strstr(why, "bad key point")));
+        blob[at[i]] ^= 1;
+    }
+    CHECK(nodekey_open(s_nk_priv, V_NODE, blob, NODEKEY_PUB_LEN + 7 + NODEKEY_TAG_LEN, pw, sizeof(pw), test_rng, NULL));
+    CHECK(nodekey_open(s_nk_priv, V_NODE, blob, n, pw, 8, test_rng, NULL)); /* no room */
+
+    /* Round trip: sealed here to a new key, opened with it, a 63-byte password too. */
+    const char *long_pw = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!";
+    seal_pw(pub2, V_NODE, long_pw, b64, sizeof(b64));
+    CHECK(mbedtls_base64_decode(blob, sizeof(blob), &n, (const unsigned char *)b64, strlen(b64)) == 0);
+    CHECK(!nodekey_open(priv2, V_NODE, blob, n, pw, sizeof(pw), test_rng, NULL) && !strcmp(pw, long_pw));
+
+    /* In a config: opened into the Wi-Fi password; sealed to another node's key, refused. */
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", sealed);
+    CHECK(cfg_try(&c, json, err) && !strcmp(c.wifi_pass, want));
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", b64);
+    CHECK(!cfg_try(&c, json, err) && strstr(err, "wifi.sealed: does not open") && !c.wifi_pass[0]);
+    /* Plain text: refused, whatever else is right. */
+    CHECK(!cfg_try(&c, "{\"wifi\":{\"ssid\":\"home\",\"password\":\"secret123\"}}", err) &&
+          strstr(err, "wifi.password: never in plain text") && !c.wifi_pass[0]);
+    /* No password: an open network. */
+    CHECK(cfg_try(&c, "{\"wifi\":{\"ssid\":\"cafe\"}}", err) && !strcmp(c.wifi_ssid, "cafe") && !c.wifi_pass[0]);
+    /* A node without a key (none set) refuses a sealed password. */
+    cfg_set_unseal(NULL);
+    snprintf(json, sizeof(json), "{\"wifi\":{\"ssid\":\"home\",\"sealed\":\"%s\"}}", sealed);
+    CHECK(!cfg_try(&c, json, err) && strstr(err, "no node key"));
+    cfg_set_unseal(test_unseal);
+}
+
 static void test_cfg_reboot_vectors(void)
 {
     /* The controller's classification (controller/internal/nodecfg, Compare) on the same
@@ -5374,6 +5882,8 @@ static void test_cfg_reboot_vectors(void)
     cJSON_ArrayForEach(v, vec)
     {
         const char *name = cJSON_GetObjectItem(v, "name")->valuestring;
+        seal_wifi(cJSON_GetObjectItem(v, "from"));
+        seal_wifi(cJSON_GetObjectItem(v, "to"));
         char *from = cJSON_PrintUnformatted(cJSON_GetObjectItem(v, "from"));
         char *to = cJSON_PrintUnformatted(cJSON_GetObjectItem(v, "to"));
         char err[160];
@@ -5538,7 +6048,7 @@ static void test_keys(void)
 }
 
 /* What a node does with its keys at boot (keys_decide), with and without a seed: a
- * key-neutral build falls back on nothing (setup mode); a seed build seeds them. */
+ * key-neutral build falls back on nothing (setup mode); a seed build falls back on its seed. */
 static void test_keys_decide(void)
 {
     static const struct {
@@ -5607,16 +6117,12 @@ static void test_keys_release(void)
 
     /* signed with the recovery key for this node: taken */
     CHECK(rel_verify(V_KEYS, &t, 0, UINT64_MAX, &m) == NULL && m.kind == REL_KEYS && m.key_id == 1);
-    CHECK(rel_keys_check(&m, &t) == NULL && m.payload_len == KEYS_REL_LEN && m.seq == 4000);
+    CHECK(rel_keys_check(&m) == NULL && m.payload_len == KEYS_REL_LEN && m.seq == 4000);
     CHECK(strcmp(rel_kind_name(REL_KEYS), "keys") == 0 && REL_KEYS == 7);
     /* with the release key: a valid signature, but never for KEYS */
     CHECK(rel_verify(V_KEYS_REL0, &t, 0, UINT64_MAX, &m) == NULL && m.key_id == 0);
-    why = rel_keys_check(&m, &t);
+    why = rel_keys_check(&m);
     CHECK(why && strstr(why, "recovery key"));
-    /* addressed to any node: refused */
-    CHECK(rel_verify(V_KEYS_ANY, &t, 0, UINT64_MAX, &m) == NULL);
-    why = rel_keys_check(&m, &t);
-    CHECK(why && strstr(why, "one node"));
     /* another node, another chip image */
     rel_trust_t other = t;
     other.node_id[5] ^= 1;
@@ -5632,7 +6138,7 @@ static void test_keys_release(void)
     CHECK(rel_verify(V_KEYS, &t, 3999, UINT64_MAX, &m) == NULL);
     /* not a KEYS release */
     CHECK(rel_verify(V_FW, &t, 0, UINT64_MAX, &m) == NULL);
-    CHECK(rel_keys_check(&m, &t) != NULL);
+    CHECK(rel_keys_check(&m) != NULL);
 
     /* the payload: the bytes tools/release.py made, and every malformed one refused */
     keys_rel_t r, r2;
@@ -5869,8 +6375,57 @@ static void test_sup(void)
     CHECK(!sup_stall_settled(SUP_STALL_WINDOW_MS - 1) && sup_stall_settled(SUP_STALL_WINDOW_MS));
 }
 
+/* A client sending a byte every 50 ms: each recv would wait well within a per-recv timeout. */
+static void *trickle(void *arg)
+{
+    int s = *(int *)arg;
+    for (int i = 0; i < 20 && send(s, "x", 1, MSG_NOSIGNAL) == 1; i++)
+        usleep(50000);
+    return NULL;
+}
+
+/* A slow TCP/53 client: the whole message by its deadline, not each recv (server.c). */
+static void test_tcp_deadline(void)
+{
+    int sv[2];
+    uint8_t buf[32];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    CHECK(send(sv[1], "ab", 2, 0) == 2);
+    CHECK(tcp_io_by(sv[0], buf, 2, false, fwd_now_us() + 200000) && !memcmp(buf, "ab", 2));
+    pthread_t th;
+    pthread_create(&th, NULL, trickle, &sv[1]);
+    int64_t t0 = fwd_now_us();
+    errno = 0;
+    CHECK(!tcp_io_by(sv[0], buf, 20, false, t0 + 300000) && errno == EAGAIN);
+    int64_t took = fwd_now_us() - t0;
+    CHECK(took >= 290000 && took < 600000);
+    pthread_join(th, NULL);
+    errno = 0;
+    CHECK(!tcp_io_by(sv[0], buf, 1, false, t0) && errno == EAGAIN); /* already past */
+    close(sv[1]);
+    errno = 0;
+    while (tcp_io_by(sv[0], buf, 1, false, fwd_now_us() + 200000))
+        ; /* what the trickle left, then the end */
+    CHECK(errno != EAGAIN); /* ended, not slow */
+    close(sv[0]);
+
+    uint32_t held[6] = { 0 };
+    for (int i = 0; i < 3; i++) {
+        int k = tcp_slot(held, 6, 7, 3);
+        CHECK(k == i);
+        held[k] = 7;
+    }
+    CHECK(tcp_slot(held, 6, 7, 3) == TCP_SLOT_CAP);
+    CHECK(tcp_slot(held, 6, 8, 3) == 3);
+    held[1] = 0;
+    CHECK(tcp_slot(held, 6, 7, 3) == 1);
+    held[1] = 9, held[3] = 9, held[4] = 9, held[5] = 9;
+    CHECK(tcp_slot(held, 6, 8, 3) == TCP_SLOT_FULL);
+}
+
 int main(void)
 {
+    nodekey_setup();
     g_zone = make_zone();
     CHECK(g_zone->n == 13); /* 14 in-zone adds, 1 duplicate dropped */
     test_names();
@@ -5880,6 +6435,7 @@ int main(void)
     test_cache_stress();
     test_cache_key();
     test_dnssec_relay();
+    test_relay_sizes();
     test_flights();
     test_flight_caps();
     test_flight_counts();
@@ -5888,6 +6444,7 @@ int main(void)
     test_flights_threads();
     test_flights_retry();
     test_fwd_fd_setsize();
+    test_tcp_deadline();
     test_fwdq_complete();
     test_fwdq_failover();
     test_fwdq_tcp();
@@ -5896,6 +6453,7 @@ int main(void)
     test_fwdq_alive();
     test_fwdq_load();
     test_fwd_random_port();
+    test_fwd_0x20();
     test_fwdq_select_backoff();
     test_health_upstream();
     test_load();
@@ -5910,11 +6468,13 @@ int main(void)
     test_health();
     test_led_patterns();
     test_config();
+    test_client_allow();
     test_services();
     test_memplan();
     test_place();
     test_cpuplan();
     test_cfg_reboot_vectors();
+    test_nodekey();
     test_keys();
     test_keys_decide();
     test_keys_release();
