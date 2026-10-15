@@ -255,7 +255,7 @@ What protects you:
   no API.
 - A strict Content Security Policy on every response: only the controller's own scripts
   and styles, no inline scripts, connections only to the controller, no framing. The
-  pages that install over USB (Nodes and the first run) also allow exactly two hashed
+  pages that install over USB (Nodes, a node's page and the first run) also allow exactly two hashed
   inline styles from ESP Web Tools, which is bundled with the controller, not loaded from a
   CDN.
 - Other headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,

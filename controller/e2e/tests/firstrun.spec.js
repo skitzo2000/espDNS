@@ -282,6 +282,7 @@ test("Make your keys: the release key in the controller, the recovery key in the
   expect(state.posts.at(-1)).toEqual(["step", { step: "keys" }]);
   // The next step, the first node, opens; Back it up opens the account panel at the backup.
   await expect(row(page, "first_node").getByRole("button", { name: "+ Add node" })).toBeVisible();
+  await expect(row(page, "first_node").getByRole("button", { name: "Install over USB" })).toBeVisible();
   await row(page, "keys").getByRole("button", { name: "Back it up" }).click();
   await expect(page.locator("aside.drawer #acct-safe")).toHaveAttribute("open", "");
   expect(await violations()).toEqual([]);
@@ -338,8 +339,12 @@ test("the nodes: + Add node lists the one found; the second step names the first
   await expect(row(page, "first_node")).toContainText("One node is on your network and not added yet.");
   await row(page, "first_node").getByRole("button", { name: "+ Add node" }).click();
   await expect(page.locator("#nqres")).toContainText(FOUND);
-  await expect(page.locator("#nqres")).toContainText("A new board over USB");
+  await expect(page.locator("#nqres")).not.toContainText("A new board over USB");
   await page.locator("#nq").press("Escape");
+  // A new board: Install over USB, its own button in the step.
+  await row(page, "first_node").getByRole("button", { name: "Install over USB" }).click();
+  await expect(page.getByRole("dialog", { name: "Install a board over USB" })).toBeVisible();
+  await page.keyboard.press("Escape");
   expect(await violations()).toEqual([]);
 
   const state2 = await fake(page, ["password", "keys", "first_node"]);
@@ -447,10 +452,11 @@ test("Nodes: a first run goes to the setup; after it, a checklist until done", a
   state.done.add("keys");
   await page.goto("./");
   const left = page.locator("#setup-left");
-  await expect(left).toContainText("2 of 7 steps done · next: add your first node");
+  await expect(left).toContainText("2 of 7 steps done · next: install and add your first node");
   await expect(left.getByRole("link", { name: "Continue" })).toHaveAttribute("href", "setup.html#next");
   await left.getByRole("link", { name: "Continue" }).click();
   await expect(row(page, "first_node").getByRole("button", { name: "+ Add node" })).toBeVisible();
+  await expect(row(page, "first_node").getByRole("button", { name: "Install over USB" })).toBeVisible();
   for (const s of ["zones", "router", "blocking"]) state.done.add(s);
   state.nodes = [node(`${DNS2}:80`, "aa:bb:cc:00:00:02", "dns2"), node(`${DNS3}:80`, "aa:bb:cc:00:00:03", "dns3")];
   await page.goto("./");

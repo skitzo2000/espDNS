@@ -228,7 +228,8 @@ The board catalog is JSON files in [`boards/`](../boards/), each marked *tested*
 - Waveshare ESP32-S3-ETH (W5500 Ethernet, optional PoE, SD over SPI)
 - Seeed XIAO ESP32S3 Sense (Wi-Fi, or wired with an added W5500 module)
 
-**Install over USB** (+ Add node, on Nodes) flashes a node from the browser. The controller
+**Install over USB** (on Nodes, and Reinstall over USB on a node's page) flashes a node from
+the browser; **+ Add node** then adds it to your nodes. The controller
 assembles the image from a chip image plus a `board` partition and a `keys` partition (your
 release and recovery public keys) in milliseconds; it doesn't compile anything. For a Wi-Fi
 board it then sends the network name and password over USB. **Write keys only** writes just

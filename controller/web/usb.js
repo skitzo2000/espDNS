@@ -1,5 +1,5 @@
-// Install over USB (+ Add node's "A new board over USB", and a found node's
-// "Update over USB"): a panel on Nodes that installs espDNS on a board plugged
+// Install over USB (its own button on Nodes and in the first run, a found node's "Update
+// over USB", and a node page's "Reinstall over USB"): a panel that installs espDNS on a board plugged
 // into this computer, with ESP Web Tools (the vendored copy, web/vendor/esp-web-tools). The
 // board from the catalogue, or one of yours, or one described from its pinout (the custom
 // board form, POST /api/boards/check, saved with POST /api/boards); the node's address,
@@ -14,10 +14,11 @@
 // release, fetched, checked and imported); each board says which firmware it gets ("project release v0.0.3", "your
 // build"). Once installed, the panel waits for the node on the network (POST
 // /api/nodes/lookup at its address, or /api/nodes/found for one on DHCP) and, when it
-// answers, hands it to o.found (+ Add node's next step for it). The page that opens it needs
+// answers, says so with Add it now, which hands it to o.found (+ Add node, with it chosen and
+// its address filled in). Installing and adding are two steps. The page that opens it needs
 // websec.USBCSP: the flasher's "no port picked" dialog has two style attributes, and its
 // Wi-Fi form three it sets first, allowed by hash there only.
-import { h, arr, obj, str, panel, api, hostOnly, getJSON, post, toast } from "./shell.js";
+import { h, arr, obj, str, panel, api, hostOnly, getJSON, post } from "./shell.js";
 import { every } from "./common.js";
 import { firmwareBox, readFirmware, labelOf } from "./firmware.js";
 
@@ -167,8 +168,10 @@ function boardToForm(f, b) {
 // ---- the panel ----------------------------------------------------------------------------
 // openUSB opens it. o: board (a board's name, chosen), image (a chip image: a board not in
 // the list opens the custom form on it), address and gateway (prefilled), update (a found
-// node's firmware updated: the title says so), name (what the board is called in the title),
-// found(node) (the node installed, once it answers on the network; the panel closes first).
+// node's firmware updated: the title says so), reinstall (one of your nodes installed again,
+// from its page: the title says so), name (what the board is called in the title),
+// found(node) (the node installed, once it answers on the network: Add it now closes the
+// panel and calls it).
 // flashButton is ESP Web Tools' install button for a prepared build's manifest, its activate
 // slot our own button.
 function flashButton(id, label, actId) {
@@ -317,7 +320,8 @@ export async function openUSB(o = {}) {
   // the panel closes or another image is prepared.
   let stops = [];
   const stopAll = () => { stops.forEach(f => f()); stops = []; };
-  const p = panel(o.keys ? `Write keys to ${o.name || "it"} over USB` : o.update ? `Update ${o.name || "it"} over USB` : "Install a board over USB", stopAll);
+  const p = panel(o.keys ? `Write keys to ${o.name || "it"} over USB` : o.update ? `Update ${o.name || "it"} over USB`
+    : o.reinstall ? `Reinstall ${o.name || "it"} over USB` : "Install a board over USB", stopAll);
   p.aside.classList.add("usb");
   const supported = "serial" in navigator;
   p.body.append(h("p", { class: "small" }, o.keys
@@ -554,8 +558,8 @@ export async function openUSB(o = {}) {
   // afterInstall follows the install in ESP Web Tools' dialog and says how it went, in box.
   // Once it's done, it waits for the node on the network: at its address (POST
   // /api/nodes/lookup), or, on DHCP, as a node of this board not found before
-  // (/api/nodes/found). One that answers goes to o.found (+ Add node, with it chosen), or is
-  // said. Nothing after a minute: what to check, still waiting.
+  // (/api/nodes/found). One that answers is said, with Add it now when there is o.found
+  // (+ Add node, with it chosen). Nothing after a minute: what to check, still waiting.
   function afterInstall(box, act, net, board) {
     const ip = net.address === "dhcp" ? "" : str(net.address).split("/")[0];
     const wifi = onWiFi(board);
@@ -633,9 +637,8 @@ export async function openUSB(o = {}) {
       const at = hostOnly(n.host) || ip;
       if (listed) { say(h("p", { class: "small", id: "usb-arrived" }, `It's back on your network at ${at}, and on Nodes as before.`)); return; }
       if (o.found) {
-        toast(`It's on your network at ${at}.`);
-        p.close();
-        o.found(n);
+        say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Next, add it to your nodes.`),
+          h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(n); } }, "Add it now")));
         return;
       }
       say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Add it from + Add node on Nodes.`));

@@ -1,8 +1,9 @@
 // + Add node: the button becomes an address box with what it
-// finds right under it. Empty, it lists the nodes found on the network and not added yet
-// (/api/nodes/found) and a new board over USB (the Install over USB panel, usb.js); an
-// address typed is looked up there (POST /api/nodes/lookup: that address
-// only, nothing resolved). A node chosen gets a name (a node config from <data>/configs, which
+// finds right under it, on the network only. Empty, it lists the nodes found on the network
+// and not added yet (/api/nodes/found); an address typed is looked up there (POST
+// /api/nodes/lookup: that address only, nothing resolved). A new board isn't here: it is
+// installed first with Install over USB (usb.js, its own button), which then hands the node
+// to next() here once it answers. A node chosen gets a name (a node config from <data>/configs, which
 // carries the name) and how it gets its address: DHCP, reserved for it in your router (not
 // on a network in settings.json's no_dhcp), or a fixed address with its gateway, checked
 // together. An existing config is read (GET /api/configs/<name>) and its network saved back
@@ -90,7 +91,8 @@ export function usbButton(f, cls, name, before, found) {
 
 // addNode draws + Add node into box. opts: found() the nodes found, nodes() the listed
 // ones, boardName(b), nodeKey(n), imageVersion(image) the version a USB install of that chip
-// image gives ("" unknown), done() after a node is added. It returns {open(found), setup(found)}.
+// image gives ("" unknown), done() after a node is added. It returns {open(found), setup(found),
+// next(found)}: next is Install over USB's found, the node it installed.
 export function addNode(box, opts) {
   const st = { open: false, sel: null, q: "", look: null, src: null, form: null, flow: null, sess: {} };
   session.then(s => { st.sess = s; });
@@ -196,7 +198,8 @@ export function addNode(box, opts) {
       st.form = { config: c ? c.name : "", address: runsOn(f), gateway: runsOn(f) ? str(f.gateway) : "", noDHCP, says,
         how: says === "dhcp" && !noDHCP ? "dhcp" : "fixed", file: null };
       render();
-      if (st.form.config) readConfig(f, st.form.config);
+      // (render may have made it a new name: no config file has one to read.)
+      if (st.form.config && st.form.config !== NEW) readConfig(f, st.form.config);
     }
   }
 
@@ -272,8 +275,8 @@ export function addNode(box, opts) {
       if (r.found && r.node) return chosen(r.node);
       return [h("div", { class: "found" }, h("b", { class: "mono" }, l.addr),
         h("span", { class: "small" }, r.answered ? "Something answers there, but it isn't an espDNS node."
-          : "No espDNS node answers there. A new board needs installing over USB first.")),
-      h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => { close(); openUSB({ found: next }); } }, "Install a board over USB"))];
+          : "No espDNS node answers there. A new board is installed with Install over USB first, then added here.")),
+      h("div", { class: "actions" }, usbNew())];
     }
     const found = arr(opts.found());
     // Every item acts on a click anywhere on it, or Enter: a found node opens its setup
@@ -287,11 +290,14 @@ export function addNode(box, opts) {
           : h("button", { class: "btn small", type: "button", onclick: () => pick(f) }, "Set up")));
     return [h("div", { class: "stack nogap" },
       h("span", { class: "small muted" }, "Found on your network"),
-      rows.length ? rows : h("p", { class: "hint" }, "Nothing new right now."),
-      item(() => { close(); openUSB({ found: next }); }, "A new board over USB: start",
-        h("div", {}, h("b", {}, "A new board over USB"), h("div", { class: "tagline" }, "Plug it into this computer and install espDNS")),
-        h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB({ found: next }); } }, "Start"))),
+      rows.length ? rows : h("p", { class: "hint" }, "Nothing new right now. A new board is installed with Install over USB first, then added here."),
+      rows.length ? null : h("div", { class: "actions" }, usbNew())),
     h("span", { class: "hint" }, "Or type the address of a node not listed here.")];
+  }
+
+  // usbNew opens Install over USB for a new board: what it installs comes back to next.
+  function usbNew() {
+    return h("button", { class: "btn small", type: "button", onclick: () => { close(); openUSB({ found: next }); } }, "Install over USB");
   }
 
   // item is one choice in the list: a click anywhere on it (its own buttons and links do
@@ -641,7 +647,7 @@ export function addNode(box, opts) {
     return p;
   }
 
-  return { open, setup };
+  return { open, setup, next };
 }
 
 // blocker is why a found node isn't added yet, as its row and item say it.

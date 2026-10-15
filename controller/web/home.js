@@ -1,6 +1,8 @@
 // Nodes, the home page (index.html): one
-// sentence first (whether DNS is answering, or what needs attention), Copy DNS servers and
-// + Add node at the top right (and Update all while two or more nodes have an update), the
+// sentence first (whether DNS is answering, or what needs attention), Copy DNS servers,
+// Install over USB (a new board, usb.js; once it answers, Add it now opens + Add node with it)
+// and + Add node (nodes on the network) at the top right (and Update all while two or more
+// nodes have an update), the
 // fleet's facts, one row per node on one line (nodeRow), the nodes found on the network and
 // not added yet, and the last hour's charts. A node
 // opens its page (node.html, node.js); a found node its setup panel (addnode.js: what it
@@ -13,6 +15,7 @@ import { shell, h, arr, obj, str, hostOnly, led, addr, copyText, toast, refreshC
   getJSON, session, nodeText, answering, inService } from "./shell.js";
 import { onNodes, every, releaseKey } from "./common.js";
 import { addNode, blocker, usbButton } from "./addnode.js";
+import { openUSB } from "./usb.js";
 import { stateOf, upFor, readBoards, mini, fmtNum, pct, andList } from "./nodeview.js";
 import { openUpdate as updatePanel } from "./update.js";
 import { setupCheck } from "./setupcheck.js";
@@ -47,7 +50,7 @@ const serving = () => arr(data.nodes).filter(inService);
 const names = ns => ns.map(n => nodeText(n));
 const both = ns => (ns.length === 2 ? "both nodes" : `all ${ns.length} nodes`);
 
-// ---- the head: the sentence, Copy DNS servers, + Add node --------------------------------
+// ---- the head: the sentence, Copy DNS servers, Install over USB, + Add node ----------------
 
 function renderHead() {
   const ns = serving();
@@ -98,6 +101,7 @@ const adder = addNode($("add-node"), {
   imageVersion: image => str(obj(obj(data.updates).builds && arr(data.updates.builds).find(b => b.source === `images/${image}` && !b.error)).version),
   done: () => { readFound(); refreshChanges(); },
 });
+$("install-usb").addEventListener("click", () => openUSB({ found: adder.next }));
 
 // ---- the update -------------------------------------------------------------------------
 
@@ -173,7 +177,7 @@ function foundRow(f) {
   // The next step's button: Add in the Load column; Update over USB beside its flag.
   const act = f.next ? h("button", { class: "btn small primary", type: "button", onclick: () => adder.open(f) }, "Add")
     : f.install === "usb" ? null : h("button", { class: "btn small", type: "button", onclick: () => adder.setup(f) }, "Set up");
-  const usb = f.install === "usb" ? usbButton(f, "btn small primary", boardName(f.board) || str(f.hostname)) : null;
+  const usb = f.install === "usb" ? usbButton(f, "btn small primary", boardName(f.board) || str(f.hostname), null, adder.next) : null;
   return h("div", { class: "r r-new", "data-found": "", onclick: e => { if (!e.target.closest("button, a, input, label")) adder.setup(f); } },
     h("div", {}, h("span", { class: "name", title: [boardName(f.board), str(f.hostname)].filter(Boolean).join(" · ") || null },
       f.adopted && f.name ? str(f.name) : "New device found")),
@@ -192,7 +196,7 @@ function renderRows() {
   if (data.nodes === null) rows.push(h("div", { class: "empty" }, h("p", {}, "Reading the nodes…")));
   else if (!rows.length) rows.push(h("div", { class: "empty with-mascot" },
     h("img", { class: "mascot", src: "img/artie.webp", width: 56, height: 96, alt: "", title: "Artie A. Record" }),
-    h("p", {}, "No node yet. + Add node finds nodes on your network, or installs a new board over USB.")));
+    h("p", {}, "No node yet. Install a new board with Install over USB, then add it with + Add node.")));
   head.hidden = !ns.length && !arr(data.found).length;
   box.replaceChildren(head, ...rows);
 }

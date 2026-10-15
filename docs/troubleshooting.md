@@ -85,7 +85,7 @@ Wi-Fi settings in its config.
 
 **`no address`.** The link is up but there's no IP address.
 Fix: on DHCP (board definition or config says `dhcp`), the network needs a DHCP server; if
-it has none, reinstall from **Install over USB** (+ Add node) with a static address. On a
+it has none, use **Reinstall over USB** on its page and give it a static address. On a
 static address, check the address, prefix and gateway in the config.
 
 ### Degraded reasons
@@ -154,7 +154,7 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 Fix: turn off services it doesn't need or use a smaller blocklist, then reboot.
 
 **`no board definition`.** It runs on defaults: no Ethernet, no SD card, maybe Wi-Fi.
-Fix: flash it again with **Install over USB** (+ Add node).
+Fix: flash it again with **Reinstall over USB** on its page (or **Install over USB** on Nodes).
 
 **`config`.** The stored config was refused, unreadable or failed its trial (a memory plan
 that doesn't fit the board too), so the node runs its older config or firmware defaults.

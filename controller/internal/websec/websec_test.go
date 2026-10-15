@@ -26,7 +26,7 @@ var want = map[string]string{
 	"Permissions-Policy":           "serial=(self), usb=(), camera=(), microphone=(), geolocation=()",
 }
 
-// The Nodes page's (USBPages): the same, and style attributes with exactly the vendored esp-web-tools'
+// The pages that open Install over USB (USBPages): the same, and style attributes with exactly the vendored esp-web-tools'
 // two static values and the three its Wi-Fi form's styleMaps start with.
 const wantUSBCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; " +
 	"style-src-attr 'unsafe-hashes' 'sha256-w68cv7ZL7DW/1c2v0g4i6aPlMi0iRw663JuMxEmNmU4=' 'sha256-2PZQPqAcY6IE7H879XiZ2Hm3cBUNVB41T1m3kjNvN6E=' " +
@@ -57,7 +57,7 @@ func TestHeaders(t *testing.T) {
 		"/index.html":     wantUSBCSP,
 		"/index.html?x=1": wantUSBCSP,
 		"/login.html":     want["Content-Security-Policy"],
-		"/node.html":      want["Content-Security-Policy"],
+		"/node.html":      wantUSBCSP,
 		"/usb.js":         want["Content-Security-Policy"],
 		"/index.html/":    want["Content-Security-Policy"],
 		"/vendor/esp-web-tools/install-button.js": want["Content-Security-Policy"],
@@ -80,12 +80,12 @@ func TestHeaders(t *testing.T) {
 }
 
 func TestCSPFor(t *testing.T) {
-	for _, p := range []string{"/", "/index.html", "/setup.html"} {
+	for _, p := range []string{"/", "/index.html", "/setup.html", "/node.html"} {
 		if got := CSPFor(p); got != wantUSBCSP {
 			t.Errorf("%s: %q", p, got)
 		}
 	}
-	for _, p := range []string{"/Index.html", "/index", "/x/index.html", "/usb.js", "/node.html", "/zones.html"} {
+	for _, p := range []string{"/Index.html", "/index", "/x/index.html", "/usb.js", "/zones.html"} {
 		if got := CSPFor(p); got != want["Content-Security-Policy"] {
 			t.Errorf("%s: %q", p, got)
 		}

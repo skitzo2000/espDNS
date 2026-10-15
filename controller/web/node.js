@@ -1,7 +1,8 @@
 // The node page (node.html#<node ID or address>),
 // opened from a node on Nodes: its name, state (the LED) and why, its address
 // and MAC to copy, its board, link, uptime and firmware version; its actions (Blink its
-// light, Restart, Update firmware), each a job; what is wrong explained in words, with what
+// light, Restart, Update firmware), each a job, and Reinstall over USB (the Install over USB
+// panel, usb.js, on its board and address); what is wrong explained in words, with what
 // to do; its settings as hide-and-expand rows, saved as a pending change (POST
 // /api/nodes/{id}/settings) for the header's Apply; what it serves (zones, blocking, memory);
 // the last hour; its recent changes; and, under Details, the rest of its /status, the cache
@@ -13,6 +14,7 @@ import { shell, h, arr, obj, str, hostOnly, led, addr, mac, toast, panel, refres
 import { onNodes, every, releaseKey } from "./common.js";
 import { stateOf, reason, upFor, linkWord, readBoards, mini, fmtNum, pct, andList, sentenceCase, sinceWords } from "./nodeview.js";
 import { openUpdate } from "./update.js";
+import { openUSB } from "./usb.js";
 
 shell("index.html");
 
@@ -288,11 +290,22 @@ function renderHead() {
       : h("button", { class: "btn", type: "button", id: "svc-out", disabled: !!noSvc, onclick: () => openOut(n) }, "Take out of service");
     rm = h("button", { class: "btn danger", type: "button", id: "svc-remove", disabled: !!serviceWhy(n, false), onclick: () => openRemove(n) }, "Remove from the group");
   }
-  acts.replaceChildren(...[blink, restart, update, svc, rm].filter(Boolean));
+  // Reinstall over USB: one of your nodes, offline too, on its board and the address it runs.
+  const usb = n.source === "settings" ? h("button", { class: "btn", type: "button", id: "usb-reinstall", disabled: !data.sess.logged_in,
+    onclick: () => openUSB(reinstallFor(n)) }, "Reinstall over USB") : null;
+  acts.replaceChildren(...[blink, restart, update, usb, svc, rm].filter(Boolean));
   off.textContent = no || noId;
   // No release key: where it is imported, a click away.
   if (data.key && !data.key.present && (no || noId)) off.append(" ", h("a", { href: "setup.html#next" }, "Set up ›"));
   off.hidden = !(no || noId);
+}
+
+// reinstallFor is openUSB's options for the node: its board, and the address it runs on (its
+// config's, else its own with /24) and gateway.
+function reinstallFor(n) {
+  const s = obj(n.status), c = obj(s.config);
+  const address = c.address === "dhcp" ? "dhcp" : str(c.ip) || `${ip(n)}/24`;
+  return { board: str(s.board), address, gateway: str(c.gateway), reinstall: true, name: nameOf(n) };
 }
 
 // ---- what's wrong, in words --------------------------------------------------------------

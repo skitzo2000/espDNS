@@ -360,6 +360,27 @@ test("a restart refused says why; a reboot pending offers Restart now", async ({
   await expect(page.getByRole("dialog", { name: "dns2 wasn't restarted" })).toContainText("last healthy node");
 });
 
+// Reinstall over USB: Install over USB on this page, on the node's board, with the address
+// and gateway it runs on; offline too.
+test("Reinstall over USB opens Install over USB on the node's board and address", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [{ ...node(DNS2, ID2, "dns2", "p4-ip101", { state: "healthy", answering: true, reasons: [] }, { mac: MAC2 },
+    { config: { name: "dns2", source: "node", seq: 7, address: "static", ip: `${DNS2}/24`, gateway: "192.0.2.1" } }), online: false }] }));
+  await open(page, ID2);
+  const b = page.locator("#acts").getByRole("button", { name: "Reinstall over USB" });
+  await expect(b).toBeEnabled();
+  await b.click();
+  const u = page.getByRole("dialog", { name: "Reinstall dns2 over USB" });
+  await expect(u).toBeVisible();
+  await expect(u.locator("#usb-board")).toHaveValue("p4-ip101");
+  await expect(u.locator("#usb-addr")).toHaveValue(`${DNS2}/24`);
+  await expect(u.locator("#usb-gw")).toHaveValue("192.0.2.1");
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
 test("a node not known, and a node not answering", async ({ page }) => {
   await login(page);
   await fake(page);
