@@ -26,7 +26,12 @@ func healthcheck(listen string, timeout time.Duration) error {
 		host = "127.0.0.1"
 	}
 	c := &http.Client{Timeout: timeout}
-	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/")
+	req, err := http.NewRequest(http.MethodGet, "http://"+net.JoinHostPort(host, port)+"/", nil)
+	if err != nil {
+		return err
+	}
+	req.Host = net.JoinHostPort("localhost", port) // a localhost name: accepted from this machine with -url too (internal/site)
+	resp, err := c.Do(req)
 	if err != nil {
 		return err
 	}

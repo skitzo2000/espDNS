@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skitzo2000/espdns/controller/internal/site"
 	"github.com/skitzo2000/espdns/controller/internal/version"
 )
 
@@ -37,7 +38,8 @@ import (
 //
 // A session has two halves. The cookie is HttpOnly (no script reads it), SameSite=Strict
 // (no other site's page sends it) and named for the port the page came by
-// (espdns_session_8480), not Secure: the controller is plain HTTP on localhost. But a
+// (espdns_session_8480), not Secure: the controller is plain HTTP on localhost (Secure
+// when the request came by the controller's https -url, through its proxy: site.Public). But a
 // browser keeps cookies by host, not port: whatever else listens on another localhost port
 // gets this cookie when the browser goes there, and can set one of this name. So the
 // cookie alone opens only the pages and /build/ (no data). The other half, the session's
@@ -50,7 +52,8 @@ import (
 //
 // Failed logins back off per client: a browser by the device token the login page keeps
 // (one this run of the controller made, sent in X-Login-Device), else by its address, all
-// of loopback as one (addressKey).
+// of loopback as one (addressKey). Behind a reverse proxy the address is the one the proxy
+// adds to X-Forwarded-For (site.Client), taken from a -proxy source only.
 
 // CookiePrefix is the session cookie's name before the port.
 const CookiePrefix = "espdns_session_"
@@ -255,7 +258,7 @@ func (a *Auth) clientKey(r *http.Request) string {
 	if id := a.Device(r.Header.Get(DeviceHeader)); id != "" {
 		return "device " + id
 	}
-	return addressKey(r.RemoteAddr)
+	return addressKey(site.Client(r))
 }
 
 // addressKey is a client's address as the backoff counts it: loopback is one client (any
@@ -296,7 +299,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func (a *Auth) cookie(r *http.Request, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{Name: CookieName(r.Host), Value: value, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, MaxAge: maxAge}
+		SameSite: http.SameSiteStrictMode, MaxAge: maxAge, Secure: site.Public(r)}
 }
 
 func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -315,14 +318,14 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusTooManyRequests, err.Error())
 		return
 	case errors.Is(err, ErrBadLogin):
-		log.Printf("login: failed from %s", r.RemoteAddr) // not the user given: it may be a password typed in the wrong box
+		log.Printf("login: failed from %s", site.Client(r)) // not the user given: it may be a password typed in the wrong box
 		httpError(w, http.StatusUnauthorized, err.Error())
 		return
 	case err != nil:
 		httpError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	log.Printf("login: %s from %s", s.User, r.RemoteAddr)
+	log.Printf("login: %s from %s", s.User, site.Client(r))
 	a.startSession(w, r, t, s)
 }
 
@@ -342,7 +345,8 @@ func (a *Auth) startSession(w http.ResponseWriter, r *http.Request, t string, s 
 // handleFirstPassword sets the first password from the browser, the first run's first
 // step: while none is set only (409 after, whatever the request), from a client on this
 // machine only (a loopback address: the controller listens on loopback, so this holds
-// unless something on the machine relays to it), besides LocalOnly's localhost Host and no
+// unless something on the machine relays to it; never a request by the -url, through the
+// reverse proxy, wherever it runs), besides LocalOnly's localhost Host and no
 // other site's Origin in front, and JSON. Of two at once only one is set (CreatePassword);
 // the other is refused as any request once a password is set. Then it logs in, as
 // /api/login does. A password set by `espdns passwd` meanwhile wins the same way.
@@ -351,7 +355,7 @@ func (a *Auth) handleFirstPassword(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusConflict, ErrPasswordSet.Error())
 		return
 	}
-	if !loopbackClient(r.RemoteAddr) {
+	if !loopbackClient(r.RemoteAddr) || site.Public(r) { // a proxy on this machine relays others
 		httpError(w, http.StatusForbidden, "the first password is set from the controller's own machine only")
 		return
 	}
@@ -385,7 +389,7 @@ func (a *Auth) handleFirstPassword(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "the password could not be saved: "+err.Error())
 		return
 	}
-	log.Printf("first run: password set for %s from %s", body.User, r.RemoteAddr)
+	log.Printf("first run: password set for %s from %s", body.User, site.Client(r))
 	t, s, err := a.Login(body.User, body.Password, a.clientKey(r))
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "the password is set, but the login failed: "+err.Error())
@@ -428,11 +432,11 @@ func (a *Auth) handleReauth(w http.ResponseWriter, r *http.Request) {
 	g, until, err := a.Reauth(c.cookie, body.Password)
 	switch {
 	case errors.Is(err, ErrBadPassword):
-		log.Printf("reauth: %s: wrong password from %s", c.s.User, r.RemoteAddr)
+		log.Printf("reauth: %s: wrong password from %s", c.s.User, site.Client(r))
 		writeJSON(w, http.StatusForbidden, map[string]any{"reauth": true, "error": err.Error()})
 		return
 	case errors.Is(err, ErrReauthEnded):
-		log.Printf("reauth: %s: session ended after wrong passwords, from %s", c.s.User, r.RemoteAddr)
+		log.Printf("reauth: %s: session ended after wrong passwords, from %s", c.s.User, site.Client(r))
 		http.SetCookie(w, a.cookie(r, "", -1))
 		httpError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -440,7 +444,7 @@ func (a *Auth) handleReauth(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	log.Printf("reauth: %s from %s", c.s.User, r.RemoteAddr)
+	log.Printf("reauth: %s from %s", c.s.User, site.Client(r))
 	writeJSON(w, http.StatusOK, map[string]any{"reauth": g, "expires": until})
 }
 
@@ -477,7 +481,7 @@ func (a *Auth) handlePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Logout(c.cookie)
-	log.Printf("password: changed by %s from %s; every session ended", c.s.User, r.RemoteAddr)
+	log.Printf("password: changed by %s from %s; every session ended", c.s.User, site.Client(r))
 	http.SetCookie(w, a.cookie(r, "", -1))
 	writeJSON(w, http.StatusOK, map[string]any{"logged_in": false})
 }

@@ -9,7 +9,8 @@ espDNS is alpha (0.0.x). Keep a second DNS server around until you trust it.
 ## What you need
 
 - A Linux computer with Docker, on the same network as your boards.
-- Chrome or Edge on that computer, to install espDNS on the boards over USB.
+- Chrome or Edge, to install espDNS on the boards over USB. Usually on that same computer;
+  on a server, see [On a server](#on-a-server).
 - Two boards from the [catalog](hardware.md), each with a microSD card and a USB data cable
   (not charge-only).
 - Two free addresses on your network, outside your router's DHCP pool.
@@ -20,7 +21,7 @@ Make a folder, download one file, and start it:
 
 ```sh
 mkdir -p -m 700 espdns/data && cd espdns
-curl -fsSLO https://github.com/skitzo2000/espdns/releases/latest/download/compose.yaml
+curl -fsSLO https://github.com/skitzo2000/espDNS/releases/latest/download/compose.yaml
 printf 'ESPDNS_UID=%s\nESPDNS_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 docker compose up -d
 ```
@@ -28,6 +29,34 @@ docker compose up -d
 Your keys and settings live in `espdns/data`, as your own files. The `.env` line tells the
 controller to run as you, so they stay that way. Rather keep them in a Docker volume? The
 comments in `compose.yaml` show the swap.
+
+### On a server
+
+The setup below opens the controller at http://127.0.0.1:8480, in a browser on the machine
+that runs it. On a server you'll use a browser on another machine instead, and that is the
+machine you plug the boards into to install them over USB. Two ways to get there:
+
+- **An SSH tunnel.** Nothing to change on the server. From your own machine run
+  `ssh -N -L 8480:127.0.0.1:8480 <server>`, leave it running, and open
+  http://127.0.0.1:8480 there.
+- **Your HTTPS reverse proxy.** If you already run one on your network, it can serve the
+  controller at a name of yours, such as `https://espdns.example.net`, to any browser.
+  Set `ESPDNS_URL`, `ESPDNS_PROXY` and `ESPDNS_LISTEN` in `.env`
+  ([Behind a reverse proxy](security.md#behind-a-reverse-proxy)). The first password can't
+  be set through the proxy: set it on the server, in the `espdns` folder, before you open
+  the page:
+
+  ```sh
+  docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
+  ```
+
+On a server, run the controller as a system user of its own rather than your login user:
+make one (for example `sudo useradd --system --no-create-home espdns`), make it the owner of
+the `data` folder (`sudo chown espdns: data`), and put its ids in `.env` (`id -u espdns`,
+`id -g espdns`) instead of yours.
+
+Two controllers on one machine need different ports (`ESPDNS_LISTEN=127.0.0.1:8481` for the
+second): the browser keeps their login cookies apart by port.
 
 ## Run the setup
 
@@ -73,7 +102,7 @@ docker run --rm --network host alpine:3 nslookup example.com 192.0.2.53
 - To update, download the new `compose.yaml` and start it again, in the same folder:
 
   ```sh
-  curl -fsSLO https://github.com/skitzo2000/espdns/releases/latest/download/compose.yaml
+  curl -fsSLO https://github.com/skitzo2000/espDNS/releases/latest/download/compose.yaml
   docker compose up -d
   ```
 

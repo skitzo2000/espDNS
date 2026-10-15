@@ -250,7 +250,8 @@ Read `docker compose logs`.
 | `required variable ESPDNS_UID is missing a value` | No `.env`. Copy `.env.example` to `.env` and set `ESPDNS_UID` and `ESPDNS_GID` to your user's ids. |
 | It can't write to the data directory | The directory must exist and be owned by `ESPDNS_UID`. Docker creates a missing one as root, which the controller can't use. |
 | `settings: ...` | `settings.json` doesn't parse, or has a field it doesn't know. The message names the problem; fix the file. |
-| A refused `ESPDNS_LISTEN` | The dashboard listens on localhost only. Any other address is refused. |
+| A refused `ESPDNS_LISTEN` | The dashboard listens on localhost only. Another address needs `ESPDNS_URL` and `ESPDNS_PROXY` too, for an HTTPS reverse proxy ([security.md](security.md#behind-a-reverse-proxy)). |
+| `403 forbidden: the controller is reached ...` | With `ESPDNS_URL` set, only the reverse proxy (`ESPDNS_PROXY`) and the controller's own machine are served, by the URL's name. Check the proxy's source address, and that it passes the original `Host` on. |
 
 ### No update is offered
 
