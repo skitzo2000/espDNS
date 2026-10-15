@@ -423,11 +423,13 @@ export function addNode(box, opts) {
         ? `An address in ${netText(p)}, the node's own network.` : "An address in the node's own network.";
       gwHint.classList.toggle("bad", !!gwBad && !!fm.gateway);
     };
-    nn.addEventListener("input", () => {
-      const lower = nn.value.toLowerCase();
-      if (lower !== nn.value) { const a = nn.selectionStart, b = nn.selectionEnd; nn.value = lower; nn.setSelectionRange(a, b); }
+    // Lowercased as typed, caret kept; not mid-composition (IME), but once it ends.
+    const lower = e => {
+      if (!e.isComposing && nn.value !== nn.value.toLowerCase()) { const a = nn.selectionStart, b = nn.selectionEnd; nn.value = nn.value.toLowerCase(); nn.setSelectionRange(a, b); }
       fm.newName = nn.value.trim(); ok();
-    });
+    };
+    nn.addEventListener("input", lower);
+    nn.addEventListener("compositionend", lower);
     sel.addEventListener("change", () => {
       fm.config = sel.value;
       nnField.hidden = sel.value !== NEW;

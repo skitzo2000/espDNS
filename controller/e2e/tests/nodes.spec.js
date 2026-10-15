@@ -277,6 +277,9 @@ test("+ Add node: a new name, with the node's fixed address", async ({ page }) =
   await expect(go).toBeEnabled();
   await expect(go).toHaveAttribute("title", "");
   await expect(saved).toContainText("Saved to dns3-s3.json.");
+  await nn.press("Home"); // the caret stays where it was typed
+  await nn.pressSequentially("AB");
+  await expect(nn).toHaveValue("abdns3-s3");
   await nn.fill("dns5");
   await expect(go).toBeEnabled();
   await ip.fill("dhcp");
