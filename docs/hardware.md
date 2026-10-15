@@ -209,6 +209,22 @@ forwarders, and copies secondary zones into RAM again. Hosted zones and blocking
 until the card is back, and the node reports **degraded: SD card**. That's a stopgap: let
 the second node carry the load.
 
+#### What espDNS keeps on the card, and what it deletes
+
+Everything espDNS writes is in one folder, `dns2`: copied secondary zones in `dns2/zones`,
+hosted zones in `dns2/hosted` (`zones.0`, `zones.1`), the blocklist and your allowed and
+blocked sites in `dns2/block` (`list.0`, `list.1`, `overrides.0`, `overrides.1`). It never
+formats the card, and never reads, changes or deletes anything outside `dns2`.
+
+**At boot, a node deletes its own stored blocklist, allowed and blocked sites, or hosted
+zones when their signature doesn't match the keys it trusts now.** That happens after the
+board was installed again over USB with new keys, or after a key rotation following a
+compromise: those copies can never load again. The node shows that list as off, with the note
+`removed a copy signed with a key this node doesn't trust (from an earlier install)`, stays
+healthy, and the controller's next push puts a new copy there. Only those six files are ever
+deleted this way. A file it can't read, or one that is damaged, is kept and reported as
+failed, as before; and a node that can't read its keys partition deletes nothing.
+
 ## Wired first, Wi-Fi as a fallback
 
 At boot a node starts its board's Ethernet. If there's none, or it doesn't start (an

@@ -76,9 +76,10 @@ replaces it.
 
 A rotation after a compromise keeps no retired key. At the next boot the node's stored
 config fails its check, and it runs on board defaults and its built-in address; its stored
-zones and lists can never load again, so it deletes them and shows them as off. That lasts
-until they're pushed again with the new key (the controller does that right after the
-rotation).
+zones and lists can never load again, so it deletes those files from its SD card (nothing
+else there: [what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes))
+and shows them as off. That lasts until they're pushed again with the new key (the controller
+does that right after the rotation).
 
 **A rotation only wins if it reaches a node before the attacker does.** With the leaked
 release key, a firmware can change which keys a node trusts. Rotate at once.
