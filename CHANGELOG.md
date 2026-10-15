@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.4] - 2026-10-15
+
 ### Added
 
 - The controller can run behind your own HTTPS reverse proxy, so any browser on your
