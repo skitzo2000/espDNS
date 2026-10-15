@@ -238,11 +238,18 @@ The hosted zones: `state` (`off`, `loading`, `on`, `failed`), `seq`, `sha256`, `
 `reverted_from`, `bytes`, `limit_bytes`, `fallback` (why an older copy is in use, or
 `null`), `error` (or `null`), and `zones` (each with `name`, `serial`, `records`).
 
+`error` is why it failed. With `state` `off` it is a note, not a failure: copies on the card
+signed with a key this node doesn't trust (from an earlier install, the card kept) were
+deleted at boot, `"removed a copy signed with a key this node doesn't trust (from an earlier
+install)"`. It doesn't make the node degraded, and stays until they are pushed again.
+
 ### blocking
 
 - `list` and `overrides`: each with `state`, `seq`, `sha256`, `entries`, `tier` (`ram`,
   `sd`, or `""` when not on), `bytes`, `data_bytes`, `internal_bytes`, `slot`,
-  `reverted_from`, `fallback`, `error`.
+  `reverted_from`, `fallback`, `error`. `error` is why it failed, or, with `state` `off`,
+  the same note as the hosted zones' when copies signed with a key the node doesn't trust
+  were deleted at boot (not degraded).
 - `paused_s`: seconds of a pause left (0: not paused).
 - Counters: `blocked`, `cname_blocked`, `allowed`, `sector_reads`, `errors`.
 

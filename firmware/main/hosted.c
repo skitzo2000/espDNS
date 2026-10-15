@@ -133,16 +133,23 @@ static const char *slot_load(int slot, rel_manifest_t *m, hz_set_t **out, char *
     return why;
 }
 
-/* A slot's header (signature, node, image, kind), without reading the payload. */
-static const char *slot_header(int slot, rel_manifest_t *m)
+/* A slot's header (signature, node, image, kind), without reading the payload. A bundle
+ * signed with a key the node doesn't trust is deleted ("missing"; blk_slot_open): *dropped,
+ * if given, is set then. */
+static const char *slot_header(int slot, rel_manifest_t *m, bool *dropped)
 {
     char path[64];
+    int fd;
+    bool d;
     slot_path(slot, path, sizeof(path));
-    int fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return errno == ENOENT ? "missing" : "slot unreadable";
-    const char *why = blk_slot_read(fd, ota_trust_stored(), REL_ZONES, m);
-    close(fd);
+    const char *why = blk_slot_open(path, ota_trust_stored(), REL_ZONES, m, &fd, &d);
+    if (fd >= 0)
+        close(fd);
+    if (d) {
+        ESP_LOGW(TAG, "slot %d: %s", slot, blk_why_dropped);
+        if (dropped)
+            *dropped = true;
+    }
     return why;
 }
 
@@ -153,20 +160,21 @@ static void boot_load(void)
 {
     rel_manifest_t m[2];
     const char *why[2];
-    bool ok[2];
+    bool ok[2], dropped = false;
     uint64_t seq[2];
     for (int i = 0; i < 2; i++) {
-        why[i] = slot_header(i, &m[i]);
+        why[i] = slot_header(i, &m[i], &dropped);
         ok[i] = !why[i];
         seq[i] = ok[i] ? m[i].seq : 0;
     }
-    bool installed = ota_seq(REL_ZONES) != 0;
     if (!strcmp(why[0] ? why[0] : "", "missing") && !strcmp(why[1] ? why[1] : "", "missing")) {
-        s_state = installed ? ST_FAILED : ST_OFF;
-        if (installed) {
-            set_err("missing from the SD card");
+        const char *note;
+        bool failed = blk_slot_none(ota_seq(REL_ZONES) != 0, dropped, &note);
+        s_state = failed ? ST_FAILED : ST_OFF;
+        if (note)
+            set_err(note);
+        if (failed)
             ESP_LOGE(TAG, "installed, but missing from the SD card");
-        }
         return;
     }
     char err[160];
@@ -479,7 +487,7 @@ static const char *revert_why(rel_manifest_t *m)
     }
     rel_manifest_t om;
     int other = 1 - s_slot;
-    const char *why = slot_header(other, &om);
+    const char *why = slot_header(other, &om, NULL);
     why = blk_revert_check("zones", other, why, why ? 0 : om.seq, s_seq, s_reverted, "newer", s_reply,
                            sizeof(s_reply));
     if (!why && m)

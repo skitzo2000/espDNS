@@ -42,6 +42,7 @@ static bool sig_ok(const uint8_t *pub, const uint8_t *msg, size_t len, const uin
 }
 
 const char rel_why_ahead[] = "seq too far ahead of this node's clock";
+const char rel_why_sig[] = "bad signature";
 
 const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, uint64_t last_seq,
                        uint64_t max_seq, rel_manifest_t *m)
@@ -65,7 +66,7 @@ const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, 
      * retired release key only where the caller's trust has one (stored slots). */
     if (!sig_ok(t->keys[m->key_id], hdr, REL_MANIFEST_LEN, hdr + REL_MANIFEST_LEN) &&
         !(m->key_id == 0 && t->retired && sig_ok(t->retired, hdr, REL_MANIFEST_LEN, hdr + REL_MANIFEST_LEN)))
-        return "bad signature";
+        return rel_why_sig;
 
     memcpy(m->target, hdr + 10, 6);
     memcpy(m->board, hdr + 16, 16);

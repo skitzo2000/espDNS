@@ -1,5 +1,6 @@
 #include "block.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -290,6 +291,34 @@ const char *blk_slot_read(int fd, const rel_trust_t *t, uint8_t kind, rel_manife
     if (m->payload_len != len)
         return "slot file has the wrong length";
     return NULL;
+}
+
+const char *blk_slot_open(const char *path, const rel_trust_t *t, uint8_t kind, rel_manifest_t *m, int *fd,
+                          bool *dropped)
+{
+    *dropped = false;
+    memset(m, 0, sizeof(*m));
+    *fd = open(path, O_RDONLY);
+    if (*fd < 0)
+        return errno == ENOENT ? "missing" : "slot unreadable";
+    const char *why = blk_slot_read(*fd, t, kind, m);
+    if (why) {
+        close(*fd);
+        *fd = -1;
+    }
+    if (why == rel_why_sig && unlink(path) == 0) {
+        *dropped = true;
+        why = "missing";
+    }
+    return why;
+}
+
+const char blk_why_dropped[] = "removed a copy signed with a key this node doesn't trust (from an earlier install)";
+
+bool blk_slot_none(bool installed, bool dropped, const char **why)
+{
+    *why = dropped ? blk_why_dropped : installed ? "missing from the SD card" : NULL;
+    return installed && !dropped;
 }
 
 const char *blk_slot_hash(int fd, const rel_manifest_t *m)

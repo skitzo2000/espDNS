@@ -74,11 +74,12 @@ typedef struct {
 
 /* Checks the header: format, signature, target, board, and last_seq < seq <= max_seq.
  * Returns NULL and fills *m if the release may be applied, else a short reason: for a seq
- * above max_seq, rel_why_ahead. A copy already taken (a stored slot checked again) passes
- * UINT64_MAX. */
+ * above max_seq, rel_why_ahead; for a signature that doesn't verify, rel_why_sig. A copy
+ * already taken (a stored slot checked again) passes UINT64_MAX. */
 const char *rel_verify(const uint8_t hdr[REL_HEADER_LEN], const rel_trust_t *t, uint64_t last_seq,
                        uint64_t max_seq, rel_manifest_t *m);
 extern const char rel_why_ahead[];
+extern const char rel_why_sig[];
 
 /* What a KEYS release (REL_KEYS) must be besides what rel_verify checks, given m from it:
  * signed with the recovery key (key_id 1; the release key never rewrites the keys). NULL if
