@@ -28,7 +28,10 @@ version may change anything. Write each change under Unreleased as it merges;
   before, and an LED there can change the boot mode at reset or cut off USB logs, Improv and
   the console. The node page shows the refusal in the *Status light* row when you save. A pin
   the board's own LED already uses stays allowed. Board definitions still only warn about
-  these pins. See [docs/hardware.md](docs/hardware.md#a-status-light).
+  these pins. A node whose config already sets such a light has its next config push or
+  settings save refused with that message: move the light to another pin, or pick **Its
+  board's** to go back to the board's light. See
+  [docs/hardware.md](docs/hardware.md#a-status-light).
 
 ## [controller 0.0.4] - 2026-10-15
 

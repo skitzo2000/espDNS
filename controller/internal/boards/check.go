@@ -132,12 +132,8 @@ func pins(b Board) []pinUse {
 // LED is on it. nil if nothing; b is a board that passes Check.
 func CheckLED(b Board, l LED) error {
 	var own []int
-	if b.LED != nil {
-		for _, p := range b.LED.Pins() {
-			if p.Pin != nil {
-				own = append(own, *p.Pin)
-			}
-		}
+	for _, u := range pins(Board{LED: b.LED}) {
+		own = append(own, u.pin)
 	}
 	b.LED = &l
 	errs, _ := Check(b)
