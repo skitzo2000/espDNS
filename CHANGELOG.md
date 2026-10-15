@@ -32,6 +32,9 @@ version may change anything. Write each change under Unreleased as it merges;
   settings save refused with that message: move the light to another pin, or pick **Its
   board's** to go back to the board's light. See
   [docs/hardware.md](docs/hardware.md#a-status-light).
+- In + Add node, a grey Add node button now says why on hover: the name to pick, the release
+  key to make, or what's wrong with the address. The new name is lowercased as you type, and
+  the line under the form no longer reads `Saved to its.json` before there is a name.
 
 ## [controller 0.0.4] - 2026-10-15
 
