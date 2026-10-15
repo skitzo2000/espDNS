@@ -301,11 +301,11 @@ function renderHead() {
 }
 
 // reinstallFor is openUSB's options for the node: its board, and the address it runs on (its
-// config's, else its own with /24) and gateway.
+// config's, else its own with /24) and gateway; on DHCP it is waited for at its address.
 function reinstallFor(n) {
   const s = obj(n.status), c = obj(s.config);
   const address = c.address === "dhcp" ? "dhcp" : str(c.ip) || `${ip(n)}/24`;
-  return { board: str(s.board), address, gateway: str(c.gateway), reinstall: true, name: nameOf(n) };
+  return { board: str(s.board), address, gateway: str(c.gateway), reinstall: true, name: nameOf(n), at: ip(n) };
 }
 
 // ---- what's wrong, in words --------------------------------------------------------------

@@ -99,6 +99,9 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   await page.clock.fastForward("00:05");
   await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.");
   await expect(u.locator("#usb-waiting")).toHaveCount(0);
+  // Add it now is the one primary button; Install again steps back.
+  await expect(u.locator("#usb-add")).toHaveClass(/primary/);
+  await expect(u.locator("#usb-go")).not.toHaveClass(/primary/);
   if (process.env.E2E_SHOTS) {
     await u.locator("#usb-add").scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(process.env.E2E_SHOTS, "install-arrived.png") });

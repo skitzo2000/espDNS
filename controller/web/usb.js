@@ -169,9 +169,9 @@ function boardToForm(f, b) {
 // openUSB opens it. o: board (a board's name, chosen), image (a chip image: a board not in
 // the list opens the custom form on it), address and gateway (prefilled), update (a found
 // node's firmware updated: the title says so), reinstall (one of your nodes installed again,
-// from its page: the title says so), name (what the board is called in the title),
-// found(node) (the node installed, once it answers on the network: Add it now closes the
-// panel and calls it).
+// from its page: the title says so), at (the address it has: on DHCP, waited for there),
+// name (what the board is called in the title), found(node) (the node installed, once it
+// answers on the network: Add it now closes the panel and calls it).
 // flashButton is ESP Web Tools' install button for a prepared build's manifest, its activate
 // slot our own button.
 function flashButton(id, label, actId) {
@@ -561,7 +561,9 @@ export async function openUSB(o = {}) {
   // (/api/nodes/found). One that answers is said, with Add it now when there is o.found
   // (+ Add node, with it chosen). Nothing after a minute: what to check, still waiting.
   function afterInstall(box, act, net, board) {
-    const ip = net.address === "dhcp" ? "" : str(net.address).split("/")[0];
+    // A node of yours reinstalled on DHCP isn't found again (it's listed): it is waited for
+    // at the address it had (o.at).
+    const ip = net.address === "dhcp" ? str(o.at) : str(net.address).split("/")[0];
     const wifi = onWiFi(board);
     const say = (...kids) => box.replaceChildren(...kids);
     let gen = 0, halt = null;
@@ -581,6 +583,7 @@ export async function openUSB(o = {}) {
       if (!box.isConnected) { stopAll(); return; }
       if (state === "busy") {
         stopWait();
+        act.classList.add("primary");
         say(spinning("Installing. Keep the board plugged in until the installer says it's done."));
       } else if (state === "finished") {
         wait();
@@ -637,6 +640,7 @@ export async function openUSB(o = {}) {
       const at = hostOnly(n.host) || ip;
       if (listed) { say(h("p", { class: "small", id: "usb-arrived" }, `It's back on your network at ${at}, and on Nodes as before.`)); return; }
       if (o.found) {
+        act.classList.remove("primary"); // Add it now is the next step
         say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Next, add it to your nodes.`),
           h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(n); } }, "Add it now")));
         return;

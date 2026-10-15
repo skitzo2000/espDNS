@@ -276,6 +276,9 @@ onChanges(c => {
 readBoards(data.boards).then(render);
 session.then(s => {
   data.sess = s;
+  // Install over USB writes (a build, a lookup): logged in only, as + Add node.
+  $("install-usb").disabled = !s.logged_in;
+  $("install-usb").title = s.logged_in ? "" : s.password_set ? "Log in to install a board." : "Set a password and log in to install a board.";
   every(readFound);
   every(readUpdates, 30000);
   every(readDash, 10000);
