@@ -12,6 +12,10 @@ controller, run with Docker Compose, sets them up and keeps them updated.
 > versions. Read the [changelog](CHANGELOG.md) before you update.
 >
 > 0.0.3 is a breaking change: nodes on 0.0.1 or 0.0.2 must be installed again over USB.
+> A node installed again with new keys deletes the old blocklist, allowed and blocked sites
+> and hosted zones from its microSD card at first boot (nothing else on the card); apply them
+> again from the controller
+> ([what it deletes](docs/hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
 
 ## Features
 

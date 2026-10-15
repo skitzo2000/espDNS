@@ -52,7 +52,9 @@ holds `home.arpa`. File names use lowercase letters, digits, `.`, `_` and `-`.
 Each node has a memory limit for hosted zones, from its board, and the controller checks
 every zone set against it before pushing. Hosted zones live on the node's SD card, so a node
 without a working card can't serve them. `"hosted": {"enabled": false}` in a node config
-turns the service off.
+turns the service off. A node installed again over USB with new keys deletes the old hosted
+zones from its card at first boot, since they can't be checked any more; apply them again
+([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
 
 ### Create and edit a zone
 
