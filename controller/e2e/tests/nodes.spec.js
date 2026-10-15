@@ -261,13 +261,27 @@ test("+ Add node: a new name, with the node's fixed address", async ({ page }) =
   await expect(nn).toBeVisible();
   await expect(list.locator("#nndel")).toHaveCount(0);
   await expect(ip).toHaveValue(`${FOUND}/24`);
-  await expect(go).toBeDisabled(); // no name yet
-  await nn.fill("Not A Name");
+  const saved = list.locator("#nnsaved");
+  await expect(go).toBeDisabled(); // no name yet, and it says so
+  await expect(go).toHaveAttribute("title", "Pick a name for it.");
+  await expect(go).toHaveAccessibleDescription("Pick a name for it.");
+  await expect(saved).toContainText("Saved to a new config file named after it.");
+  await nn.fill("not a name");
   await expect(go).toBeDisabled();
+  await expect(go).toHaveAttribute("title", "The new name: lowercase letters, digits and dashes.");
+  await expect(saved).not.toContainText(".json");
+  // Typed in capitals, it is lowercased as typed, and fine.
+  await nn.fill("");
+  await nn.pressSequentially("DNS3-s3");
+  await expect(nn).toHaveValue("dns3-s3");
+  await expect(go).toBeEnabled();
+  await expect(go).toHaveAttribute("title", "");
+  await expect(saved).toContainText("Saved to dns3-s3.json.");
   await nn.fill("dns5");
   await expect(go).toBeEnabled();
   await ip.fill("dhcp");
   await expect(go).toBeDisabled(); // the fixed choice needs a fixed address
+  await expect(go).toHaveAttribute("title", "A fixed address, with its prefix length, like 192.0.2.10/24.");
   await ip.fill(`${FOUND}/24`);
   await go.click();
   await expect(list).toContainText("a test: no adoption here");

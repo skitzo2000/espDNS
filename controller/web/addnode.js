@@ -397,13 +397,23 @@ export function addNode(box, opts) {
     const del = file && file.hash && free.some(c => c.name === file.name)
       ? h("button", { class: "btn small link", type: "button", id: "nndel", onclick: () => { fm.confirmDelete = true; fm.deleteError = ""; render(); } }, "Delete this name") : null;
     const go = h("button", { class: "btn primary", type: "button" }, "Add node");
+    const saved = h("p", { class: "small", id: "nnsaved" });
     // Add node waits for a name (a new one valid; an existing one read), a release key and
     // the address: DHCP chosen, or a fixed one and its gateway that go together. What
     // doesn't is marked, and said.
     const ok = () => {
       const bad = fm.how === "fixed" ? netCheck(fm.address, fm.gateway) : null;
       const read = fm.config === NEW || (file && file.hash);
-      go.disabled = !fm.config || !st.src.key || !read || !!bad || (fm.config === NEW && !NAME.test(fm.newName || ""));
+      const named = fm.config === NEW ? NAME.test(fm.newName || "") : !!fm.config;
+      // Why it is grey, on hover (and, as its description, to a screen reader).
+      go.title = [
+        !fm.config || (fm.config === NEW && !fm.newName) ? "Pick a name for it." : "",
+        fm.config === NEW && fm.newName && !named ? "The new name: lowercase letters, digits and dashes." : "",
+        !read && fm.config && fm.config !== NEW ? (file && file.error ? "Its config couldn't be read." : "Reading the config…") : "",
+        st.src.key ? "" : "Make or import the release key first (settings).",
+        bad ? bad.why : ""].filter(Boolean).join(" ");
+      go.disabled = !named || !st.src.key || !read || !!bad;
+      saved.textContent = `Saved to ${fm.config === NEW ? named ? `${fm.newName}.json` : "a new config file named after it" : fm.config || "its config"}. The node gets this name and address, copies your zones, then serves like the others.`;
       const addrBad = bad && bad.field === "address";
       hint.textContent = addrBad && fm.address ? bad.why : STATICHINT;
       hint.classList.toggle("bad", !!addrBad && !!fm.address);
@@ -413,7 +423,11 @@ export function addNode(box, opts) {
         ? `An address in ${netText(p)}, the node's own network.` : "An address in the node's own network.";
       gwHint.classList.toggle("bad", !!gwBad && !!fm.gateway);
     };
-    nn.addEventListener("input", () => { fm.newName = nn.value.trim(); ok(); });
+    nn.addEventListener("input", () => {
+      const lower = nn.value.toLowerCase();
+      if (lower !== nn.value) { const a = nn.selectionStart, b = nn.selectionEnd; nn.value = lower; nn.setSelectionRange(a, b); }
+      fm.newName = nn.value.trim(); ok();
+    });
     sel.addEventListener("change", () => {
       fm.config = sel.value;
       nnField.hidden = sel.value !== NEW;
@@ -430,7 +444,7 @@ export function addNode(box, opts) {
       h("div", { class: "grid2" }, h("label", { class: "f" }, h("span", {}, "Name"), sel), nnField),
       del ? h("div", { class: "row" }, del) : null,
       how, fileLine,
-      h("p", { class: "small" }, `Saved to ${fm.config === NEW ? `${fm.newName || "its"}.json` : fm.config || "its config"}. The node gets this name and address, copies your zones, then serves like the others.`)].filter(Boolean);
+      saved].filter(Boolean);
     if (fm.confirmDelete && file && file.hash) {
       out.push(h("div", { class: "alert-box", id: "nndelask" },
         h("p", { class: "small" }, `Delete ${file.name}? No node runs it. It is kept in its history.`),
