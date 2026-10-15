@@ -511,7 +511,8 @@ func TestMaskKeysAsParsed(t *testing.T) {
 }
 
 // A config's status light: refused by firmware that takes no "led", and by its catalog board
-// when a pin is taken there (the board's own LED pin is free for it).
+// when a pin is taken there or is a strapping, USB or console pin (the board's own LED pin is
+// free for it).
 func TestRefusalLED(t *testing.T) {
 	newer := release.NodeStatus{Board: "ws-s3-eth", LED: &release.LEDStatus{From: "board"}}
 	for body, want := range map[string]string{
@@ -519,6 +520,8 @@ func TestRefusalLED(t *testing.T) {
 		`{"led":{"kind":"rgb","red":21,"green":38,"blue":39,"common_anode":true}}`: "",
 		`{"led":{"kind":"rgb","red":21,"green":11,"blue":39}}`:                     "GPIO 11 used twice: SPI2 MOSI and LED green",
 		`{"led":{"kind":"gpio","pin":30}}`:                                         "LED: GPIO 30 is connected to the flash and PSRAM",
+		`{"led":{"kind":"gpio","pin":0}}`:                                          "LED: GPIO 0 is a strapping pin",
+		`{"led":{"kind":"rgb","red":21,"green":20,"blue":39}}`:                     "LED green: GPIO 20 is the USB port",
 	} {
 		s, err := ParseSpec("192.0.2.10", "a.json", []byte(body))
 		if err != nil {

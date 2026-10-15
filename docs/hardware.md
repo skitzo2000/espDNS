@@ -123,8 +123,11 @@ WS2812 is set the same way. The row shows what the board itself has; pick **Its 
 to go back to it.
 
 Use pins the board leaves free. The controller and the node refuse a pin the board uses for
-its Ethernet, SD card or SPI bus, and one the chip keeps for the flash or PSRAM. Avoid
-strapping pins (on the ESP32-S3: 0, 3, 45, 46; on the ESP32-P4: 34 to 38) and the USB pins.
+its Ethernet, SD card or SPI bus, and one the chip keeps for the flash or PSRAM. The
+controller also refuses strapping pins (on the ESP32-S3: 0, 3, 45, 46; on the ESP32-P4: 34
+to 38), the USB pins (S3: 19, 20; P4: 24, 25) and the S3's serial console (43, 44): an LED
+there can change how the chip boots, or cut off its USB and serial output. The node page
+shows the refusal when you save. A pin the board's own LED already uses is allowed.
 
 On the Waveshare ESP32-S3-ETH the pins by the microSD slot take a common-cathode LED, with
 its common leg on the GND between them:

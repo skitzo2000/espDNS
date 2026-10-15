@@ -23,6 +23,15 @@ version may change anything. Write each change under Unreleased as it merges;
   rotation following a compromise. A file it can't read or that is damaged is kept and
   reported as failed, as before. See
   [docs/hardware.md](docs/hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes).
+- The controller now refuses a node's status light on a strapping, USB or serial-console pin
+  (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25). It accepted them
+  before, and an LED there can change the boot mode at reset or cut off USB logs, Improv and
+  the console. The node page shows the refusal in the *Status light* row when you save. A pin
+  the board's own LED already uses stays allowed. Board definitions still only warn about
+  these pins. A node whose config already sets such a light has its next config push or
+  settings save refused with that message: move the light to another pin, or pick **Its
+  board's** to go back to the board's light. See
+  [docs/hardware.md](docs/hardware.md#a-status-light).
 
 ## [controller 0.0.4] - 2026-10-15
 

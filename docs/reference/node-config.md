@@ -195,7 +195,8 @@ The status light, in place of the one the board definition names. The node page'
 Checks: every pin the kind takes is given, 0 to 54. The node refuses a pin its board uses for
 something else (Ethernet, SD card, SPI; the board's own LED pins are free for it), and one
 its chip can't drive or keeps for the flash, PSRAM or Ethernet. The controller makes the
-same check against the catalog board before it sends the config.
+same check against the catalog board before it sends the config, and also refuses the chip's
+strapping, USB and serial-console pins unless the board's own LED is on that pin.
 
 ### allow
 
