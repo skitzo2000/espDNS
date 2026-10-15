@@ -3799,7 +3799,9 @@ static void test_block_slots(void)
     other = t;
     other.keys[1] = V_KEY0; /* the same slot, another key */
     CHECK(rel_verify(V_BL, &other, 0, UINT64_MAX, &got) == rel_why_sig);
-    why = blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, &dropped);
+    CHECK(blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, NULL) == rel_why_sig && fd < 0 &&
+          stat(path, &sb) == 0); /* not the boot load: kept */
+    why =blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, &dropped);
     CHECK(why && !strcmp(why, "missing") && fd < 0 && dropped && stat(path, &sb) != 0);
     CHECK(!blk_slot_none(true, true, &note) && note == blk_why_dropped); /* off: not degraded */
     CHECK(!blk_slot_none(false, true, &note) && note == blk_why_dropped);

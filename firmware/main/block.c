@@ -296,7 +296,8 @@ const char *blk_slot_read(int fd, const rel_trust_t *t, uint8_t kind, rel_manife
 const char *blk_slot_open(const char *path, const rel_trust_t *t, uint8_t kind, rel_manifest_t *m, int *fd,
                           bool *dropped)
 {
-    *dropped = false;
+    if (dropped)
+        *dropped = false;
     memset(m, 0, sizeof(*m));
     *fd = open(path, O_RDONLY);
     if (*fd < 0)
@@ -306,7 +307,7 @@ const char *blk_slot_open(const char *path, const rel_trust_t *t, uint8_t kind, 
         close(*fd);
         *fd = -1;
     }
-    if (why == rel_why_sig && unlink(path) == 0) {
+    if (dropped && why == rel_why_sig && unlink(path) == 0) {
         *dropped = true;
         why = "missing";
     }

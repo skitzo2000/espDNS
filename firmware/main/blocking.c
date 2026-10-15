@@ -13,6 +13,7 @@
 #include "health_node.h"
 #include "hosted.h"
 #include "jsonw.h"
+#include "keys_node.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -182,15 +183,18 @@ bool blocking_rev_set(uint8_t kind, uint64_t v)
 static uint64_t rev_get(int k) { return blocking_rev_get(KIND[k]); }
 static bool rev_set(int k, uint64_t v) { return blocking_rev_set(KIND[k], v); }
 
-/* Opens a slot and checks its release header (and with hash, its payload). A copy signed
- * with a key the node doesn't trust is deleted ("missing"; blk_slot_open): *dropped, if given,
- * is set then. */
+/* Opens a slot and checks its release header (and with hash, its payload). With dropped
+ * (the boot load), a copy signed with a key the node doesn't trust is deleted ("missing";
+ * blk_slot_open) and *dropped set, if the keys are the keys partition's: not the ones built in,
+ * used while it can't be read. */
 static const char *slot_open(int k, int slot, bool hash, rel_manifest_t *m, int *fd, bool *dropped)
 {
     char path[64];
-    bool d;
+    bool d = false;
+    uint32_t gen;
     slot_path(k, slot, path, sizeof(path));
-    const char *why = blk_slot_open(path, ota_trust_stored(), KIND[k], m, fd, &d);
+    const char *why =
+        blk_slot_open(path, ota_trust_stored(), KIND[k], m, fd, dropped && keys_node_gen(&gen) ? &d : NULL);
     if (d) {
         ESP_LOGW(TAG, "%s slot %d: %s", FILE_NAME[k], slot, blk_why_dropped);
         if (dropped)

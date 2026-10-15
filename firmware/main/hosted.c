@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "hzone.h"
 #include "jsonw.h"
+#include "keys_node.h"
 #include "mbedtls/sha256.h"
 #include "ota.h"
 #include "power.h"
@@ -133,16 +134,18 @@ static const char *slot_load(int slot, rel_manifest_t *m, hz_set_t **out, char *
     return why;
 }
 
-/* A slot's header (signature, node, image, kind), without reading the payload. A bundle
- * signed with a key the node doesn't trust is deleted ("missing"; blk_slot_open): *dropped,
- * if given, is set then. */
+/* A slot's header (signature, node, image, kind), without reading the payload. With dropped
+ * (the boot load), a bundle signed with a key the node doesn't trust is deleted ("missing";
+ * blk_slot_open) and *dropped set, if the keys are the keys partition's (as blocking.c). */
 static const char *slot_header(int slot, rel_manifest_t *m, bool *dropped)
 {
     char path[64];
     int fd;
-    bool d;
+    bool d = false;
+    uint32_t gen;
     slot_path(slot, path, sizeof(path));
-    const char *why = blk_slot_open(path, ota_trust_stored(), REL_ZONES, m, &fd, &d);
+    const char *why =
+        blk_slot_open(path, ota_trust_stored(), REL_ZONES, m, &fd, dropped && keys_node_gen(&gen) ? &d : NULL);
     if (fd >= 0)
         close(fd);
     if (d) {

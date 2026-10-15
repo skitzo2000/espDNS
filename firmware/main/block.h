@@ -116,9 +116,10 @@ const char *blk_load(int fd, const rel_manifest_t *m, blk_tier_t tier, const blk
  * that the file is as long as it says. Doesn't read the payload. */
 const char *blk_slot_read(int fd, const rel_trust_t *t, uint8_t kind, rel_manifest_t *m);
 /* Opens a slot file and checks its header (blk_slot_read): NULL and *fd open, else why and
- * *fd -1 ("missing": no file). A copy whose signature doesn't verify with the node's keys was
- * signed for an earlier install's keys (a node reinstalled with the card kept) and can never
- * load: it is deleted, *dropped set and "missing" returned. Any other failure keeps the file. */
+ * *fd -1 ("missing": no file). With dropped (the boot load, keys from the keys partition), a
+ * copy whose signature doesn't verify with the node's keys was signed for an earlier install's
+ * keys (a node reinstalled with the card kept) and can never load: it is deleted, *dropped set
+ * and "missing" returned. Without dropped, or any other failure, the file is kept. */
 const char *blk_slot_open(const char *path, const rel_trust_t *t, uint8_t kind, rel_manifest_t *m, int *fd,
                           bool *dropped);
 /* No copy on the card: failed ("missing from the SD card") if one was installed, off if none
