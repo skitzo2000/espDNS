@@ -3786,6 +3786,46 @@ static void test_block_slots(void)
     CHECK(blk_slot_store(path, V_BL, &m, t_recv, &src) != NULL && stat(path, &sb) != 0);
     src = (t_src_t){ V_BL_PAYLOAD, sizeof(V_BL_PAYLOAD) - 1, 0 };
     CHECK(blk_slot_store(path, V_BL, &m, t_recv, &src) != NULL && stat(path, &sb) != 0);
+
+    /* At boot (blk_slot_open): a copy signed with a key the node no longer trusts (reinstalled
+     * with new keys, the card kept) is deleted, and the list is off, not failed. */
+    bool dropped;
+    const char *why, *note;
+    CHECK(!strcmp(blk_slot_open(path, &t, REL_BLOCKLIST, &got, &fd, &dropped), "missing") && fd < 0 && !dropped); /* none */
+    src = (t_src_t){ V_BL_PAYLOAD, sizeof(V_BL_PAYLOAD), 0 };
+    CHECK(blk_slot_store(path, V_BL, &m, t_recv, &src) == NULL);
+    CHECK(blk_slot_open(path, &t, REL_BLOCKLIST, &got, &fd, &dropped) == NULL && fd >= 0 && !dropped);
+    close(fd);
+    other = t;
+    other.keys[1] = V_KEY0; /* the same slot, another key */
+    CHECK(rel_verify(V_BL, &other, 0, UINT64_MAX, &got) == rel_why_sig);
+    CHECK(blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, NULL) == rel_why_sig && fd < 0 &&
+          stat(path, &sb) == 0); /* not the boot load: kept */
+    why =blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, &dropped);
+    CHECK(why && !strcmp(why, "missing") && fd < 0 && dropped && stat(path, &sb) != 0);
+    CHECK(!blk_slot_none(true, true, &note) && note == blk_why_dropped); /* off: not degraded */
+    CHECK(!blk_slot_none(false, true, &note) && note == blk_why_dropped);
+    CHECK(blk_slot_none(true, false, &note) && note && strstr(note, "missing")); /* failed */
+    CHECK(!blk_slot_none(false, false, &note) && note == NULL); /* never installed */
+
+    /* Anything else keeps the file and fails as before: a validly signed copy cut short or
+     * with a changed byte, or another node's or kind's. */
+    src = (t_src_t){ V_BL_PAYLOAD, sizeof(V_BL_PAYLOAD), 0 };
+    CHECK(blk_slot_store(path, V_BL, &m, t_recv, &src) == NULL);
+    fd = open(path, O_RDWR);
+    CHECK(pwrite(fd, &c, 1, 3) == 1);
+    close(fd);
+    CHECK(blk_slot_open(path, &t, REL_BLOCKLIST, &got, &fd, &dropped) == NULL && !dropped);
+    CHECK(blk_slot_hash(fd, &got) != NULL); /* failed: the hash */
+    close(fd);
+    CHECK(blk_slot_open(path, &t, REL_OVERRIDES, &got, &fd, &dropped) != NULL && !dropped);
+    other = t;
+    other.node_id[5] ^= 1;
+    CHECK(blk_slot_open(path, &other, REL_BLOCKLIST, &got, &fd, &dropped) != NULL && !dropped);
+    CHECK(truncate(path, (off_t)sizeof(V_BL_PAYLOAD) + 100) == 0);
+    why = blk_slot_open(path, &t, REL_BLOCKLIST, &got, &fd, &dropped);
+    CHECK(why && strcmp(why, "missing") && fd < 0 && !dropped && stat(path, &sb) == 0);
+    unlink(path);
 }
 
 /* Which slot a boot loads, and whether that is a fall back (blocking.c, hosted.c). */

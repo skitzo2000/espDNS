@@ -109,6 +109,10 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 ([Revert](blocking.md#revert)). Then build and push the list again, and replace a card with
 read errors.
 
+A node installed again over USB with new keys, its card kept, isn't degraded by the lists
+left on the card: they were signed with keys it no longer trusts, so it deletes them at boot
+and shows them as off, with a note in `/status`. Push the lists to it again.
+
 **`zone expired`** (preceded by **`zone refresh failing`**, after three failed refreshes
 in a row). A secondary zone passed its SOA expire time without a refresh from the primary.
 Fix: check that the primary is up and reachable, that its address in the node's config is

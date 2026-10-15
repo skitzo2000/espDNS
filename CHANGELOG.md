@@ -11,6 +11,14 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Fixed
+
+- A node installed again over USB with new keys, its SD card kept, no longer stays
+  `degraded` because of the blocklist, overrides or hosted zones left on the card from
+  before. Signed with keys it no longer trusts, they can never load: the node now deletes
+  them at boot, and shows that list as off with a note saying so, until the controller
+  pushes it again.
+
 ## [controller 0.0.4] - 2026-10-15
 
 ### Added

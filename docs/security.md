@@ -75,9 +75,10 @@ pushes them. The retired key is never accepted for anything pushed, and the next
 replaces it.
 
 A rotation after a compromise keeps no retired key. At the next boot the node's stored
-config, zones and lists fail their check, and it runs on board defaults and its built-in
-address until they're pushed again with the new key (the controller does that right after
-the rotation).
+config fails its check, and it runs on board defaults and its built-in address; its stored
+zones and lists can never load again, so it deletes them and shows them as off. That lasts
+until they're pushed again with the new key (the controller does that right after the
+rotation).
 
 **A rotation only wins if it reaches a node before the attacker does.** With the leaked
 release key, a firmware can change which keys a node trusts. Rotate at once.
@@ -125,7 +126,8 @@ example a config pushed by another tool) is then refused before anything is sent
 it would fail at its next boot. Push those from the controller first.
 
 The older copies a node keeps in its second slots, for a revert, are not re-signed: they
-load after a routine rotation while the retired key is there, but not after a compromise.
+load after a routine rotation while the retired key is there, but not after a compromise (or
+the next rotation), and are deleted at the next boot.
 
 The controller only imports a release key the fleet trusts: it must match the public key
 file given (`-pub`), or a node listed in `settings.json` must report it in slot 0. With no

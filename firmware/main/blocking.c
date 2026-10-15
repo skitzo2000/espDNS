@@ -13,6 +13,7 @@
 #include "health_node.h"
 #include "hosted.h"
 #include "jsonw.h"
+#include "keys_node.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -182,15 +183,23 @@ bool blocking_rev_set(uint8_t kind, uint64_t v)
 static uint64_t rev_get(int k) { return blocking_rev_get(KIND[k]); }
 static bool rev_set(int k, uint64_t v) { return blocking_rev_set(KIND[k], v); }
 
-/* Opens a slot and checks its release header (and with hash, its payload). */
-static const char *slot_open(int k, int slot, bool hash, rel_manifest_t *m, int *fd)
+/* Opens a slot and checks its release header (and with hash, its payload). With dropped
+ * (the boot load), a copy signed with a key the node doesn't trust is deleted ("missing";
+ * blk_slot_open) and *dropped set, if the keys are the keys partition's: not the ones built in,
+ * used while it can't be read. */
+static const char *slot_open(int k, int slot, bool hash, rel_manifest_t *m, int *fd, bool *dropped)
 {
     char path[64];
+    bool d = false;
+    uint32_t gen;
     slot_path(k, slot, path, sizeof(path));
-    *fd = open(path, O_RDONLY);
-    if (*fd < 0)
-        return errno == ENOENT ? "missing" : "slot unreadable";
-    const char *why = blk_slot_read(*fd, ota_trust_stored(), KIND[k], m);
+    const char *why =
+        blk_slot_open(path, ota_trust_stored(), KIND[k], m, fd, dropped && keys_node_gen(&gen) ? &d : NULL);
+    if (d) {
+        ESP_LOGW(TAG, "%s slot %d: %s", FILE_NAME[k], slot, blk_why_dropped);
+        if (dropped)
+            *dropped = true;
+    }
     if (!why && hash)
         why = blk_slot_hash(*fd, m);
     if (why) {
@@ -258,18 +267,19 @@ static void boot_load(int k)
     rel_manifest_t m[2];
     int fd[2];
     const char *why[2];
-    bool ok[2];
+    bool ok[2], dropped = false;
     uint64_t seq[2];
     for (int i = 0; i < 2; i++) {
-        why[i] = slot_open(k, i, false, &m[i], &fd[i]);
+        why[i] = slot_open(k, i, false, &m[i], &fd[i], &dropped);
         ok[i] = !why[i];
         seq[i] = ok[i] ? m[i].seq : 0;
     }
     if (why[0] && why[1] && !strcmp(why[0], "missing") && !strcmp(why[1], "missing")) {
-        bool installed = ota_seq(KIND[k]) != 0;
-        s->state = installed ? ST_FAILED : ST_OFF;
-        s->err = installed ? "missing from the SD card" : NULL;
-        if (installed)
+        const char *note;
+        bool failed = blk_slot_none(ota_seq(KIND[k]) != 0, dropped, &note);
+        s->state = failed ? ST_FAILED : ST_OFF;
+        s->err = note;
+        if (failed)
             ESP_LOGE(TAG, "%s: installed, but missing from the SD card: blocking without it", FILE_NAME[k]);
         return;
     }
@@ -578,7 +588,7 @@ static const char *revert_check(int k, rel_manifest_t *m, int *fd)
     rel_manifest_t om;
     int ofd;
     int other = 1 - s->slot;
-    const char *why = slot_open(k, other, false, &om, &ofd);
+    const char *why = slot_open(k, other, false, &om, &ofd, NULL);
     why = blk_revert_check(FILE_NAME[k], other, why, why ? 0 : om.seq, s->seq, s->reverted,
                            k == K_LIST && (ota_reboot_reasons() & RB_BLOCKLIST) ? "waiting for a reboot" : "newer",
                            s_ctl_why, sizeof(s_ctl_why));
@@ -771,7 +781,7 @@ const char *blocking_apply(const rel_manifest_t *m, char *msg, size_t cap, bool 
     int fd;
     blk_list_t *l = NULL;
     /* Just written and hashed: the header check is enough. */
-    const char *why = slot_open(k, slot, false, &sm, &fd);
+    const char *why = slot_open(k, slot, false, &sm, &fd, NULL);
     if (!why && sm.seq != m->seq)
         why = "slot holds another release";
     if (!why)
