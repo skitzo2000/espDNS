@@ -13,8 +13,9 @@ How the pieces fit together is in [architecture.md](architecture.md).
   in their keys partition. Anyone can send a node a release; only a valid signature gets it
   applied. Firmware images hold no key, and the project's key never signs anything a node
   takes.
-- The controller listens on localhost only, needs a login, and sends a strict Content
-  Security Policy.
+- The controller listens on localhost only by default, needs a login, and sends a strict
+  Content Security Policy. To use it from other machines, put it behind your own HTTPS
+  reverse proxy ([Behind a reverse proxy](#behind-a-reverse-proxy)).
 - Controller-to-node traffic is signed but not encrypted. Anyone watching your LAN can
   read it, including a Wi-Fi password in a config.
 - A node's flash is not encrypted. Anyone holding a board can read it.
@@ -229,7 +230,8 @@ What they can't do:
 - Confuse the controller with mDNS. mDNS answers are hints. Loopback, link-local,
   multicast and broadcast addresses are ignored, at most 64 nodes are listed from mDNS
   alone, and an answer never renames or moves a known node.
-- Reach the controller's web UI. It listens on localhost only.
+- Reach the controller's web UI. It listens on localhost only, or, behind a reverse proxy,
+  serves only the proxy's addresses and its own machine.
 - Push zone data with NOTIFY. A node takes NOTIFY only from its configured primary's
   address, and a NOTIFY carries no data: it only makes the node check the zone with its
   primary.
@@ -241,8 +243,9 @@ or DNS rebinding (pointing its own host name at a node or the controller).
 
 What protects you:
 
-- The controller checks every request's `Host`. It must be a localhost name. A change
-  must not carry another site's `Origin`. CORS is never answered.
+- The controller checks every request's `Host`. It must be a localhost name, or the name in
+  `ESPDNS_URL` behind a reverse proxy. A change must not carry another site's `Origin`.
+  CORS is never answered.
 - Sessions have two halves: an `HttpOnly`, `SameSite=Strict` cookie plus a token the
   page keeps and sends in the `X-Session-Token` header. Another site can't send that header,
   and another program on another localhost port can't read the token. The cookie alone opens
@@ -297,14 +300,15 @@ What limits the damage:
 - Backups are encrypted. `espdns backup` writes an age-encrypted file, to a passphrase
   (at least 12 characters) or an age key.
 
-Other users on the same machine can reach the port, but still need the login. Failed logins
+Other users on the same machine can reach the port, but still need the login (and so does
+anyone reaching it through a reverse proxy). Failed logins
 back off per client: after 3 failures in a row, each further failure locks that client out
 for 1 second, doubling up to 60 seconds. Your own browser is tracked separately, so failures
 from elsewhere don't lock you out.
 
 Until you set a password, the controller is read-only. It shows nodes but refuses every
-change. The first password can be set from the browser only from the same machine, and only
-while none is set.
+change. The first password can be set from the browser only from the same machine (never
+through a reverse proxy), and only while none is set.
 
 ### A stolen board
 
@@ -342,7 +346,7 @@ What to do:
 | Release endpoints | `POST /release`, `POST /ota` and `/querylog` only from private source addresses. |
 | DNS clients | Port 53 answers private source addresses only, plus the node config's `allow` networks; any other query gets no answer, so a node is no open resolver or reflector ([allow](reference/node-config.md#allow)). |
 | Forwarding | Random source port and ID per upstream query; no worker waits on a forwarder; per-group caps. |
-| Controller on localhost | Refuses to listen on any other address. |
+| Controller on localhost | Refuses to listen on any other address, unless it is behind an HTTPS reverse proxy (`ESPDNS_URL` and `ESPDNS_PROXY`); then it serves only the proxy and its own machine, by the URL's name, with a `Secure` cookie. |
 | Controller CSP and headers | Strict CSP, no inline scripts, no framing, no referrer, no CORS; ESP Web Tools bundled, not from a CDN. |
 | Sessions | argon2id password hash; `HttpOnly` `SameSite=Strict` cookie plus a header token; 2 hours idle, 12 hours at most; all sessions end on restart or password change; login back-off; password asked again for backups and revealed Wi-Fi passwords. |
 | No zone primary credential | The controller sends the primary DNS queries only; it stores no token for it, and deletes an old one at start. |
@@ -395,12 +399,72 @@ Known gaps in the 0.0.x alpha:
 - A compromise rotation needs the controller's copies of what each node stores, and
   revert copies stop loading ([Rotating keys](#rotating-keys)).
 
+## Behind a reverse proxy
+
+By default the controller listens on localhost only: plain HTTP, which browsers allow USB
+flashing (Web Serial) on only there. To use it from any browser on your network, put it
+behind an HTTPS reverse proxy you already run, which holds the certificate and forwards
+plain HTTP to the controller. Browsers allow USB flashing on any HTTPS page, so you flash a
+board plugged into the machine your browser runs on.
+
+Set three values in `.env` (each is also a flag, [settings.md](reference/settings.md#controller-flags)):
+
+```sh
+ESPDNS_URL=https://espdns.example.net   # the address your proxy serves the controller at
+ESPDNS_PROXY=192.0.2.10                 # the proxy's source address (or several, or a CIDR)
+ESPDNS_LISTEN=0.0.0.0:8480              # an address the proxy can reach
+```
+
+Point the proxy at `http://<controller host>:8480` and have it pass the original `Host` on
+and add the client's address to `X-Forwarded-For` (most do both by default; in nginx,
+`proxy_set_header Host $host` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`).
+
+Put only the proxy's own address in `ESPDNS_PROXY`: a network only if the proxy really
+sends from several addresses in it. Every address there is trusted to name the client in
+`X-Forwarded-For`, and can reach the controller by plain HTTP. A proxy on the controller's
+own machine needs no `ESPDNS_PROXY` entry for the controller to serve it, but add
+`127.0.0.1` (or `::1`) so the login back-off counts its clients apart.
+
+Then:
+
+- **Who is served.** A connection from an address in `ESPDNS_PROXY`, or from the
+  controller's own machine (the health check, an SSH tunnel), is served. Any other gets
+  `403` before anything else, the login page included. The controller refuses to listen
+  off localhost without both `ESPDNS_URL` and `ESPDNS_PROXY`.
+- **By which name.** Requests must name `ESPDNS_URL`'s host (`Host`); from the controller's
+  own machine, a localhost name works too, unless the request was relayed (it carries
+  `X-Forwarded-For`, `Forwarded` or `X-Real-IP`). Anything else gets `403`, so a rebound
+  DNS name can't reach it.
+- **From which page.** A change through the proxy must carry exactly `ESPDNS_URL`'s origin,
+  or no `Origin` at all.
+- **The cookie.** Through the proxy the session cookie is also `Secure`, besides
+  `HttpOnly` and `SameSite=Strict`. The session token works as on localhost.
+- **Who failed a login.** The login back-off counts a client by the last address in
+  `X-Forwarded-For`, the one your proxy adds, and only on a connection from an
+  `ESPDNS_PROXY` address; otherwise by the connection's own address. No other forwarded
+  header is read: HTTPS is implied by `ESPDNS_URL`. A proxy that adds no `X-Forwarded-For`
+  makes all its clients one; your own browser is still counted apart.
+- **The first password.** It can't be set through the proxy. Set it on the server, in the
+  folder with `compose.yaml`:
+
+  ```sh
+  docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
+  ```
+
+  It asks for a user name and the password (twice); the running controller takes it at
+  once. Or set it in a browser on the controller's machine, or over an SSH tunnel.
+
+Keep the proxy on your LAN, or behind your VPN. Do not publish the controller to the
+internet: it holds your release key, and the login is its only lock.
+
 ## Running it safely
 
 - Keep the release key off the controller host when you can. Import it when you need
   it. Keep the recovery key offline, never on the controller host.
-- Do not expose the controller. It listens on localhost on purpose. To use it from
-  another machine, use an SSH tunnel rather than forwarding the port.
+- Do not expose the controller to the internet. It listens on localhost by default. To use
+  it from another machine, use an SSH tunnel, or your own HTTPS reverse proxy on your LAN
+  ([Behind a reverse proxy](#behind-a-reverse-proxy)). Never forward its port as it is.
 - Do not expose the nodes to the internet. Keep port 53 and port 80 on your LAN.
 - Put the nodes and the controller on a trusted network segment if you can, since
   controller-to-node traffic is not encrypted.

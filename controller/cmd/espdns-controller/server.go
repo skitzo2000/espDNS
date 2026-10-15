@@ -17,6 +17,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/observe"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/site"
 	"github.com/skitzo2000/espdns/controller/internal/websec"
 	"github.com/skitzo2000/espdns/controller/web"
 )
@@ -39,6 +40,7 @@ func (r *routes) Handle(p string, h http.Handler) {
 
 // server is what the HTTP side serves.
 type server struct {
+	site    site.Config // the public URL and its proxies (zero: localhost only)
 	dataDir string
 	nodes   func() []nodes.Node
 	runner  *jobs.Runner
@@ -63,8 +65,9 @@ type server struct {
 }
 
 // handler is the whole controller over HTTP, outermost first: the security headers
-// (websec.Headers: the CSP and the rest, on every response, a refusal too), LocalOnly (a
-// localhost Host, no other site's Origin), the login (auth.Guard: a session, its cookie
+// (websec.Headers: the CSP and the rest, on every response, a refusal too), site.Guard
+// (with -url: only this machine and the reverse proxy, by the URL's Host), LocalOnly (a
+// localhost Host or the -url's, no other site's Origin), the login (auth.Guard: a session, its cookie
 // and the page's token), then the routes. It returns the patterns too.
 func (s *server) handler() (http.Handler, []string) {
 	mux := &routes{mux: http.NewServeMux()}
@@ -139,5 +142,5 @@ func (s *server) handler() (http.Handler, []string) {
 	observeServer{store: s.observe, dataDir: s.dataDir, nodes: s.nodes}.routes(mux)
 	searchServer{dataDir: s.dataDir, nodes: s.nodes, changes: s.changes, log: s.observe}.routes(mux)
 	mux.Handle("GET /", http.FileServerFS(web.Files))
-	return websec.Headers(jobs.LocalOnly(s.auth.Guard(mux.mux))), mux.patterns
+	return websec.Headers(s.site.Guard(jobs.LocalOnly(s.auth.Guard(mux.mux)))), mux.patterns
 }

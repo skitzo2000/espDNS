@@ -52,6 +52,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/observe"
 	"github.com/skitzo2000/espdns/controller/internal/rolling"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/site"
 	"github.com/skitzo2000/espdns/controller/internal/version"
 )
 
@@ -76,10 +77,22 @@ func loopbackListen(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// envOr is the environment variable key, or def when it is unset or empty.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
-	// Localhost: the dashboard is plain HTTP (its login cookie can't be Secure), and browsers
-	// only allow USB flashing (Web Serial) on localhost or HTTPS.
-	listen := flag.String("listen", "127.0.0.1:8480", "address to serve the dashboard on")
+	// Localhost by default: the dashboard is plain HTTP (its login cookie can't be Secure),
+	// and browsers only allow USB flashing (Web Serial) on localhost or HTTPS. Behind an
+	// HTTPS reverse proxy, -url and -proxy (internal/site) let -listen leave loopback. Each
+	// defaults to its environment variable (compose.yaml passes them from .env).
+	listen := flag.String("listen", envOr("ESPDNS_LISTEN", "127.0.0.1:8480"), "address to serve the dashboard on (ESPDNS_LISTEN)")
+	publicURL := flag.String("url", os.Getenv("ESPDNS_URL"), "the controller's https:// address at its reverse proxy (ESPDNS_URL; \"\": localhost only)")
+	proxies := flag.String("proxy", os.Getenv("ESPDNS_PROXY"), "the reverse proxy's source addresses or networks, comma-separated (ESPDNS_PROXY)")
 	dataDir := flag.String("data", "data", "data directory")
 	catalog := flag.String("catalog", "../boards", "the shipped board catalog")
 	browse := flag.Bool("browse-mdns", true, "browse mDNS for nodes besides settings.json's (false: only those are polled; the browser tests, which must reach no node)")
@@ -96,8 +109,9 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	if !loopbackListen(*listen) {
-		log.Fatalf("-listen %s: the controller listens on localhost only (127.0.0.1, [::1] or localhost)", *listen)
+	pub, err := site.New(*listen, *publicURL, *proxies, loopbackListen(*listen))
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	log.Printf("espdns-controller %s", version.Version)
@@ -239,7 +253,7 @@ func main() {
 	refresh := newRefresher(*dataDir, pending, runner)
 	go refresh.Run(ctx, refreshFirst+time.Duration(rand.Int64N(int64(refreshFirst))), refreshTick)
 
-	srv := &server{dataDir: *dataDir, releaseURL: *releaseURL, nodes: reg.List, runner: runner, auth: login, key: keySrc, catalog: *catalog, push: push, adopt: adopt, observe: obs, changes: pending, listed: func([]string) { relist() }, lookup: reg.Lookup, refresh: refresh,
+	srv := &server{site: pub, dataDir: *dataDir, releaseURL: *releaseURL, nodes: reg.List, runner: runner, auth: login, key: keySrc, catalog: *catalog, push: push, adopt: adopt, observe: obs, changes: pending, listed: func([]string) { relist() }, lookup: reg.Lookup, refresh: refresh,
 		builder: newBuilder(*catalog, filepath.Join(*dataDir, "boards"), filepath.Join(*dataDir, "firmware", "images"))}
 	h, _ := srv.handler()
 
@@ -251,6 +265,9 @@ func main() {
 		defer cancel()
 		hs.Shutdown(shutdown)
 	}()
+	if pub.URL != nil {
+		log.Printf("public address %s, through the reverse proxy at %v", pub.URL, pub.Proxies)
+	}
 	log.Printf("dashboard on http://%s (data %s; settings %s: %d node(s), %d DNS peer(s))", *listen, *dataDir,
 		settings.Path(*dataDir), len(st.Nodes), len(st.DNSPeers))
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

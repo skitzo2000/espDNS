@@ -51,7 +51,7 @@ You need a Linux machine with Docker, Chrome or Edge, and two boards from the
 
 ```sh
 mkdir -p -m 700 espdns/data && cd espdns
-curl -fsSLO https://github.com/skitzo2000/espdns/releases/latest/download/compose.yaml
+curl -fsSLO https://github.com/skitzo2000/espDNS/releases/latest/download/compose.yaml
 printf 'ESPDNS_UID=%s\nESPDNS_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 docker compose up -d
 ```

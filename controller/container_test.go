@@ -167,8 +167,8 @@ func TestUserCompose(t *testing.T) {
 	for what, re := range map[string]string{
 		"the release's image, filled in":     `(?m)^image: "@ESPDNS_IMAGE@"$`,
 		"a fixed container name":             `(?m)^container_name: espdns-controller$`,
-		"the dashboard on localhost":         `(?m)^command: \["-listen", "127\.0\.0\.1:8480"\]$`,
-		"its health checked at that address": `(?m)^test: \["CMD", "/espdns-controller", "-healthcheck", "-listen", "127\.0\.0\.1:8480"\]$`,
+		"the dashboard on localhost":         `(?m)^command: \["-listen", "\$\{ESPDNS_LISTEN:-127\.0\.0\.1:8480\}"\]$`,
+		"its health checked at that address": `(?m)^test: \["CMD", "/espdns-controller", "-healthcheck", "-listen", "\$\{ESPDNS_LISTEN:-127\.0\.0\.1:8480\}"\]$`,
 		"state in ./data, a bind mount":      `(?m)^source: \./data\ntarget: /data\nbind:\ncreate_host_path: false$`,
 		"run as you, from .env":              `(?m)^user: "\$\{ESPDNS_UID:\?[^}]+\}:\$\{ESPDNS_GID:\?[^}]+\}"$`,
 	} {
