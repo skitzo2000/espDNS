@@ -128,11 +128,27 @@ func pins(b Board) []pinUse {
 
 // CheckLED is what is wrong with l as the status LED of board b, in place of b's own (a node
 // config's "led"): Check's errors about it, so its pins are checked against the chip's and the
-// board's others. nil if nothing; b is a board that passes Check.
+// board's others, and a pin Check only warns about (strapping, USB, console) unless b's own
+// LED is on it. nil if nothing; b is a board that passes Check.
 func CheckLED(b Board, l LED) error {
+	var own []int
+	if b.LED != nil {
+		for _, p := range b.LED.Pins() {
+			if p.Pin != nil {
+				own = append(own, *p.Pin)
+			}
+		}
+	}
 	b.LED = &l
 	errs, _ := Check(b)
 	errs = slices.DeleteFunc(errs, func(s string) bool { return !strings.Contains(s, "LED") && !strings.HasPrefix(s, "led") })
+	if len(errs) == 0 {
+		for _, u := range pins(Board{LED: &l}) {
+			if why := Images[b.Image].Caution[u.pin]; why != "" && !slices.Contains(own, u.pin) {
+				errs = append(errs, fmt.Sprintf("%s: GPIO %d is %s", u.what, u.pin, why))
+			}
+		}
+	}
 	if len(errs) == 0 {
 		return nil
 	}
