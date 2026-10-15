@@ -11,18 +11,10 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.5] - 2026-10-15
+
 ### Fixed
 
-- A node installed again over USB with new keys, its SD card kept, no longer stays
-  `degraded` because of the blocklist, allowed and blocked sites or hosted zones left on the
-  card from before. Signed with keys it no longer trusts, they can never load, so at boot the
-  node now deletes those stored list files (only its own, in `dns2/block` and `dns2/hosted`;
-  never the card or anything else on it). It shows that list as off with the note
-  `removed a copy signed with a key this node doesn't trust (from an earlier install)`, stays
-  healthy, and gets the list back at the controller's next push. The same happens after a key
-  rotation following a compromise. A file it can't read or that is damaged is kept and
-  reported as failed, as before. See
-  [docs/hardware.md](docs/hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes).
 - The controller now refuses a node's status light on a strapping, USB or serial-console pin
   (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25). It accepted them
   before, and an LED there can change the boot mode at reset or cut off USB logs, Improv and
@@ -35,6 +27,21 @@ version may change anything. Write each change under Unreleased as it merges;
 - In + Add node, a grey Add node button now says why on hover: the name to pick, the release
   key to make, or what's wrong with the address. The new name is lowercased as you type, and
   the line under the form no longer reads `Saved to its.json` before there is a name.
+
+## [firmware 0.0.4] - 2026-10-15
+
+### Fixed
+
+- A node installed again over USB with new keys, its SD card kept, no longer stays
+  `degraded` because of the blocklist, allowed and blocked sites or hosted zones left on the
+  card from before. Signed with keys it no longer trusts, they can never load, so at boot the
+  node now deletes those stored list files (only its own, in `dns2/block` and `dns2/hosted`;
+  never the card or anything else on it). It shows that list as off with the note
+  `removed a copy signed with a key this node doesn't trust (from an earlier install)`, stays
+  healthy, and gets the list back at the controller's next push. The same happens after a key
+  rotation following a compromise. A file it can't read or that is damaged is kept and
+  reported as failed, as before. See
+  [docs/hardware.md](docs/hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes).
 
 ## [controller 0.0.4] - 2026-10-15
 
