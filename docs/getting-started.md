@@ -42,8 +42,13 @@ machine you plug the boards into to install them over USB. Two ways to get there
 - **Your HTTPS reverse proxy.** If you already run one on your network, it can serve the
   controller at a name of yours, such as `https://espdns.example.net`, to any browser.
   Set `ESPDNS_URL`, `ESPDNS_PROXY` and `ESPDNS_LISTEN` in `.env`
-  ([Behind a reverse proxy](security.md#behind-a-reverse-proxy)). Set the first password
-  over the SSH tunnel once: it can't be set through the proxy.
+  ([Behind a reverse proxy](security.md#behind-a-reverse-proxy)). The first password can't
+  be set through the proxy: set it on the server, in the `espdns` folder, before you open
+  the page:
+
+  ```sh
+  docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
+  ```
 
 On a server, run the controller as a system user of its own rather than your login user:
 make one (for example `sudo useradd --system --no-create-home espdns`), make it the owner of

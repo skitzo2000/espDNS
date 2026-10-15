@@ -71,11 +71,16 @@ func TestBehindProxy(t *testing.T) {
 func TestFirstPasswordNotThroughProxy(t *testing.T) {
 	cfg, _ := site.New("127.0.0.1:8480", "https://espdns.example.net", "", true)
 	h, _ := testServer(t, false, func(s *server) { s.site = cfg })
-	r := httptest.NewRequest("POST", "https://espdns.example.net/api/setup/password", strings.NewReader(`{"password":"a long first password"}`))
-	r.RemoteAddr = "127.0.0.1:40000"
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Origin", "https://espdns.example.net")
-	if w := serve(h, r); w.Code != http.StatusForbidden {
-		t.Errorf("first password through the proxy: %d %s", w.Code, w.Body)
+	// By the URL's name, or by a localhost name the proxy passed on from its client.
+	for _, c := range []struct{ host, xff string }{{"espdns.example.net", ""}, {"127.0.0.1:8480", "203.0.113.9"}} {
+		r := httptest.NewRequest("POST", "http://"+c.host+"/api/setup/password", strings.NewReader(`{"password":"a long first password"}`))
+		r.RemoteAddr = "127.0.0.1:40000"
+		r.Header.Set("Content-Type", "application/json")
+		if c.xff != "" {
+			r.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if w := serve(h, r); w.Code != http.StatusForbidden {
+			t.Errorf("first password through the proxy, Host %s: %d %s", c.host, w.Code, w.Body)
+		}
 	}
 }

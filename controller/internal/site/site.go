@@ -6,7 +6,9 @@
 //   - The source: a connection from this machine (loopback, or from the address it came
 //     in on) or from a -proxy address is served; any other gets 403, before the login and
 //     the static files.
-//   - The Host: the URL's host, or a localhost name from this machine; anything else 403.
+//   - The Host: the URL's host, or a localhost name from this machine and not relayed (no
+//     X-Forwarded-For, Forwarded or X-Real-IP: a proxy on this machine passing on a client's
+//     Host: localhost); anything else 403.
 //   - A request by the URL's host is Public: the API's Origin check takes the URL's origin
 //     (Origin), and the session cookie is Secure (TLS is the proxy's, implied by -url).
 //   - Client is the address a login's backoff and the logs count: the last
@@ -64,6 +66,9 @@ func ParseProxies(s string) ([]netip.Prefix, error) {
 			continue
 		}
 		if p, err := netip.ParsePrefix(f); err == nil {
+			if a := p.Addr(); a.Is4In6() && p.Bits() >= 96 { // ::ffff:a.b.c.d/n: sources are matched unmapped
+				p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+			}
 			out = append(out, p.Masked())
 			continue
 		}
@@ -182,6 +187,16 @@ func localName(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// relayed: the request carries a proxy's forwarding header, so it is someone else's.
+func relayed(r *http.Request) bool {
+	for _, k := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
+		if len(r.Header.Values(k)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func refuse(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -206,7 +221,7 @@ func (c Config) Guard(next http.Handler) http.Handler {
 		switch {
 		case strings.EqualFold(r.Host, c.URL.Host):
 			i.origin = origin
-		case local && localName(r.Host):
+		case local && localName(r.Host) && !relayed(r):
 		default:
 			refuse(w, fmt.Sprintf("forbidden: the controller is reached at %s, not %q", origin, r.Host))
 			return

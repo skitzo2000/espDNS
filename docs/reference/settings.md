@@ -93,7 +93,7 @@ which `-url` and `-proxy` default to.
 |------|---------|---------|
 | `-listen` | `127.0.0.1:8480` (`ESPDNS_LISTEN`) | Address for the dashboard and API. A loopback address (`127.0.0.1`, `[::1]` or `localhost`) with any port. Any other address (`0.0.0.0:8480`) only with `-url` and `-proxy`; else the controller refuses to start. |
 | `-url` | `ESPDNS_URL`, else none | The controller's address at an HTTPS reverse proxy: `https://name` or `https://name:port`, nothing after it. Empty: localhost only. See [security.md, Behind a reverse proxy](../security.md#behind-a-reverse-proxy). |
-| `-proxy` | `ESPDNS_PROXY`, else none | The reverse proxy's source addresses or networks (`192.0.2.10`, `192.0.2.0/24`), comma-separated. Needs `-url`. |
+| `-proxy` | `ESPDNS_PROXY`, else none | The reverse proxy's source addresses or networks (`192.0.2.10`, `192.0.2.0/28`), comma-separated: the proxy's own, never your whole LAN. Needs `-url`. |
 | `-data` | `data` (image: `/data`) | The data directory. |
 | `-catalog` | `../boards` (image: `/catalog`) | The shipped board catalog. |
 | `-release-url` | `https://github.com/skitzo2000/espdns` | The repository the controller checks for new firmware releases and downloads them from, when `settings.json` has no `release_url`. |
@@ -113,7 +113,7 @@ and edit it.
 | `ESPDNS_GID` | none (required) | The group ID (`id -g`). Required. |
 | `ESPDNS_LISTEN` | `127.0.0.1:8480` | The dashboard's address. Loopback only, unless `ESPDNS_URL` and `ESPDNS_PROXY` are set. |
 | `ESPDNS_URL` | empty | The controller's `https://` address at your reverse proxy, such as `https://espdns.example.net`. Empty: localhost only. |
-| `ESPDNS_PROXY` | empty | The reverse proxy's source addresses or networks, comma-separated. Needs `ESPDNS_URL`. |
+| `ESPDNS_PROXY` | empty | The reverse proxy's source addresses or networks, comma-separated: the proxy's own, never your whole LAN. Needs `ESPDNS_URL`. |
 | `ESPDNS_DATA` | `./data` | The data directory on the host, mounted at `/data`. It must exist and be owned by `ESPDNS_UID`. Compose never creates it. |
 | `ESPDNS_MEM_LIMIT` | `2g` | The container's memory limit. Compiling a blocklist needs about 220 bytes per domain at its peak. |
 | `ESPDNS_GOMEMLIMIT` | `1800MiB` | The Go runtime's soft memory limit. Keep it about nine tenths of `ESPDNS_MEM_LIMIT`. |

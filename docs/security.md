@@ -416,15 +416,26 @@ ESPDNS_LISTEN=0.0.0.0:8480              # an address the proxy can reach
 ```
 
 Point the proxy at `http://<controller host>:8480` and have it pass the original `Host` on
-(most do by default). Then:
+and add the client's address to `X-Forwarded-For` (most do both by default; in nginx,
+`proxy_set_header Host $host` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`).
+
+Put only the proxy's own address in `ESPDNS_PROXY`: a network only if the proxy really
+sends from several addresses in it. Every address there is trusted to name the client in
+`X-Forwarded-For`, and can reach the controller by plain HTTP. A proxy on the controller's
+own machine needs no `ESPDNS_PROXY` entry for the controller to serve it, but add
+`127.0.0.1` (or `::1`) so the login back-off counts its clients apart.
+
+Then:
 
 - **Who is served.** A connection from an address in `ESPDNS_PROXY`, or from the
   controller's own machine (the health check, an SSH tunnel), is served. Any other gets
   `403` before anything else, the login page included. The controller refuses to listen
   off localhost without both `ESPDNS_URL` and `ESPDNS_PROXY`.
 - **By which name.** Requests must name `ESPDNS_URL`'s host (`Host`); from the controller's
-  own machine, a localhost name works too. Anything else gets `403`, so a rebound DNS name
-  can't reach it.
+  own machine, a localhost name works too, unless the request was relayed (it carries
+  `X-Forwarded-For`, `Forwarded` or `X-Real-IP`). Anything else gets `403`, so a rebound
+  DNS name can't reach it.
 - **From which page.** A change through the proxy must carry exactly `ESPDNS_URL`'s origin,
   or no `Origin` at all.
 - **The cookie.** Through the proxy the session cookie is also `Secure`, besides
@@ -432,9 +443,17 @@ Point the proxy at `http://<controller host>:8480` and have it pass the original
 - **Who failed a login.** The login back-off counts a client by the last address in
   `X-Forwarded-For`, the one your proxy adds, and only on a connection from an
   `ESPDNS_PROXY` address; otherwise by the connection's own address. No other forwarded
-  header is read: HTTPS is implied by `ESPDNS_URL`.
-- **The first password.** It can't be set through the proxy. Set it in a browser on the
-  controller's machine, over an SSH tunnel, or with `espdns passwd`.
+  header is read: HTTPS is implied by `ESPDNS_URL`. A proxy that adds no `X-Forwarded-For`
+  makes all its clients one; your own browser is still counted apart.
+- **The first password.** It can't be set through the proxy. Set it on the server, in the
+  folder with `compose.yaml`:
+
+  ```sh
+  docker compose run --rm --entrypoint /espdns espdns-controller passwd -data /data
+  ```
+
+  It asks for a user name and the password (twice); the running controller takes it at
+  once. Or set it in a browser on the controller's machine, or over an SSH tunnel.
 
 Keep the proxy on your LAN, or behind your VPN. Do not publish the controller to the
 internet: it holds your release key, and the login is its only lock.

@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 )
 
@@ -75,10 +76,26 @@ func TestGuard(t *testing.T) {
 			t.Errorf("proxy, Host %s: %d, want 403", host, code)
 		}
 	}
-	// Loopback: by a localhost name (the health check), not public, X-Forwarded-For not read.
-	code, got = run(t, c, "127.0.0.1:5000", "localhost:8480", map[string]string{"X-Forwarded-For": "203.0.113.9"})
+	// Loopback: by a localhost name (the health check), not public.
+	code, got = run(t, c, "127.0.0.1:5000", "localhost:8480", nil)
 	if code != 200 || got != (seen{"", "", "127.0.0.1"}) {
 		t.Errorf("loopback: %d %+v", code, got)
+	}
+	// Loopback by a localhost name but relayed (a proxy on this machine passing a client's
+	// Host on): 403, so it is never taken for this machine's own browser.
+	for _, k := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+		if code, _ := run(t, c, "127.0.0.1:5000", "localhost:8480", map[string]string{k: "for=203.0.113.9"}); code != http.StatusForbidden {
+			t.Errorf("loopback, localhost, %s: %d, want 403", k, code)
+		}
+	}
+	// By the URL's host from loopback: public, X-Forwarded-For not read (not a -proxy source).
+	code, got = run(t, c, "127.0.0.1:5000", "espdns.example.net", map[string]string{"X-Forwarded-For": "203.0.113.9"})
+	if code != 200 || got != (seen{"public", "https://espdns.example.net", "127.0.0.1"}) {
+		t.Errorf("loopback by the URL: %d %+v", code, got)
+	}
+	// An IPv4-mapped proxy network matches the proxy's plain IPv4 source.
+	if ps, _ := ParseProxies(" ::ffff:192.0.2.0/120 , "); len(ps) != 1 || !ps[0].Contains(netip.MustParseAddr("192.0.2.10")) {
+		t.Errorf("ParseProxies(::ffff:192.0.2.0/120): %v", ps)
 	}
 	if code, _ := run(t, c, "127.0.0.1:5000", "evil.example", nil); code != http.StatusForbidden {
 		t.Errorf("loopback, another Host: %d, want 403", code)
