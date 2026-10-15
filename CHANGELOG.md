@@ -11,6 +11,17 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Added
+
+- The controller can run behind your own HTTPS reverse proxy, so any browser on your
+  network can use it (and install over USB from its own machine). Set `ESPDNS_URL` (the
+  proxy's `https://` address for it), `ESPDNS_PROXY` (the proxy's source addresses) and
+  `ESPDNS_LISTEN` (`0.0.0.0:8480`) in `.env`, or `-url`, `-proxy` and `-listen`. It then
+  serves only the proxy and its own machine, only by that name and origin, with a `Secure`
+  session cookie; the login back-off counts the address the proxy adds to
+  `X-Forwarded-For`. Without them nothing changes: localhost only. See
+  [docs/security.md](docs/security.md#behind-a-reverse-proxy).
+
 ## [controller 0.0.3] - 2026-10-14
 
 **Breaking: install your nodes again.** A node on 0.0.1 or 0.0.2 can't update to 0.0.3.

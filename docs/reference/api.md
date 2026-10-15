@@ -1,8 +1,8 @@
 # Controller HTTP API
 
 The controller serves its dashboard and a JSON API on `http://127.0.0.1:8480` (set by
-`ESPDNS_LISTEN`, loopback only). The dashboard uses this API, and so can you, from the same
-machine.
+`ESPDNS_LISTEN`, loopback only unless it runs behind an HTTPS reverse proxy, below). The
+dashboard uses this API, and so can you, from the same machine.
 
 Every route in 0.0.x (alpha) is here. The API may change in any 0.0.x release; there is no
 versioned path.
@@ -13,11 +13,18 @@ Back to the [reference index](README.md).
 
 ### Where requests may come from
 
-- The controller listens on loopback only and refuses to start on any other address.
+- The controller listens on loopback only and refuses to start on any other address,
+  unless `ESPDNS_URL` and `ESPDNS_PROXY` are set ([security.md, Behind a reverse
+  proxy](../security.md#behind-a-reverse-proxy)).
 - Every request under `/api/` and `/build/` must have a `Host` of `localhost` or a loopback
-  address, with any port. Others get `403`. This stops DNS rebinding.
+  address, with any port, or the host of `ESPDNS_URL`. Others get `403`. This stops DNS
+  rebinding.
 - A request that changes something must not come from another site: an `Origin` header, if
-  present, must match the `Host`, and `Sec-Fetch-Site: cross-site` is refused (`403`).
+  present, must match the `Host` (by `ESPDNS_URL`'s host: exactly its origin), and
+  `Sec-Fetch-Site: cross-site` is refused (`403`).
+- With `ESPDNS_URL` set, a connection from anywhere but this machine or an `ESPDNS_PROXY`
+  address gets `403` for every path, and a `Host` other than the URL's (or, from this
+  machine, a localhost name) too.
 - The controller never answers CORS. A page on another site can't call it.
 
 ### Logging in
@@ -26,7 +33,8 @@ A session has two halves. Send both on every request under `/api/`, and on every
 non-HEAD request:
 
 1. A cookie named `espdns_session_<port>` (for example `espdns_session_8480`). It is
-   `HttpOnly` and `SameSite=Strict`. `POST /api/login` sets it.
+   `HttpOnly` and `SameSite=Strict`, and `Secure` when you came by `ESPDNS_URL`.
+   `POST /api/login` sets it.
 2. A header `X-Session-Token: <token>`, with the `token` from the login reply.
 
 To log in:
@@ -246,7 +254,7 @@ the zone primary. The job's progress has `primary`: `{"primary", "zones", "advic
 The two `/build/` routes need only the session cookie, not the `X-Session-Token` header.
 "session" means any session, as every POST needs; these four POSTs have no further check. The
 controller keeps the last 32 or so builds in memory. Flashing from the browser (Web Serial)
-works because the dashboard is on localhost.
+works because the dashboard is on localhost, or on HTTPS behind a reverse proxy.
 
 ### Backup
 

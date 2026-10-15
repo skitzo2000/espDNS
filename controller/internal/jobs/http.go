@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/skitzo2000/espdns/controller/internal/site"
 )
 
 // The API:
@@ -78,10 +80,12 @@ func Local(req *http.Request) error {
 	return sameSite(req)
 }
 
-// sameSite: to a localhost name and, for anything but a GET, from no other site (no other
-// Origin, not Sec-Fetch-Site cross-site).
+// sameSite: to a localhost name, or by the controller's -url (site.Public), and, for
+// anything but a GET, from no other site (no other Origin: for a request by -url exactly its
+// origin; not Sec-Fetch-Site cross-site).
 func sameSite(req *http.Request) error {
-	if !loopback(req.Host) {
+	public := site.Public(req)
+	if !loopback(req.Host) && !public {
 		return fmt.Errorf("the controller is reached by localhost only, not %q", req.Host)
 	}
 	if req.Method == http.MethodGet || req.Method == http.MethodHead {
@@ -89,7 +93,7 @@ func sameSite(req *http.Request) error {
 	}
 	if o := req.Header.Get("Origin"); o != "" {
 		u, err := url.Parse(o)
-		if err != nil || u.Host != req.Host {
+		if err != nil || u.Host != req.Host || public && o != site.Origin(req) {
 			return fmt.Errorf("not from this page (Origin %s)", o)
 		}
 	}
@@ -148,9 +152,7 @@ func (r *Runner) handleStart(w http.ResponseWriter, req *http.Request) {
 	}
 	if who == "" {
 		who = "web"
-		if h, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-			who += " (" + h + ")"
-		}
+		who += " (" + site.Client(req) + ")"
 	}
 	j, err := r.Start(body.Kind, who, body.Params)
 	switch {

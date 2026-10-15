@@ -35,8 +35,11 @@ services:
     # A fixed name: docker logs/stop espdns-controller find it
     container_name: ${ESPDNS_CONTAINER:-espdns-controller}
     restart: unless-stopped
-    # Host networking: mDNS discovery and the nodes on the LAN. The dashboard itself listens
-    # on localhost only (the controller refuses any other address): http://127.0.0.1:8480.
+    # Host networking: mDNS discovery and the nodes on the LAN. The dashboard listens on
+    # localhost only by default: http://127.0.0.1:8480. Behind an HTTPS reverse proxy, set in
+    # .env: ESPDNS_URL (its https:// address), ESPDNS_PROXY (the proxy's source addresses)
+    # and ESPDNS_LISTEN (an address the proxy reaches, 0.0.0.0:8480). The controller then
+    # serves only the proxy and this machine, by that name (docs/security.md).
     network_mode: host
     # The data directory's owner, so what the controller writes there stays yours. Compose
     # can't know the host user, and a guess (1000:1000) is wrong on many systems: ESPDNS_UID
@@ -61,6 +64,9 @@ services:
     mem_limit: ${ESPDNS_MEM_LIMIT:-2g}
     environment:
       GOMEMLIMIT: ${ESPDNS_GOMEMLIMIT:-1800MiB}
+      # Unset or empty: localhost only (above)
+      ESPDNS_URL: ${ESPDNS_URL:-}
+      ESPDNS_PROXY: ${ESPDNS_PROXY:-}
     pids_limit: ${ESPDNS_PIDS_LIMIT:-256}
     volumes:
       # All the controller's state (settings.json, auth.json, keys/, configs/, zones/, log/,
