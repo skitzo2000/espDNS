@@ -109,6 +109,13 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 ([Revert](blocking.md#revert)). Then build and push the list again, and replace a card with
 read errors.
 
+**A list shows off, with the note `removed a copy signed with a key this node doesn't trust
+(from an earlier install)`.** Not a fault: the node was installed again over USB with new
+keys (or its keys were rotated after a compromise), so it deleted the old copies from its
+card at boot, and stays healthy. The Blocklists page shows **No list yet** for it.
+Fix: apply your lists and hosted zones to it again. Nothing else on the card was touched
+([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
+
 **`zone expired`** (preceded by **`zone refresh failing`**, after three failed refreshes
 in a row). A secondary zone passed its SOA expire time without a refresh from the primary.
 Fix: check that the primary is up and reachable, that its address in the node's config is

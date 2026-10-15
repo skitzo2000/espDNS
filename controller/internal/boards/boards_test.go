@@ -1,6 +1,7 @@
 package boards
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -129,11 +130,38 @@ func TestCheckLED(t *testing.T) {
 		{LED{Kind: "rgb", Red: p(4), Green: p(35), Blue: p(6)}, "LED green: GPIO 35 is connected to the octal PSRAM"},
 		{LED{Kind: "rgb", Red: p(4), Green: p(23), Blue: p(6)}, "LED green: GPIO 23 doesn't exist"},
 		{LED{Kind: "ws2812"}, "led.pin: required"},
+		{LED{Kind: "gpio", Pin: p(0)}, "LED: GPIO 0 is a strapping pin: boot mode depends on its level at reset"},
+		{LED{Kind: "rgb", Red: p(4), Green: p(5), Blue: p(46)}, "LED blue: GPIO 46 is a strapping pin"},
+		{LED{Kind: "ws2812", Pin: p(19)}, "LED: GPIO 19 is the USB port (logs and Improv)"},
+		{LED{Kind: "gpio", Pin: p(43)}, "LED: GPIO 43 is the serial console (UART0)"},
 	} {
 		err := CheckLED(b, c.led)
 		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%+v: %v, want %q", c.led, err, c.want)
 		}
+	}
+
+	// On a P4: strapping and USB pins refused; a caution pin the board's own LED is on is the
+	// vendor's wiring, so it stays allowed.
+	p4 := Board{Name: "y", Image: "esp32p4", Ethernet: &Ethernet{Kind: "emac"}, LED: &LED{Kind: "gpio", Pin: p(35)}}
+	for _, c := range []struct {
+		led  LED
+		want string
+	}{
+		{LED{Kind: "gpio", Pin: p(35), ActiveLow: true}, ""},
+		{LED{Kind: "ws2812", Pin: p(35)}, ""},
+		{LED{Kind: "rgb", Red: p(35), Green: p(20), Blue: p(21)}, ""},
+		{LED{Kind: "gpio", Pin: p(36)}, "LED: GPIO 36 is a strapping pin: boot mode depends on its level at reset"},
+		{LED{Kind: "rgb", Red: p(20), Green: p(24), Blue: p(21)}, "LED green: GPIO 24 is the USB port (logs)"},
+	} {
+		err := CheckLED(p4, c.led)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("p4 %+v: %v, want %q", c.led, err, c.want)
+		}
+	}
+	// A board's own definition keeps them as warnings.
+	if errs, warns := Check(p4); len(errs) != 0 || !slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, "GPIO 35 is a strapping pin") }) {
+		t.Errorf("p4 board: %v, %v", errs, warns)
 	}
 }
 

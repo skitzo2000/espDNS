@@ -327,6 +327,11 @@ over the network can give it keys.
 nothing else, reads it back, and restarts the board. If it can't reach the board, hold BOOT
 while you plug it in and try again.
 
+If those keys differ from the ones its stored lists were signed with, the node deletes its
+blocklist, allowed and blocked sites and hosted zones from its card at that restart, and
+shows them as off until you push them again
+([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
+
 ## Rotating keys
 
 Every node trusts two public keys: the release key the controller signs with, and the
@@ -340,7 +345,9 @@ Rotate:
   the old key as its *retired key* until the push re-signs what it stores, right after;
 - after a compromise (the release key or data directory may have leaked), at once, with
   `-compromised`. The nodes drop the old key straight away. Rotate from a controller you
-  trust again: rebuilt from an earlier backup, or from scratch.
+  trust again: rebuilt from an earlier backup, or from scratch. A copy on a node's card the
+  push didn't replace (an older one kept for a revert) is then deleted at its next boot
+  ([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
 
 Every node in `settings.json` must be pinned, answering, and on firmware that takes KEYS
 releases (`seq.keys` in its `/status`).
@@ -524,7 +531,8 @@ homes back to a new coop. `espdns recover` rebuilds what it can, and only reads 
    Lost the release key? Then nothing reaches the nodes over the network. Make new keys (the
    first run's Make your keys), give each node them over USB with **Write keys only (keeps
    settings)** ([A node without keys](#a-node-without-keys-setup-mode)), then push each
-   node's config, zones and lists again.
+   node's config, zones and lists again. With the new keys each node deletes its old
+   hosted zones and lists from its card at the restart, so it has none until that push.
 
 3. Set the login (a user name, then the password twice):
 

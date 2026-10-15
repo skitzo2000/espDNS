@@ -273,6 +273,11 @@ The **Nodes** table on the Blocklists page shows each node's list and overrides:
 number, entries, memory or SD card tier, whether it reverted, which compiled file it runs,
 and whether it's paused.
 
+A node installed again over USB with new keys deletes its old list and allowed and blocked
+sites from its SD card at first boot: they can't be checked any more. It shows **No list
+yet** until you roll them out to it again
+([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
+
 How big a list a node can hold depends on its board's memory. A list that doesn't fit is
 refused by the node, and the dry run says so.
 

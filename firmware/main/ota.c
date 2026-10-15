@@ -309,12 +309,14 @@ static void trust_init(void)
 static void trust_swap(void)
 {
     keys_node_apply();
+    /* The retired key first: a stored copy checked meanwhile verifies with the old release
+     * key or with it (one that fails is deleted at a boot load: blk_slot_open). */
+    __atomic_store_n(&s_stored.retired, keys_node_retired(), __ATOMIC_RELEASE);
     for (int i = 0; i < REL_NKEYS; i++) {
         const uint8_t *k = keys_node_key(i);
         __atomic_store_n(&s_trust.keys[i], k, __ATOMIC_RELEASE);
         __atomic_store_n(&s_stored.keys[i], k, __ATOMIC_RELEASE);
     }
-    __atomic_store_n(&s_stored.retired, keys_node_retired(), __ATOMIC_RELEASE);
 }
 
 const rel_trust_t *ota_trust(void)
