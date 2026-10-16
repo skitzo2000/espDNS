@@ -322,3 +322,25 @@ func TestAddNodeRoutes(t *testing.T) {
 		t.Fatalf("%+v", f)
 	}
 }
+
+// An adopted node that trusts another controller's release key: neither the found list nor
+// a lookup offers settings-add, both say why, and the settings-add job refuses it.
+func TestAddNodeOtherKey(t *testing.T) {
+	e := newAddNodeEnv(t)
+	other := fakenode.New("dns6", [6]byte{2, 0, 0, 0, 0, 0x66}, "esp32p4-rev1", "p4-ip101", release.PublicRaw(newTestKey(t)))
+	other.Addr = "203.0.113.66"
+	e.lan.Add(other)
+	e.seen = append(e.seen, other.Addr)
+	got := e.foundList()
+	i := slices.IndexFunc(got, func(f foundNode) bool { return f.Host == other.Addr })
+	if i < 0 || !got[i].Adopted || got[i].Next != "" || !slices.Equal(got[i].Refusals, []string{otherKeyRefusal}) {
+		t.Fatalf("found %+v", got)
+	}
+	code, l := e.lookup(other.Addr)
+	if code != http.StatusOK || l.Node == nil || l.Node.Next != "" || !slices.Equal(l.Node.Refusals, []string{otherKeyRefusal}) {
+		t.Fatalf("%d %+v", code, l)
+	}
+	if _, err := e.start("settings-add", map[string]any{"node": other.Addr}); err == nil || !strings.Contains(err.Error(), "another controller's release key") {
+		t.Fatal(err)
+	}
+}

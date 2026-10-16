@@ -630,6 +630,30 @@ test("the MAC: on its row's address, and to copy in + Add node", async ({ page, 
   expect(await violations()).toEqual([]);
 });
 
+// A node adopted by another controller (it trusts that one's release key): + Add node says
+// so and offers no Add; it is installed again over USB, which writes your keys.
+test("+ Add node: a node that trusts another controller's key says why it can't be added", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  const why = "it trusts another controller's release key: install it again with Install over USB, which writes your keys";
+  await page.route(/\/api\/nodes\/found$/, r => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ nodes: [
+    { host: FOUND, id: "aa:bb:cc:00:00:37", hostname: "espdns-000037.local", source: "mdns", online: true, read: true, board: "xiao-s3-sense",
+      image: "esp32s3-octal", version: "0.0.4", net: "wifi", mac: MACFOUND, adopted: true, listed: false, configs: true, name: "dns9",
+      refusals: [why], next: "" }] }) }));
+  await page.goto("./");
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  const list = page.locator("#nqres");
+  await expect(list).toContainText(`Can't be added yet: ${why}`);
+  await expect(list.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
+  await list.getByRole("button", { name: "Set up" }).click();
+  const d = page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" });
+  await expect(d).toContainText(`Not yet: ${why}.`);
+  await expect(d.getByRole("button", { name: "Add node" })).toHaveCount(0);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
 // A node found with firmware from before 0.0.1 (/status version "1": it takes no node
 // configs). Nothing adds it over the network: it is updated over USB first.
 const OLD = "198.51.100.38", MACOLD = "aa:bb:cc:00:00:38";

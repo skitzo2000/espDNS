@@ -553,6 +553,8 @@ func (p adoptKind) describe(n nodes.Node, all []nodes.Node, s settings.Settings,
 		an.Refusals = append(an.Refusals, "it has no keys (setup mode): write them over USB first (Install over USB, Write keys only)")
 	case !an.Configs:
 		an.Refusals = append(an.Refusals, "its firmware takes no node configs: update it first")
+	case an.Adopted && !an.Listed && p.otherKey(st):
+		an.Refusals = append(an.Refusals, otherKeyRefusal)
 	case !an.Adopted && adoptedBefore(st) != "":
 		an.Refusals = append(an.Refusals, adoptedBefore(st))
 	case !an.Adopted:
@@ -567,6 +569,16 @@ func (p adoptKind) describe(n nodes.Node, all []nodes.Node, s settings.Settings,
 		}
 	}
 	return an
+}
+
+// otherKeyRefusal is why a node that trusts another release key isn't added.
+const otherKeyRefusal = "it trusts another controller's release key: install it again with Install over USB, which writes your keys"
+
+// otherKey says whether the node whose /status is st trusts another release key than this
+// controller's; false when that isn't known (no release key here, firmware with no keys).
+func (p adoptKind) otherKey(st release.NodeStatus) bool {
+	k, err := p.signer()
+	return err == nil && len(st.Keys) > 0 && !p.pusher(k, nil).Trusts(st)
 }
 
 // adoptPreview is what the page shows before the dry run.
@@ -734,6 +746,9 @@ func (p adoptKind) settingsAdd(raw json.RawMessage) (jobs.Func, error) {
 		st, ok := status(all[i])
 		if !ok || st.Config == nil || st.Config.Source != "node" {
 			return fmt.Errorf("%s is not adopted (no pushed config): adopt it first", np.Node)
+		}
+		if p.otherKey(st) {
+			return fmt.Errorf("%s: %s", np.Node, otherKeyRefusal)
 		}
 		s, err := settings.Load(settings.Path(p.dataDir))
 		if err != nil {

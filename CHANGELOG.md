@@ -13,6 +13,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Fixed
 
+- **+ Add node** no longer adds a node that trusts another controller's release key. It says
+  why, and the node is installed again over USB, which writes your keys.
 - The setup wizard keeps **Make the release key** when a node is listed before the keys
   exist, and says why it matters: that node trusts the key it was installed with, so it is
   installed again over USB to take the new one. Before, the step offered only importing a key.
