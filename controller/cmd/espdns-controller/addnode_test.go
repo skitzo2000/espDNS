@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -320,5 +321,69 @@ func TestAddNodeRoutes(t *testing.T) {
 	e.json(e.do("GET", "/api/nodes/found", ""), http.StatusOK, &f)
 	if f.Nodes == nil || len(f.Nodes) != 0 {
 		t.Fatalf("%+v", f)
+	}
+}
+
+// An adopted node that trusts another controller's release key: neither the found list nor
+// a lookup offers settings-add, both say why, and the settings-add job refuses it.
+func TestAddNodeOtherKey(t *testing.T) {
+	e := newAddNodeEnv(t)
+	other := fakenode.New("dns6", [6]byte{2, 0, 0, 0, 0, 0x66}, "esp32p4-rev1", "p4-ip101", release.PublicRaw(newTestKey(t)))
+	other.Addr = "203.0.113.66"
+	e.lan.Add(other)
+	e.seen = append(e.seen, other.Addr)
+	got := e.foundList()
+	i := slices.IndexFunc(got, func(f foundNode) bool { return f.Host == other.Addr })
+	if i < 0 || !got[i].Adopted || got[i].Next != "" || !slices.Equal(got[i].Refusals, []string{otherKeyRefusal}) || got[i].Install != installReinstall {
+		t.Fatalf("found %+v", got)
+	}
+	code, l := e.lookup(other.Addr)
+	if code != http.StatusOK || l.Node == nil || l.Node.Next != "" || !slices.Equal(l.Node.Refusals, []string{otherKeyRefusal}) {
+		t.Fatalf("%d %+v", code, l)
+	}
+	if _, err := e.start("settings-add", map[string]any{"node": other.Addr}); err == nil || !strings.Contains(err.Error(), "another controller's release key") {
+		t.Fatal(err)
+	}
+}
+
+// A node not adopted (its board's settings) that trusts another controller's release key:
+// adopting it would sign its config with this one's, which it refuses (after pinning it).
+// Nothing adopts it: the found list says why, and the preview and the adopt job refuse it.
+func TestAdoptOtherKey(t *testing.T) {
+	e := newAddNodeEnv(t)
+	e.node.Do(func(n *fakenode.Node) { n.Pub = release.PublicRaw(newTestKey(t)) })
+	got := e.foundList()
+	if len(got) != 1 || got[0].Adopted || got[0].Next != "" || !slices.Equal(got[0].Refusals, []string{otherKeyRefusal}) ||
+		got[0].Install != installReinstall {
+		t.Fatalf("found %+v", got)
+	}
+	if _, err := e.start("adopt", e.web(map[string]any{"dry_run": true})); err == nil || !strings.Contains(err.Error(), "another controller's release key") {
+		t.Fatal(err)
+	}
+}
+
+// rotating is the release key with a rotation's new one (keys.Alternates).
+type rotating struct {
+	keyOf
+	next *ecdsa.PrivateKey
+}
+
+func (r rotating) Next() (*ecdsa.PrivateKey, error) { return r.next, nil }
+
+// During a key rotation, a node that has its new keys already is trusted: added as usual.
+func TestAddNodeRotatingKey(t *testing.T) {
+	e := newAddNodeEnv(t)
+	next := newTestKey(t)
+	e.adopt.key = rotating{keyOf{e.key}, next}
+	e.add.adopt = *e.adopt
+	moved := fakenode.New("dns7", [6]byte{2, 0, 0, 0, 0, 0x67}, "esp32p4-rev1", "p4-ip101", release.PublicRaw(next))
+	moved.Addr = "203.0.113.67"
+	e.lan.Add(moved)
+	e.seen = append(e.seen, moved.Addr)
+	e.node.Do(func(n *fakenode.Node) { n.Pub = release.PublicRaw(next) })
+	for _, f := range e.foundList() {
+		if f.Next == "" || len(f.Refusals) > 0 || f.Install != "" {
+			t.Errorf("%+v", f)
+		}
 	}
 }
