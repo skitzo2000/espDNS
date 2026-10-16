@@ -232,12 +232,31 @@ func (a actions) control(ctx context.Context, run *jobs.Run, host string, what s
 	run.Logf("%s: %s: signing a control release with the release key %s", host, what, keys.Fingerprint(k))
 	p := a.pusher(k, a.http)
 	p.Unadopted = unadopted
+	if !unadopted {
+		st, err := p.Status(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if err := needAdopted(host, st); err != nil {
+			return nil, err
+		}
+	}
 	r, err := p.PushRelease(ctx, host, release.Control, payload)
 	if err != nil {
 		return nil, err
 	}
 	run.Logf("%s: %s", host, r.Reply)
 	return controlResult{Node: host, Seq: r.Seq, Reply: r.Node.Message}, nil
+}
+
+// needAdopted refuses a node that runs on its board's defaults (no node config: one
+// reinstalled over USB): it isn't adopted, so it takes nothing signed but identify. Taking
+// it out of service and returning it sends it its config again (node-in).
+func needAdopted(host string, st release.NodeStatus) error {
+	if st.Config != nil && st.Config.Source != "" && st.Config.Source != "node" {
+		return fmt.Errorf("%s isn't adopted: it runs on its board's defaults (no node config). Take it out of service, then return it to service: its config is sent to it again", host)
+	}
+	return nil
 }
 
 func (a actions) rebootPending(raw json.RawMessage) (jobs.Func, error) {
@@ -267,6 +286,9 @@ func (a actions) rebootJob(raw json.RawMessage, onlyIfPending bool) (jobs.Func, 
 		c.Pusher = a.pusher(k, c.HTTP)
 		st, err := c.Status(ctx, host)
 		if err != nil {
+			return nil, err
+		}
+		if err := needAdopted(host, st); err != nil {
 			return nil, err
 		}
 		switch {

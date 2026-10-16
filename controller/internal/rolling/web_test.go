@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
+	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
@@ -127,5 +128,33 @@ func TestNeededImages(t *testing.T) {
 	}
 	if got := NeededImages(dir, catalog, nil, true); !slices.Equal(got, []string{"esp32s3-octal"}) {
 		t.Errorf("no node known: %v", got)
+	}
+}
+
+// A node found over mDNS and not added (in no settings.json here: another controller
+// adopted it) is neither changed by -all nor counted as a peer, adopted or not: counting
+// it refused rollouts while it didn't answer as the added nodes do.
+func TestCountedFoundNotAdded(t *testing.T) {
+	a, b, other := "192.0.2.2", "192.0.2.3", "192.0.2.9"
+	s := settings.Settings{Nodes: []string{a, b}}
+	adopted := func(addr, src string) fleet.Node {
+		return fleet.Node{Addr: addr, Source: src, Advert: &nodes.Advert{Addr: addr, Adopted: true}}
+	}
+	var said []string
+	logf := func(f string, v ...any) { said = append(said, fmt.Sprintf(f, v...)) }
+	ns := Request{}.counted(s, []fleet.Node{adopted(a, "mdns,settings"), adopted(b, "settings"), adopted(other, "mdns")}, logf)
+	if len(ns) != 2 || ns[0].Addr != a || ns[1].Addr != b || len(said) != 1 ||
+		!strings.Contains(said[0], other+": skipped: found but not added") {
+		t.Fatalf("counted: %+v %q", ns, said)
+	}
+	p := fleet.Plan{Targets: []string{a}}
+	(&fleet.Client{Logf: logf}).Count(context.Background(), &p, ns, nil)
+	if !slices.Equal(p.Peers, []string{b}) || len(p.Uncounted) != 0 {
+		t.Errorf("plan: peers %v, uncounted %v", p.Peers, p.Uncounted)
+	}
+	// Named (-peer), it counts.
+	ns = Request{Peers: []string{other}}.counted(s, []fleet.Node{adopted(a, "settings"), adopted(other, "mdns")}, logf)
+	if len(ns) != 2 {
+		t.Errorf("-peer: %+v", ns)
 	}
 }

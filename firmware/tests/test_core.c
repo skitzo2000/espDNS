@@ -3959,6 +3959,16 @@ static bool parse(const char *json, board_desc_t *b, char *err)
     return board_def_parse(json, strlen(json), b, err, 160);
 }
 
+/* A config j built for board b, then its LED's caution check: refused with msg, or taken (NULL). */
+static bool led_caution(cfg_t *cf, const board_desc_t *b, const char *j, const char *msg)
+{
+    char err[96];
+    if (!cfg_build(cf, b, j, strlen(j), err, sizeof(err)) || !cf->led_config)
+        return false;
+    bool ok = board_led_caution(b, b->image, &cf->led, err, sizeof(err));
+    return msg ? !ok && strstr(err, msg) : ok;
+}
+
 static void test_board_defs(void)
 {
     char err[160];
@@ -4090,6 +4100,31 @@ static void test_board_defs(void)
     CHECK(!cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && strstr(err, "led: kind: unknown value"));
     lj = "{\"led\":{\"kind\":\"none\"}}";
     CHECK(cfg_build(&cf, &b, lj, strlen(lj), err, sizeof(err)) && cf.led.kind == BOARD_LED_NONE && cf.led_config);
+    /* A pushed config's LED stays off the chip's strapping, USB and console pins (the
+     * controller's list), unless the board's own LED is on one (board_led_caution, checked on
+     * a push, after cfg_build); a board's own LED may be (a warning there). */
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"rgb\",\"red\":1,\"green\":2,\"blue\":45}}",
+                      "led: GPIO 45 is a strapping pin: boot mode depends on its level at reset"));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":0}}", "led: GPIO 0 is a strapping pin"));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":20}}", "led: GPIO 20 is the USB port (logs and Improv)"));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"ws2812\",\"pin\":43}}", "led: GPIO 43 is the serial console (UART0)"));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"rgb\",\"red\":38,\"green\":39,\"blue\":40}}", NULL)); /* 38: the board's */
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"none\"}}", NULL));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32s3-quad\",\"led\":{\"kind\":\"gpio\",\"pin\":46}}", &b, err));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":46,\"active_low\":true}}", NULL));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"rgb\",\"red\":46,\"green\":47,\"blue\":3}}",
+                      "led: GPIO 3 is a strapping pin"));
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32p4-rev1\",\"led\":{\"kind\":\"gpio\",\"pin\":35}}", &b, err));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":36}}", "led: GPIO 36 is a strapping pin"));
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":25}}", "led: GPIO 25 is the USB port (logs)"));
+    /* the board's 35; 45 and 19 are free on the P4 */
+    CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"rgb\",\"red\":35,\"green\":45,\"blue\":19}}", NULL));
+    /* A node without a board definition: the image it runs still names the chip. */
+    board_desc_t none = { 0 };
+    board_led_t l45 = { .kind = BOARD_LED_GPIO, .pin = { 45, BOARD_NC, BOARD_NC } };
+    CHECK(!board_led_caution(&none, "esp32s3-quad", &l45, err, sizeof(err)) && strstr(err, "GPIO 45"));
+    CHECK(board_pin_caution("esp32s3-eth", 44) && !board_pin_caution("esp32p4-rev1", 44) &&
+          board_pin_caution("esp32p4", 34) && !board_pin_caution("esp32s3-octal", 34) && !board_pin_caution("esp32s3-quad", 4));
 
     /* The partition: header and CRC (vector: zlib.crc32(b"123456789") = 0xCBF43926). */
     CHECK(board_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);

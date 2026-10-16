@@ -236,6 +236,7 @@ label.check input { margin-top: 4px; accent-color: var(--orange) }
 .drawer header h2 { font-size: 17px }
 .drawer .body { padding: 20px 22px; overflow: auto; display: grid; gap: 16px; align-content: start; flex: 1 }
 .drawer footer { padding: 14px 20px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; background: var(--bg) }
+.drawer footer .veto { flex-basis: 100%; margin: 0 }
 .x { width: 34px; height: 34px; border-radius: 4px; border: none; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; flex: none }
 .x:hover { background: var(--hover); color: var(--fg) }
 @keyframes slide { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }

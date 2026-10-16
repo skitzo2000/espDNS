@@ -42,6 +42,7 @@ type build struct {
 	Chip     image.Chip   `json:"chip"`
 	Keys     buildKeys    `json:"keys"`
 	KeysOnly bool         `json:"keys_only,omitempty"`
+	WiFi     bool         `json:"wifi"` // the board may run on Wi-Fi: the page asks for the network over Improv
 	bin      []byte
 }
 
@@ -189,7 +190,7 @@ func (b *builder) saveBoard(w http.ResponseWriter, r *http.Request) {
 // {"board": {...}} for a changed or custom one, with the node's address in "network"
 // ({"address": "192.0.2.52/24", "gateway": "192.0.2.1"}, or {"address": "dhcp"} on
 // a network with a DHCP server), which goes into its board partition. It answers with the
-// build's id; the browser then flashes /build/<id>/manifest.json with ESP Web Tools.
+// build's id; the page then writes /build/<id>/image.bin itself (usb.js).
 func (b *builder) prepare(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name    string           `json:"name"`
@@ -263,7 +264,7 @@ func (b *builder) make(e boards.Entry) (*build, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(bin)
-	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps, bin: bin}), nil
+	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps, WiFi: e.Board.MayRunOnWiFi(), bin: bin}), nil
 }
 
 func (b *builder) get(w http.ResponseWriter, r *http.Request) *build {

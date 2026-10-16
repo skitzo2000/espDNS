@@ -207,6 +207,35 @@ func node(n Node, newest Version) NodeUpdate {
 	return u
 }
 
+// Left is the pending change c without the nodes it has nothing left to do on: a chip
+// image's update (images/<image>: the newest version) of a node online that runs that
+// version or a newer one already (put on another way, over USB say), its summary said again
+// for the nodes left. A node offline is kept: its last /status may no longer be what it
+// runs. A build's (builds/<board>) is kept whole: its version can be any.
+func (r Report) Left(c changes.Change) changes.Change {
+	if !strings.HasPrefix(c.Firmware, "images/") {
+		return c
+	}
+	var left, names, from []string
+	for _, h := range c.Nodes {
+		i := slices.IndexFunc(r.Nodes, func(u NodeUpdate) bool { return u.Host == h })
+		if i >= 0 && r.Nodes[i].Online && (r.Nodes[i].State == Current || r.Nodes[i].State == Newer) {
+			continue
+		}
+		left, names = append(left, h), append(names, h)
+		if i >= 0 && r.Nodes[i].Name != "" {
+			names[len(names)-1] = r.Nodes[i].Name
+		}
+		if i >= 0 && r.Nodes[i].Runs != nil && !slices.Contains(from, r.Nodes[i].Runs.Text) {
+			from = append(from, r.Nodes[i].Runs.Text)
+		}
+	}
+	if len(left) < len(c.Nodes) {
+		c.Nodes, c.Summary = left, summary(names, from, r.Newest)
+	}
+	return c
+}
+
 // Offer is one firmware change to make: a chip image and the nodes it goes to.
 type Offer struct {
 	Source  string   `json:"firmware"`

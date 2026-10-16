@@ -135,10 +135,19 @@ typedef struct {
  * kinds, pins out of range, a pin used twice, a device on an SPI bus the board doesn't define. */
 bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err, size_t errlen);
 
+/* Why GPIO pin of image's chip is one to use with care (strapping, USB, console), or NULL. */
+const char *board_pin_caution(const char *image, int pin);
+
 /* The "led" object o into *out. With b, its pins are checked against the rest of board b's
  * (b's own LED replaced). False with a reason in err. */
 struct cJSON;
 bool board_led_parse(const struct cJSON *o, const board_desc_t *b, board_led_t *out, char *err, size_t errlen);
+
+/* A node config's LED l, in place of board b's: false with a reason in err if a pin is one
+ * board_pin_caution names for image (the image the node runs: a node without a board
+ * definition has none in b) and b's own LED isn't on it. Checked on a push only, so a config
+ * stored before this check still loads at boot. */
+bool board_led_caution(const board_desc_t *b, const char *image, const board_led_t *l, char *err, size_t errlen);
 
 /* Checks a `board` partition's header and CRC. On success points *json at the definition. */
 bool board_part_open(const uint8_t *part, size_t size, const char **json, size_t *len, const char **err);

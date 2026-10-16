@@ -11,6 +11,47 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.7] - 2026-10-16
+
+### Changed
+
+- **Install over USB** installs in its own panel, step by step, with no separate installer
+  window. It shows the board's log line by line (**Download log** saves it), asks for a
+  Wi-Fi board's network there, and says `Board Mismatch <chip found> in usb, firmware for
+  <image's chip>` when the chip on the port, or an ESP32-P4's silicon revision, isn't the
+  one the image is for, writing nothing. While it writes, the panel stays open and leaving
+  the page asks first.
+
+### Fixed
+
+- **+ Add node** no longer adds or adopts a node that trusts another controller's release key.
+  It says why and offers **Reinstall over USB**, which writes your keys.
+- The setup wizard keeps **Make the release key** when a node is listed before the keys
+  exist, and says why it matters: that node trusts the key it was installed with, so it is
+  installed again over USB to take the new one. Before, the step offered only importing a key.
+- A rollout or adoption no longer counts a node found on the network but not added (one
+  another controller adopted, say) as a node that must keep answering, and `-all` no longer
+  changes it. Only added, adopted nodes count. Nor does an added node that trusts another
+  release key (one another controller adopted): its state no longer holds up a rollout or a
+  restart from the controller.
+- **Write keys only** now restarts the board when it is done. Before, the board could stay in
+  its bootloader until you unplugged it.
+- A node's page no longer offers Restart, Update firmware or the quick fixes for a node not
+  added yet, or one listed but not adopted; the controller refuses them for such a node too.
+- A firmware update waiting to apply is dropped for a node online that already runs that
+  version, such as one installed again over USB. Its row no longer reads `0.0.4 → 0.0.4`.
+
+## [firmware 0.0.5] - 2026-10-16
+
+### Fixed
+
+- The node now refuses a config whose status light is on a strapping, USB or serial-console
+  pin (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25), as the
+  controller does. It accepted them before from anything but a current controller. The push
+  is refused with the reason, such as `config refused: led: GPIO 45 is a strapping pin`. A
+  pin the board's own LED already uses stays allowed, and board definitions are not checked.
+  A config already on the node keeps loading at boot.
+
 ## [controller 0.0.6] - 2026-10-16
 
 ### Changed

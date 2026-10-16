@@ -6,6 +6,7 @@
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 const { login } = require("./session");
+const { fakeEsp } = require("./fakeboard");
 
 async function watch(page) {
   const seen = [];
@@ -385,6 +386,7 @@ test("Reinstall over USB opens Install over USB on the node's board and address"
 // waited for at the address it has, and said to be back, with nothing to add.
 test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as before", async ({ page }) => {
   const violations = await watch(page);
+  await page.addInitScript(fakeEsp);
   await login(page);
   await fake(page);
   const lookups = [];
@@ -397,8 +399,10 @@ test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as be
   });
   await page.route(/\/api\/build$/, async r => {
     const board = { name: "ws-s3-eth", title: "Waveshare ESP32-S3-ETH", image: "esp32s3-eth" };
-    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, chip: { image: board.image, version: "0.0.5" }, keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
+    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
+      keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
   });
+  await page.route(/\/build\/e2e-ws-s3-eth\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x4000, 0x5a) }));
   await page.route(/\/api\/nodes\/lookup$/, r => { lookups.push(r.request().postDataJSON().address); return r.fulfill({ json: { address: DNS2, listed: true } }); });
   await open(page, ID2);
   await page.locator("#acts").getByRole("button", { name: "Reinstall over USB" }).click();
@@ -406,8 +410,8 @@ test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as be
   await expect(u.locator("#usb-addr")).toHaveValue("dhcp");
   await u.locator("#usb-prepare").click();
   await expect(u.locator("#usb-go")).toBeVisible();
-  await page.evaluate(() => { const d = document.createElement("ewt-install-dialog"); document.body.append(d); d._installState = { state: "finished", message: "" }; });
-  await expect(u.locator("#usb-arrived")).toHaveText(`It's back on your network at ${DNS2}, and on Nodes as before.`);
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-arrived")).toHaveText(`It's back on your network at ${DNS2}, and on Nodes as before.`, { timeout: 20000 });
   await expect(u.locator("#usb-add")).toHaveCount(0);
   expect(lookups[0]).toBe(DNS2);
   await page.waitForLoadState("networkidle");
@@ -430,6 +434,33 @@ test("a node not known, and a node not answering", async ({ page }) => {
   await expect(page.locator("#acts-why")).toHaveText("It isn't answering: it can still be taken out of service, or removed.");
   await expect(page.getByRole("button", { name: "Take out of service" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Remove from the group" })).toBeEnabled();
+});
+
+test("a node not added yet, and one listed but not adopted: no Restart, no signed actions", async ({ page }) => {
+  await login(page);
+  await fake(page);
+  const healthy = { state: "healthy", answering: true, reasons: [] };
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [
+    node(DNS2, ID2, "dns2", "p4-ip101", healthy, { mac: MAC2 }, { config: { name: "dns2", source: "defaults", seq: 0 }, reboot: { pending: true, reasons: ["config: address"] } }),
+    node(DNS3, ID3, "dns3", "ws-s3-eth", healthy, { source: "mdns", mac: MAC3 }, { config: { name: "dns3", source: "defaults", seq: 0 } })] }));
+
+  // Found on the network, not added: Set it up; its light may blink, nothing else.
+  await open(page, ID3);
+  await expect(page.locator("#attention")).toContainText("dns3 isn't one of your nodes yet.");
+  await expect(page.locator("#attention").getByRole("link", { name: "Set it up" })).toBeVisible();
+  await expect(page.locator("#acts button")).toHaveText(["Blink its light"]);
+  await expect(page.getByRole("button", { name: "Flush its cache" })).toBeHidden();
+
+  // Listed, but on its board's defaults (reinstalled over USB): reinstall, take out of
+  // service or remove it; no Restart (nor Restart now), no update, no quick fixes.
+  await page.goto("about:blank");
+  await open(page, ID2);
+  await expect(page.locator("#attention")).toContainText("dns2 isn't adopted.");
+  await expect(page.locator("#attention")).toContainText("Take it out of service, then return it to service");
+  await expect(page.locator("#acts button")).toHaveText(["Blink its light", "Reinstall over USB", "Take out of service", "Remove from the group"]);
+  await expect(page.getByRole("button", { name: /^Restart/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Flush its cache" })).toBeHidden();
+  await expect(page.locator("#acts-why")).toContainText("It isn't adopted");
 });
 
 test("out of service: taken out while offline, muted, returned to service, removed: each behind a confirm, as a job", async ({ page }) => {

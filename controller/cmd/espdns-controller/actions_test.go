@@ -40,10 +40,12 @@ type ctlNode struct {
 	mu      sync.Mutex
 	pending bool
 	healthy bool
-	down    bool
-	boot    time.Time
-	seq     uint64
-	got     []string
+	// defaults: it runs on its board's defaults (no node config), as one reinstalled over USB.
+	defaults bool
+	down     bool
+	boot     time.Time
+	seq      uint64
+	got      []string
 }
 
 func newCtlNode(t *testing.T, key *ecdsa.PrivateKey, pending bool) *ctlNode {
@@ -71,13 +73,17 @@ func (n *ctlNode) serve(w http.ResponseWriter, r *http.Request) {
 	if !n.healthy {
 		state = "fault"
 	}
+	source := "node"
+	if n.defaults {
+		source = "defaults"
+	}
 	switch r.URL.Path {
 	case "/status":
 		json.NewEncoder(w).Encode(map[string]any{"node_id": "30:ed:a0:00:00:01", "image": "esp32p4-rev1", "board": "p4-ip101",
 			"keys":     []string{release.Fingerprint(n.pub), "0000000000000000"},
 			"seq":      map[string]uint64{"control": n.seq, "config": 1},
 			"uptime_s": int64(time.Since(n.boot).Seconds()),
-			"config":   map[string]any{"source": "node", "seq": 1, "address": "static"},
+			"config":   map[string]any{"source": source, "seq": 1, "address": "static"},
 			"health":   map[string]any{"state": state, "answering": n.healthy, "reasons": []string{}},
 			"reboot":   map[string]any{"pending": n.pending, "reasons": []string{"config: address"}}})
 	case "/health":
@@ -379,6 +385,27 @@ func TestReboot(t *testing.T) {
 	}
 }
 
+// A node listed but not adopted (on its board's defaults, as reinstalled over USB): identify,
+// yes; flush, revert and reboot fail saying why, and it takes none of them.
+func TestActionsNeedAdopted(t *testing.T) {
+	k := newTestKey(t)
+	n, peer := newCtlNode(t, k, false), newCtlNode(t, k, false)
+	n.defaults = true
+	s := settings.Settings{Nodes: []string{n.addr, peer.addr}}
+	if j, err := runAction(t, k, s, "identify", `{"node":"`+n.addr+`","seconds":5}`); err != nil || j.State != jobs.Done {
+		t.Fatalf("identify: %+v %v", j, err)
+	}
+	for _, kind := range []string{"flush", "revert", "reboot"} {
+		j, err := runAction(t, k, s, kind, `{"node":"`+n.addr+`"}`)
+		if err != nil || j.State != jobs.Failed || !strings.Contains(j.Error, "isn't adopted") {
+			t.Errorf("%s: %+v %v", kind, j, err)
+		}
+	}
+	if got := n.commands(); len(got) != 1 || got[0] != "identify 5" {
+		t.Fatalf("the node took: %v", got)
+	}
+}
+
 // A node found only over mDNS (any host can advertise one, and have a release signed for
 // another node's ID): identify, yes; flush and reboot-pending, only for settings.json's.
 func TestActionsOnlyListedChange(t *testing.T) {
@@ -576,5 +603,25 @@ func TestRevert(t *testing.T) {
 		if _, err := runAction(t, k, s, c.kind, c.params); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s %s: %v, want %q", c.kind, c.params, err, c.want)
 		}
+	}
+}
+
+// A node in settings.json that another controller adopted (it trusts another release key)
+// isn't counted as a peer: its state doesn't hold up a restart, a DNS peer answering does.
+func TestRebootPeerOfAnotherController(t *testing.T) {
+	k := newTestKey(t)
+	n, other := newCtlNode(t, k, false), newCtlNode(t, newTestKey(t), false)
+	other.mu.Lock()
+	other.healthy = false
+	other.mu.Unlock()
+	j, err := runAction(t, k, settings.Settings{Nodes: []string{n.addr, other.addr}, DNSPeers: []string{"198.51.100.254"}},
+		"reboot", `{"node":"`+n.addr+`"}`)
+	logText := ""
+	for _, l := range j.Log {
+		logText += l.Text + "\n"
+	}
+	if err != nil || j.State != jobs.Done || len(n.commands()) != 1 || len(other.commands()) != 0 ||
+		!strings.Contains(logText, other.addr+" not counted as a peer: it trusts another release key") {
+		t.Fatalf("%+v %v\n%s", j, err, logText)
 	}
 }

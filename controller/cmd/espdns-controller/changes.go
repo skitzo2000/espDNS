@@ -67,6 +67,7 @@ type changeView struct {
 }
 
 func (c changesServer) list(w http.ResponseWriter, r *http.Request) {
+	updatesServer{dataDir: c.dataDir, catalog: c.catalog, store: c.store, nodes: c.nodes}.narrow()
 	cs, err := c.store.List()
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err)

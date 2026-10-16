@@ -57,15 +57,18 @@ type foundNode struct {
 	// "usb", firmware from before node configs (before 0.0.1), which only a USB install
 	// moves on (an update over the network goes to the nodes in settings.json only); "keys",
 	// a node with no keys (setup mode, which takes nothing over the network), whose keys are
-	// written over USB (Write keys only, which keeps its firmware and settings).
+	// written over USB (Write keys only, which keeps its firmware and settings); "reinstall",
+	// a node that trusts another controller's release key, installed again over USB with
+	// this one's keys.
 	Install string `json:"install,omitempty"`
 }
 
 // installUSB and installKeys are foundNode.Install for a node to install, or to write the
 // keys of, over USB.
 const (
-	installUSB  = "usb"
-	installKeys = "keys"
+	installUSB       = "usb"
+	installKeys      = "keys"
+	installReinstall = "reinstall"
 )
 
 func (a addNodeServer) routes(mux *routes) {
@@ -82,6 +85,8 @@ func (a addNodeServer) view(n nodes.Node, all []nodes.Node, s settings.Settings,
 		f.Install = installKeys
 	case an.Read && !an.Configs && !an.Listed:
 		f.Install = installUSB
+	case slices.Contains(an.Refusals, otherKeyRefusal):
+		f.Install = installReinstall
 	}
 	switch {
 	case len(an.Refusals) > 0 || an.Listed:

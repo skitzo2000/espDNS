@@ -142,11 +142,14 @@ docker compose run --rm -T -v "$HOME/espdns-keys:/mykeys:ro" --entrypoint /espdn
 ```
 
 On the first run, Make your keys can generate the release key in the controller
-(`espdns key generate`), only while no node is listed and never over an existing key. It makes the
+(`espdns key generate`), never over an existing key. With a node listed already, only when you
+choose to: that node then refuses every change until you install it again over USB. It makes the
 recovery key in your browser (WebCrypto): the page downloads `recovery.pem` and sends the
 controller only the public half, kept as `keys/recovery.pub`. The private recovery key never
 reaches the controller. The recovery public key can be replaced from the page only on
-purpose and only while no node is listed; with nodes listed it must be the one they report.
+purpose and only while no node is listed; with nodes listed it must be the one they report
+(a node that trusts another release key is installed again, so it doesn't count; while a key
+rotation is under way, or if the node keeps the controller's key as its retired one, it does).
 After that, the controller changes which keys a node trusts only by pushing KEYS releases
 you signed offline ([Rotating keys](#rotating-keys)), and then updates `recovery.pub`
 itself.

@@ -148,6 +148,26 @@ static void parse_led(ctx_t *c, const cJSON *o, board_led_t *out)
     out->active_low = flag(c, o, n == 3 ? "common_anode" : "active_low");
 }
 
+const char *board_pin_caution(const char *image, int pin)
+{
+    static const char strap[] = "a strapping pin: boot mode depends on its level at reset";
+    static const struct {
+        const char *chip, *why;
+        int8_t pins[6];
+    } caution[] = {
+        { "esp32s3", strap, { 0, 3, 45, 46, -1 } },
+        { "esp32s3", "the USB port (logs and Improv)", { 19, 20, -1 } },
+        { "esp32s3", "the serial console (UART0)", { 43, 44, -1 } },
+        { "esp32p4", strap, { 34, 35, 36, 37, 38, -1 } },
+        { "esp32p4", "the USB port (logs)", { 24, 25, -1 } },
+    };
+    for (size_t i = 0; i < sizeof(caution) / sizeof(caution[0]); i++)
+        for (int j = 0; !strncmp(image, caution[i].chip, 7) && caution[i].pins[j] >= 0; j++)
+            if (caution[i].pins[j] == pin)
+                return caution[i].why;
+    return NULL;
+}
+
 bool board_led_parse(const cJSON *o, const board_desc_t *b, board_led_t *out, char *err, size_t errlen)
 {
     ctx_t c = { .err = err, .errlen = errlen };
@@ -160,6 +180,20 @@ bool board_led_parse(const cJSON *o, const board_desc_t *b, board_led_t *out, ch
         check_pins(&c, &t);
     }
     return !c.failed;
+}
+
+bool board_led_caution(const board_desc_t *b, const char *image, const board_led_t *l, char *err, size_t errlen)
+{
+    for (int i = 0; i < 3 && l->kind != BOARD_LED_NONE; i++) {
+        int p = l->pin[i];
+        const char *why = p != BOARD_NC ? board_pin_caution(image, p) : NULL;
+        bool own = b->led.kind != BOARD_LED_NONE && (b->led.pin[0] == p || b->led.pin[1] == p || b->led.pin[2] == p);
+        if (why && !own) {
+            snprintf(err, errlen, "led: GPIO %d is %s", p, why);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err, size_t errlen)

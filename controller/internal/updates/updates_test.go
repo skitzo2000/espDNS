@@ -231,3 +231,31 @@ func TestBuildErrorNoPath(t *testing.T) {
 		}
 	}
 }
+
+// Left takes out of a chip image's update the nodes on the newest version or a newer one,
+// its summary for the nodes left; one offline is kept; a build's is kept whole.
+func TestLeft(t *testing.T) {
+	ns := []Node{
+		{Host: "192.0.2.52", Listed: true, Online: true, Status: status("esp32s3", "s3-board", "0.0.4", "", "", "dns2")},
+		{Host: "192.0.2.53", Listed: true, Online: true, Status: status("esp32s3", "s3-board", "0.0.3", "", "", "dns3")},
+		{Host: "192.0.2.54", Listed: true, Online: true, Status: status("esp32s3", "s3-board", "0.0.5", "", "", "dns4")},
+		{Host: "192.0.2.55", Listed: true},
+		{Host: "192.0.2.56", Listed: true, Status: status("esp32s3", "s3-board", "0.0.4", "", "", "dns6")},
+	}
+	r := For(ns, nil, "0.0.4", nil)
+	c := changes.Change{Kind: changes.Firmware, Firmware: "images/esp32s3", Nodes: []string{"192.0.2.52", "192.0.2.53", "192.0.2.54", "192.0.2.55", "192.0.2.56"}, Summary: "x"}
+	got := r.Left(c)
+	if !slices.Equal(got.Nodes, []string{"192.0.2.53", "192.0.2.55", "192.0.2.56"}) || got.Summary != "Update dns3, 192.0.2.55, dns6 to 0.0.4" {
+		t.Errorf("left %+v", got)
+	}
+	if got := r.Left(changes.Change{Kind: changes.Firmware, Firmware: "images/esp32s3", Nodes: []string{"192.0.2.52"}}); len(got.Nodes) != 0 {
+		t.Errorf("reached: %+v", got)
+	}
+	if got := r.Left(changes.Change{Kind: changes.Firmware, Firmware: "images/esp32s3", Nodes: []string{"192.0.2.53"}, Summary: "x"}); got.Summary != "x" {
+		t.Errorf("none taken: %+v", got)
+	}
+	b := changes.Change{Kind: changes.Firmware, Firmware: "builds/s3-board", Nodes: []string{"192.0.2.52"}, Summary: "x"}
+	if got := r.Left(b); !slices.Equal(got.Nodes, b.Nodes) {
+		t.Errorf("build: %+v", got)
+	}
+}

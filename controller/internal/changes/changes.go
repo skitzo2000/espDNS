@@ -210,6 +210,42 @@ func (s *Store) List() ([]Change, error) {
 	return cs, err
 }
 
+// Narrow gives each pending firmware change an apply doesn't hold to f, which takes out
+// the nodes it has nothing left to do on (and says its summary again); one left with no
+// node goes. It returns the pending changes, as List.
+func (s *Store) Narrow(f func(Change) Change) ([]Change, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cs, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	out, gone, changed := []Change{}, []string{}, false
+	for _, c := range cs {
+		if c.Kind == Firmware && !s.held[c.ID] {
+			n := f(c)
+			if len(n.Nodes) == 0 {
+				gone, changed = append(gone, c.ID), true
+				continue
+			}
+			if len(n.Nodes) < len(c.Nodes) {
+				c.Nodes, c.Summary, changed = n.Nodes, n.Summary, true
+			}
+		}
+		out = append(out, c)
+	}
+	if !changed {
+		return out, nil
+	}
+	if err := s.save(out); err != nil {
+		return nil, err
+	}
+	for _, id := range gone {
+		s.remove(id)
+	}
+	return out, nil
+}
+
 // Held says whether an apply running now holds the change.
 func (s *Store) Held(id string) bool {
 	s.mu.Lock()

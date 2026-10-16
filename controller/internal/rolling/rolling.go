@@ -241,9 +241,10 @@ func Known(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 	return ns, err
 }
 
-// Counted is Known but the nodes out of service (settings.json "out_of_service"; the
-// request's Returning aside), each said in the log: never changed by -all, nor counted
-// as a peer for the last-healthy-node rule, answering or not.
+// Counted is Known but the nodes found and not added (over mDNS, not in settings.json nor
+// a -peer: one another controller adopted, say) and those out of service (settings.json
+// "out_of_service"; the request's Returning aside), each said in the log: never changed
+// by -all, nor counted as a peer for the last-healthy-node rule, answering or not.
 func Counted(ctx context.Context, c *fleet.Client, r Request, logf func(string, ...any)) ([]fleet.Node, error) {
 	s, err := r.loadSettings()
 	if err != nil {
@@ -253,13 +254,21 @@ func Counted(ctx context.Context, c *fleet.Client, r Request, logf func(string, 
 	if err != nil {
 		return nil, err
 	}
+	return r.counted(s, ns, logf), nil
+}
+
+func (r Request) counted(s settings.Settings, ns []fleet.Node, logf func(string, ...any)) []fleet.Node {
 	return slices.DeleteFunc(ns, func(n fleet.Node) bool {
-		if !s.IsOutOfService(n.Addr) || n.Addr == r.Returning {
-			return false
+		switch {
+		case !slices.Contains(s.Nodes, n.Addr) && !slices.Contains(r.Peers, n.Addr):
+			logf("%s: skipped: found but not added to settings.json (not changed, not counted)", n.Addr)
+			return true
+		case s.IsOutOfService(n.Addr) && n.Addr != r.Returning:
+			logf("%s: skipped: out of service (not changed, not counted)", n.Addr)
+			return true
 		}
-		logf("%s: skipped: out of service (not changed, not counted)", n.Addr)
-		return true
-	}), nil
+		return false
+	})
 }
 
 // LoadChange reads what the request pushes to hosts, checked: the firmware's app

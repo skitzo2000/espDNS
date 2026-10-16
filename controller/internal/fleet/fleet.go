@@ -275,8 +275,8 @@ func Adopted(n Node) bool {
 
 // Count sets which of the nodes known (Discover's) count for the plan's rule: every other
 // node clients use is a peer; a node found but not adopted isn't in the router's DNS list,
-// so clients don't use it and it doesn't count (named counts it anyway: the CLI's -peer).
-// The same for a target: changed, but while another node is changed it doesn't count.
+// so clients don't use it and it doesn't count (named counts it anyway: the CLI's -peer),
+// nor does one adopted that trusts another release key (another controller's node). The same for a target: changed, but while another node is changed it doesn't count.
 func (c *Client) Count(ctx context.Context, p *Plan, known []Node, named []string) {
 	for _, t := range p.Targets {
 		i := slices.IndexFunc(known, func(n Node) bool { return n.Addr == t })
@@ -294,7 +294,11 @@ func (c *Client) Count(ctx context.Context, p *Plan, known []Node, named []strin
 	for _, n := range known {
 		switch {
 		case slices.Contains(p.Targets, n.Addr):
-		case slices.Contains(named, n.Addr) || Adopted(n):
+		case slices.Contains(named, n.Addr):
+			p.Peers = append(p.Peers, n.Addr)
+		case Adopted(n) && !c.trusted(n):
+			c.logf("%s not counted as a peer: it trusts another release key (another controller's)", n.Addr)
+		case Adopted(n):
 			p.Peers = append(p.Peers, n.Addr)
 		default:
 			c.logf("%s not counted as a peer: not adopted (no node config)", n.Addr)
@@ -303,6 +307,12 @@ func (c *Client) Count(ctx context.Context, p *Plan, known []Node, named []strin
 	if len(p.Peers) > 0 {
 		c.logf("other nodes: %s", strings.Join(p.Peers, ", "))
 	}
+}
+
+// trusted says whether n trusts the client's release key, as its /status says; true when
+// that isn't known (no key here, no /status read, firmware from before signed releases).
+func (c *Client) trusted(n Node) bool {
+	return c.Pusher == nil || n.Status == nil || len(n.Status.Keys) == 0 || c.Pusher.Trusts(*n.Status)
 }
 
 // Fill reads n's /status and /health.

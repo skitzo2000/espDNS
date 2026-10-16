@@ -289,7 +289,7 @@ function keyBody() {
       msg.className = "hint";
       msg.textContent = "Making the release key…";
       try {
-        data.key = await post("api/keys/release", {});
+        data.key = await post("api/keys/release", listedNodes ? { reinstall: true } : {});
         msg.textContent = "";
         toast("Release key made");
         render(true);
@@ -317,8 +317,10 @@ function keyBody() {
       h("p", { class: "small" }, h("b", {}, "Release key"), ": signs every change. The controller keeps it."),
       k.error && k.missing === false ? h("p", { class: "bad" }, `The controller has a release key it can't use: ${str(k.error)}`) : null,
       listedNodes
-        ? h("p", { class: "hint" }, "Your nodes trust a release key already: import that one. A new one would sign changes they all refuse.")
-        : h("div", { class: "row" }, make),
+        ? h("p", { class: "hint", id: "keys-listed" }, "A node is in your list already, and it trusts the release key it was installed with. "
+          + "Have that key? Use it (below). Or make a new one: each listed node then refuses every change until you install it again over USB.")
+        : null,
+      h("div", { class: "row" }, make),
       imp);
   }
 

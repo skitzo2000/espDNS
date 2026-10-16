@@ -415,6 +415,9 @@ func (p *Pusher) KeyFor(st NodeStatus) *ecdsa.PrivateKey {
 	return p.Key
 }
 
+// Trusts says whether the node whose /status is st trusts p's key (KeyFor) in p's slot.
+func (p *Pusher) Trusts(st NodeStatus) bool { return p.trusted("", st) == nil }
+
 // trusted checks the node trusts p's key (KeyFor) in p's slot.
 func (p *Pusher) trusted(host string, st NodeStatus) error {
 	fp := Fingerprint(PublicRaw(p.KeyFor(st)))
