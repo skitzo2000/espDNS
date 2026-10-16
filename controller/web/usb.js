@@ -233,6 +233,12 @@ const spinning = text => h("div", { class: "row small" }, h("span", { class: "sp
 // flash here.
 
 const KEYS_OFFSET = 0x1b000, KEYS_SIZE = 0x2000;
+// What a failed step means here: only the keys partition is ever written.
+const keysSaid = {
+  write: m => `Writing the keys failed (${m}). Nothing else was touched; try again.`,
+  verify: m => `The keys read back don't match what was written (${m}). Try again.`,
+  reset: m => `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`,
+};
 
 function keysOnly(o, keysReady) {
   const status = h("p", { class: "small", id: "usb-keys-status", role: "status", "aria-live": "polite" });
@@ -258,9 +264,9 @@ function keysOnly(o, keysReady) {
       say("Connecting to the board…");
       const c = await flash.connect(port);
       transport = c.transport;
-      const { loader, chip } = c;
+      const { loader, description } = c;
       step = "write";
-      say(`Connected to ${chip}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
+      say(`Connected to ${description}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
       bar.hidden = false;
       bar.value = 0;
       await flash.write(loader, [{ data: keys, address: KEYS_OFFSET }],
@@ -275,7 +281,7 @@ function keysOnly(o, keysReady) {
       bar.value = 100;
       say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}). Its firmware and settings are as they were; it shows on Nodes again in a moment.`, "small ok");
     } catch (e) {
-      say(flash.serialError(e, step), "small bad");
+      say(flash.serialError(e, step, keysSaid), "small bad");
     } finally {
       await flash.close(transport);
       go.disabled = !keysReady;
