@@ -19,6 +19,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
+	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
@@ -319,5 +320,23 @@ func TestNoDHCPThere(t *testing.T) {
 	if err := b.Adopt.Check(b.Adopt.Config, release.NodeStatus{IP: "192.0.3.9"}); err == nil ||
 		!strings.Contains(err.Error(), "no DHCP server") {
 		t.Fatal(err)
+	}
+}
+
+// While a node is adopted, the other nodes count only when added (settings.json) and
+// adopted, or named (-peer): one found over mDNS that another controller adopted doesn't.
+func TestAdoptPeersAddedOnly(t *testing.T) {
+	host, a, b, other := "192.0.2.5", "192.0.2.2", "192.0.2.3", "192.0.2.9"
+	node := func(addr string, adopted bool) fleet.Node {
+		return fleet.Node{Addr: addr, Advert: &nodes.Advert{Addr: addr, Adopted: adopted}}
+	}
+	var said []string
+	got := peers([]fleet.Node{node(host, false), node(a, true), node(b, false), node(other, true)}, host,
+		[]string{a, b}, nil, func(f string, v ...any) { said = append(said, fmt.Sprintf(f, v...)) })
+	if !slices.Equal(got, []string{a}) || len(said) != 1 || !strings.Contains(said[0], other+" not counted as a peer: found but not added") {
+		t.Errorf("%v %q", got, said)
+	}
+	if got := peers([]fleet.Node{node(other, false)}, host, nil, []string{other}, t.Logf); !slices.Equal(got, []string{other}) {
+		t.Errorf("-peer: %v", got)
 	}
 }
