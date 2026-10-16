@@ -432,6 +432,33 @@ test("a node not known, and a node not answering", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Remove from the group" })).toBeEnabled();
 });
 
+test("a node not added yet, and one listed but not adopted: no Restart, no signed actions", async ({ page }) => {
+  await login(page);
+  await fake(page);
+  const healthy = { state: "healthy", answering: true, reasons: [] };
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [
+    node(DNS2, ID2, "dns2", "p4-ip101", healthy, { mac: MAC2 }, { config: { name: "dns2", source: "defaults", seq: 0 }, reboot: { pending: true, reasons: ["config: address"] } }),
+    node(DNS3, ID3, "dns3", "ws-s3-eth", healthy, { source: "mdns", mac: MAC3 }, { config: { name: "dns3", source: "defaults", seq: 0 } })] }));
+
+  // Found on the network, not added: Set it up; its light may blink, nothing else.
+  await open(page, ID3);
+  await expect(page.locator("#attention")).toContainText("dns3 isn't one of your nodes yet.");
+  await expect(page.locator("#attention").getByRole("link", { name: "Set it up" })).toBeVisible();
+  await expect(page.locator("#acts button")).toHaveText(["Blink its light"]);
+  await expect(page.getByRole("button", { name: "Flush its cache" })).toBeHidden();
+
+  // Listed, but on its board's defaults (reinstalled over USB): reinstall, take out of
+  // service or remove it; no Restart (nor Restart now), no update, no quick fixes.
+  await page.goto("about:blank");
+  await open(page, ID2);
+  await expect(page.locator("#attention")).toContainText("dns2 isn't adopted.");
+  await expect(page.locator("#attention")).toContainText("Take it out of service, then return it to service");
+  await expect(page.locator("#acts button")).toHaveText(["Blink its light", "Reinstall over USB", "Take out of service", "Remove from the group"]);
+  await expect(page.getByRole("button", { name: /^Restart/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Flush its cache" })).toBeHidden();
+  await expect(page.locator("#acts-why")).toContainText("It isn't adopted");
+});
+
 test("out of service: taken out while offline, muted, returned to service, removed: each behind a confirm, as a job", async ({ page }) => {
   const violations = await watch(page);
   await login(page);

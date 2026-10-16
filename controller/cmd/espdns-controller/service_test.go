@@ -189,6 +189,25 @@ func TestServiceReturnCatchesUp(t *testing.T) {
 	}
 }
 
+// A listed node on its board's defaults (reinstalled over USB) isn't adopted: taken out of
+// service and returned, it is sent its config again, and runs it (the node page says so).
+func TestServiceReturnReadopts(t *testing.T) {
+	e := newServiceEnv(t, 3, false)
+	back := e.nodes[2]
+	back.Unadopted = true
+	if c, _ := fakeStatus(back)["config"].(map[string]any); c["source"] != "defaults" {
+		t.Fatalf("config before: %v", c)
+	}
+	for _, kind := range []string{"node-out", "node-in"} {
+		if j, err := e.job(kind, map[string]any{"node": e.addrs[2]}); err != nil || j.State != jobs.Done {
+			t.Fatalf("%s: %v %+v", kind, err, j)
+		}
+	}
+	if c, _ := fakeStatus(back)["config"].(map[string]any); c["source"] != "node" || c["name"] != "fake-c" {
+		t.Fatalf("config after: %v (events %v)", c, back.Events())
+	}
+}
+
 // Removed from the group while offline: out of settings.json (and out of service), its
 // config file kept. Refused while a pending firmware update names it.
 func TestServiceRemove(t *testing.T) {

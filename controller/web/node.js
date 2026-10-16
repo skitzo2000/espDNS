@@ -37,6 +37,10 @@ const ip = n => hostOnly(n.addr);
 
 // updateOf is the node's line of /api/updates, if any.
 const updateOf = n => arr(obj(data.updates).nodes).find(u => u.host === n.addr) || null;
+// adopted: one of your nodes, running on the config the controller sent it. One listed that
+// runs on its board's defaults (reinstalled over USB) takes nothing signed but identify.
+const unadopted = n => { const c = obj(obj(n.status).config); return has(c.source) && c.source !== "node"; };
+const adopted = n => n.source === "settings" && !unadopted(n);
 const offered = n => { const u = updateOf(n); return u && u.state === "available" && u.listed && !u.out_of_service && !u.pending ? u : null; };
 
 // ---- why an action can't be taken ------------------------------------------------------
@@ -48,6 +52,7 @@ function actionWhy(n, identify) {
   if (!n.online && n.out_of_service) return "It isn't answering: return it to service once it does, or remove it.";
   if (!n.online) return n.source === "settings" ? "It isn't answering: it can still be taken out of service, or removed." : "It isn't answering: no actions until it does.";
   if (!identify && n.source !== "settings") return "It isn't one of your nodes yet: add it from Nodes first.";
+  if (!identify && unadopted(n)) return "It isn't adopted: it runs on its board's defaults. Take it out of service, then return it to service: its settings are sent to it again.";
   return "";
 }
 
@@ -278,8 +283,9 @@ function renderHead() {
 
   const no = actionWhy(n, false), noId = actionWhy(n, true);
   const blink = h("button", { class: "btn", type: "button", disabled: !!noId || ident, onclick: () => identify(n) }, "Blink its light");
-  const restart = h("button", { class: "btn", type: "button", disabled: !!no, onclick: () => openRestart(n) }, "Restart");
-  const update = offered(n) ? h("button", { class: "btn", type: "button", disabled: !data.sess.logged_in,
+  // Restart and Update firmware: for one of your nodes it runs (adopted) alone.
+  const restart = adopted(n) ? h("button", { class: "btn", type: "button", disabled: !!no, onclick: () => openRestart(n) }, "Restart") : null;
+  const update = adopted(n) && offered(n) ? h("button", { class: "btn", type: "button", disabled: !data.sess.logged_in,
     onclick: () => openUpdate({ updates: data.updates, listed: listedNodes(), canWrite: !!data.sess.logged_in, only: n.addr, done: readUpdates }) }, "Update firmware") : null;
   // Out of service and back, removed: for one of your nodes, offline too.
   let svc = null, rm = null;
@@ -345,7 +351,7 @@ function renderAttention() {
       if (s.degraded && !hh.state) out.push(h("p", {}, reason("degraded")[1]));
     }
     for (const r of info) out.push(h("p", {}, h("b", {}, `${sentenceCase(r)}. `), reason(r)[1]));
-    if (rb.pending === true) {
+    if (rb.pending === true && adopted(n)) {
       const no = actionWhy(n, false);
       if (!info.includes("reboot pending")) out.push(h("p", {}, h("b", {}, "Reboot pending. "), reason("reboot pending")[1]));
       out.push(h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", disabled: !!no, onclick: () => openRestart(n) }, "Restart now"),
@@ -353,7 +359,7 @@ function renderAttention() {
     }
     // Firmware from before health states ("Old firmware: update it"): the update a click
     // away, or why there is none.
-    if (!hh.state && n.source === "settings") {
+    if (!hh.state && adopted(n)) {
       const u = offered(n);
       out.push(h("p", {}, h("b", {}, "Old firmware. "), "It doesn't report its health in detail or follow espDNS's light patterns."),
         u ? h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", disabled: !data.sess.logged_in,
@@ -363,6 +369,8 @@ function renderAttention() {
     if (n.source !== "settings") {
       out.push(h("b", {}, `${name} isn't one of your nodes yet.`), h("p", {}, "Found on your network. Add it to change its settings and send it changes."),
         h("div", { class: "row" }, h("a", { class: "btn primary", href: `./#found=${encodeURIComponent(ip(n))}` }, "Set it up")));
+    } else if (unadopted(n)) {
+      out.push(h("b", {}, `${name} isn't adopted.`), h("p", {}, "It runs on its board's defaults, as after a reinstall over USB, so it takes no changes. Take it out of service, then return it to service: its settings are sent to it again."));
     }
   }
   box.className = cls;
@@ -821,12 +829,14 @@ function renderDetails() {
     detailsBuilt = { kv: h("dl", { class: "kv" }), acts: h("div", { class: "row" }), runs: h("pre", { class: "raw", id: "raw-config" }), status: h("pre", { class: "raw", id: "raw-status" }),
       runsBox: null, cli: h("p", { class: "hint" }) };
     detailsBuilt.runsBox = h("details", { class: "sub-raw" }, h("summary", {}, "Its settings, as it runs them"), detailsBuilt.runs);
-    $("details-body").append(detailsBuilt.kv, h("div", { class: "stack nogap-s" }, h("span", { class: "small" }, h("b", {}, "Quick fixes")), detailsBuilt.acts,
-      h("span", { class: "hint" }, "Older …: back to the copy from before the last change.")),
+    detailsBuilt.fixes = h("div", { class: "stack nogap-s" }, h("span", { class: "small" }, h("b", {}, "Quick fixes")), detailsBuilt.acts,
+      h("span", { class: "hint" }, "Older …: back to the copy from before the last change."));
+    $("details-body").append(detailsBuilt.kv, detailsBuilt.fixes,
     detailsBuilt.runsBox, h("details", { class: "sub-raw" }, h("summary", {}, "Its last status, as it reported it"), detailsBuilt.status), detailsBuilt.cli);
   }
   detailsBuilt.kv.replaceChildren(...kv);
   detailsBuilt.acts.replaceChildren(fl, ...reverts);
+  detailsBuilt.fixes.hidden = !adopted(n);
   detailsBuilt.runs.textContent = runs;
   detailsBuilt.runsBox.hidden = !runs;
   detailsBuilt.status.textContent = n.status ? JSON.stringify(n.status, null, 2) : "Nothing read yet.";
