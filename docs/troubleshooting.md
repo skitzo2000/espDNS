@@ -253,6 +253,10 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 **`Board Mismatch ESP32-P4 in usb, firmware for ESP32-S3`.** The chip on the port isn't
 the one the image is for: the first name is the chip found, the second the image's. Nothing
 was written. Choose the board that's plugged in, press **Prepare image**, and install again.
+With revisions in it, like `Board Mismatch ESP32-P4 v1.3 in usb, firmware for ESP32-P4 v3.0
+to v3.99`, the chip is right but its silicon revision isn't one the image runs on: ESP32-P4
+v1.x boards take the `esp32p4-rev1` image, v3.x boards the `esp32p4` one. Describe the board
+on the right image (**Describe a board from this one**) and install that.
 
 **`Couldn't reach the board's bootloader`.** Unplug the board, hold its BOOT button while
 you plug it back in, and press **Install on the board over USB** again. Still nothing? Try

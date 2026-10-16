@@ -6,7 +6,7 @@
 // fakeEsp is an ESP chip on a stubbed port. In its serial bootloader (as it starts), as far
 // as esptool-js speaks to it: SLIP frames; SYNC answered (the ROM's non-zero value);
 // registers read as 0, but the chip-detect magic (options.magic: 0x9 the ESP32-S3, the
-// default; 0x0ADDBAD0 the ESP32-P4); the flasher stub's upload taken and its "OHAI" sent;
+// default; 0x0ADDBAD0 the ESP32-P4) and options.regs ({address: value}); the flasher stub's upload taken and its "OHAI" sent;
 // compressed flash writes (FLASH_DEFL_BEGIN/DATA/END) inflated into a sparse flash (refused
 // with options.failWrite; options.hold holds the first block until window.__esp.release()
 // is called); READ_FLASH answered from it. options.syncs is how many SYNCs it
@@ -19,8 +19,9 @@
 // Every command's op is kept in window.__esp.ops, each write's offset and size in .begins,
 // the flash written in .flash (offset -> byte), each setSignals call in .signals with .after,
 // the number of commands before it, and the Wi-Fi join's data (as the firmware's RPC reads
-// it) in .join; options.app starts it in the app.
-function fakeEsp({ magic = 0x9, syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false,
+// it) in .join; options.app starts it in the app. As a real port, it refuses to open while
+// open (InvalidStateError) and to close while a stream is locked.
+function fakeEsp({ magic = 0x9, regs = {}, syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false,
   bootLog = ["ESP-ROM:esp32s3-20210327", "rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)",
     "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m", "\x1b[0;33mW (342) net: no link yet\x1b[0m", "\x1b[0;32mI (350) improv: listening on USB serial\x1b[0m"] } = {}) {
   const esp = { ops: [], begins: [], flash: {}, opened: 0, signals: [], join: null, mode: app ? "app" : "rom" };
@@ -51,7 +52,7 @@ function fakeEsp({ magic = 0x9, syncs = Infinity, failWrite = false, hold = fals
     esp.ops.push(op);
     switch (op) {
       case 0x08: if (synced++ < syncs) for (let i = 0; i < 8; i++) reply(op, 0x20120707); return; // SYNC
-      case 0x0a: reply(op, u32(data, 0) === 0x40001000 ? magic : 0); return; // READ_REG
+      case 0x0a: reply(op, u32(data, 0) === 0x40001000 ? magic : regs[u32(data, 0)] || 0); return; // READ_REG
       case 0x06: reply(op); send(new TextEncoder().encode("OHAI")); return; // MEM_END: the stub runs
       case 0x10: // FLASH_DEFL_BEGIN: uncompressed size, blocks, block size, offset
         defl = { size: u32(data, 0), offset: u32(data, 12), parts: [] };
@@ -144,12 +145,17 @@ function fakeEsp({ magic = 0x9, syncs = Infinity, failWrite = false, hold = fals
   const port = {
     readable: null, writable: null,
     async open() {
+      if (port.readable) throw new DOMException("The port is already open.", "InvalidStateError");
       esp.opened++;
       openedIn = esp.mode;
       Object.assign(port, streams());
       if (!booted) setTimeout(boot, 50); // its boot log, as a port opened after the restart reads it
     },
-    async close() { port.readable = port.writable = null; },
+    async close() {
+      if (!port.readable) throw new DOMException("The port is already closed.", "InvalidStateError");
+      if (port.readable.locked || port.writable.locked) throw new TypeError("Cannot cancel a locked stream");
+      port.readable = port.writable = null;
+    },
     async setSignals(s) {
       esp.signals.push({ ...s, after: esp.ops.length });
       if (s.requestToSend === true && !rts) { rts = true; dtr = false; }

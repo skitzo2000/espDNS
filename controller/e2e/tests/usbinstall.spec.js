@@ -166,6 +166,48 @@ test("Install over USB: an ESP32-P4 on the port and an ESP32-S3 image: Board Mis
   expect(await violations()).toEqual([]);
 });
 
+// The two ESP32-P4 images run on different silicon (esp32p4-rev1: v1.x; esp32p4: v3.x): the
+// image's bootloader header says which, and a chip outside it is refused like another chip.
+// The image here is esp32p4-rev1's (v1.0 to v1.99, its bootloader at 0x2000).
+const P4REV1 = Buffer.from(IMAGE);
+P4REV1.set([0xe9], 0x2000);
+P4REV1.writeUInt16LE(100, 0x2000 + 15);
+P4REV1.writeUInt16LE(199, 0x2000 + 17);
+const P4_REV_REG = 0x5012d000 + 68 + 8; // EFUSE_BLOCK1_ADDR + 8: minor in bits 0-3, major in 4-5
+for (const [rev, reg, ok] of [["v3.0", 0x30, false], ["v1.3", 0x13, true]]) {
+  test(`Install over USB: an ESP32-P4 ${rev} and the esp32p4-rev1 image: ${ok ? "written" : "Board Mismatch with the revisions, nothing written"}`, async ({ page }) => {
+    const { u, violations } = await start(page, { board: "p4-ip101", fake: { magic: 0x0addbad0, regs: { [P4_REV_REG]: reg } } });
+    await page.route(/\/build\/e2e-p4-ip101\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: P4REV1 }));
+    await u.locator("#usb-go").click();
+    if (ok) {
+      await expect(step(u, "write")).toHaveClass("done", { timeout: 20000 });
+      expect((await esp(page)).begins).toEqual([{ offset: 0, size: P4REV1.length }]);
+    } else {
+      await expect(u.locator("#usb-failed")).toHaveText("Board Mismatch ESP32-P4 v3.0 in usb, firmware for ESP32-P4 v1.0 to v1.99", { timeout: 20000 });
+      await expect(step(u, "chip")).toHaveClass("failed");
+      expect((await esp(page)).begins).toEqual([]);
+    }
+    expect(await violations()).toEqual([]);
+  });
+}
+
+// Write keys only after an install: the install's console lets go of the port first, then
+// the keys are written; the port is never opened twice at once (the fake refuses that).
+test("Install over USB, then Write keys only on the same port: the console let go of, the keys written", async ({ page }) => {
+  const { u, violations } = await start(page);
+  await page.route(/\/api\/build\/keys$/, r => r.fulfill({ json: { id: "e2e-keys", keys: { release: RELFP, recovery: RECFP } } }));
+  await page.route(/\/build\/e2e-keys\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x2000, 0x4b) }));
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toBeVisible({ timeout: 20000 });
+  await expect(u.locator("#usb-log-reset")).toBeEnabled(); // the console is open
+  await u.locator("#usb-keys-only summary").click();
+  await u.getByRole("button", { name: "Write the keys over USB" }).click();
+  await expect(u.locator("#usb-keys-status")).toContainText("Done: the board has your keys", { timeout: 20000 });
+  expect((await esp(page)).begins).toEqual([{ offset: 0, size: IMAGE.length }, { offset: 0x1b000, size: 0x2000 }]);
+  await expect(u.locator("#usb-go")).toBeEnabled();
+  expect(await violations()).toEqual([]);
+});
+
 test("Install over USB: the port picker cancelled, nothing fetched or written", async ({ page }) => {
   const { u, state, violations } = await start(page);
   await page.evaluate(() => {
@@ -222,9 +264,13 @@ test("Install over USB: while it writes, the panel won't close, and says why in 
   await u.locator("header .x").click();
   await page.mouse.click(10, 300); // outside, on the scrim
   await expect(u).toBeVisible();
+  // Leaving the page asks first; afterwards it doesn't.
+  const leaving = () => page.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+  expect(await leaving()).toBe(true);
   await page.evaluate(() => window.__esp.release());
   await expect(u.locator("#usb-installed")).toBeVisible({ timeout: 20000 });
   await expect(busy).toHaveCount(0);
+  expect(await leaving()).toBe(false);
   await u.getByRole("button", { name: "Close" }).last().click();
   await expect(u).toBeHidden();
   expect(await violations()).toEqual([]);

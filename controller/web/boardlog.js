@@ -10,7 +10,7 @@ const MAX_ROWS = 5000;
 const MAGIC = [..."IMPROV"].map(c => c.charCodeAt(0));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // clean is a line as the log shows it: no carriage returns, no colour codes.
-export const clean = l => l.replace(/\r/g, "").replace(/\x1b\[[0-9;]*m/g, "");
+export const clean = l => l.replace(/\r/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
 export const IMPROV = { STATE: 1, ERROR: 2, RPC: 3, RESULT: 4, READY: 2, PROVISIONING: 3, PROVISIONED: 4, WIFI: 1, GET_STATE: 2, INFO: 3, SCAN: 4, NO_CONNECT: 3 };
 
 // logView is the Board log: add(line) a row, clear(), and the restart button, enabled while
@@ -40,21 +40,25 @@ export function logView(fileName, restart) {
   };
 }
 
-// openConsole opens the board's port at 115200 (after a restart, the board's own USB comes
-// back as a new device: the same port, or one with its USB IDs, is tried for up to 10 s) and
-// reads it: each line to line(text), Improv frames to frame(type, data). It returns {send(type,
-// data), restart(), close()}.
-export async function openConsole(port, { line, frame }) {
+// openConsole opens the board's port at 115200 and reads it: each line to line(text), Improv
+// frames to frame(type, data). After a restart the board's own USB may come back as a new
+// device: the same port is tried for up to 10 s, and so is a port with its USB IDs that
+// appeared since, only while it is the only one (others: the ports there before the install,
+// another board's among them). It gives up, null, once live() says the install was stopped.
+// It returns {send(type, data), restart(), close()}.
+export async function openConsole(port, { line, frame, others = [], live = () => true }) {
   const info = port.getInfo();
   let p = null;
   for (let t = Date.now(); !p;) {
-    const ports = [port, ...(await navigator.serial.getPorts()).filter(q => q !== port &&
-      q.getInfo().usbVendorId === info.usbVendorId && q.getInfo().usbProductId === info.usbProductId)];
-    for (const q of ports) {
+    if (!live()) return null;
+    const come = (await navigator.serial.getPorts()).filter(q => q !== port && !others.includes(q) &&
+      q.getInfo().usbVendorId === info.usbVendorId && q.getInfo().usbProductId === info.usbProductId);
+    for (const q of [port, ...(come.length === 1 ? come : [])]) {
       try { await q.open({ baudRate: 115200 }); p = q; break; } catch (e) { if (Date.now() - t > 10000) throw e; }
     }
     if (!p) await sleep(500);
   }
+  if (!live()) { try { await p.close(); } catch { /* gone */ } return null; }
   const reader = p.readable.getReader(), writer = p.writable.getWriter();
   const dec = new TextDecoder();
   let held = [], text = "", skipNL = false, closed = false;
@@ -110,7 +114,8 @@ export async function openConsole(port, { line, frame }) {
       closed = true;
       try { await reader.cancel(); } catch { /* gone */ }
       await done;
-      try { reader.releaseLock(); writer.releaseLock(); } catch { /* gone */ }
+      try { reader.releaseLock(); } catch { /* gone */ }
+      try { writer.releaseLock(); } catch { /* gone */ }
       try { await p.close(); } catch { /* closed already */ }
     },
   };

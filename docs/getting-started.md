@@ -99,8 +99,9 @@ Press **Install on the board over USB** and the browser asks which port to use: 
 board. The panel then goes through the steps, one under the other:
 
 - **Connect.** It says whether this is the board's own USB port or a USB-to-serial chip.
-- **Check the chip.** The chip on the port must be the one the image is for. If not, it
-  says so, like `Board Mismatch ESP32-P4 in usb, firmware for ESP32-S3`, and writes nothing.
+- **Check the chip.** The chip on the port, and its revision, must be the ones the image is
+  for, and its flash big enough. If not, it says so, like `Board Mismatch ESP32-P4 in usb,
+  firmware for ESP32-S3`, and writes nothing.
 - **Erase the flash**, only if you ticked **Erase the whole flash first (slower)**.
 - **Write espDNS**, with how far it has got. Keep the board plugged in: the panel won't
   close until it's done.

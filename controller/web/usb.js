@@ -45,6 +45,12 @@ async function read(url) {
   return r.json();
 }
 
+// held is what's left to do with a port an install or a keys write let go of (the panel
+// closed, Install again): the next one, on this panel or another, waits for it first, so the
+// port is closed before it is opened again. hold(p) adds p, which settles once its port is shut.
+let held = Promise.resolve();
+const hold = p => { held = Promise.all([held, Promise.resolve(p).catch(() => {})]); return p; };
+
 // usb.css: loaded once, before the panel first opens.
 let css = null;
 function loadCSS() {
@@ -178,7 +184,9 @@ const keysSaid = {
   reset: m => `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`,
 };
 
-function keysOnly(o, keysReady) {
+// p is the panel (kept open while it writes); stopRuns stops an install, whose console may
+// hold the port; lock(on) holds the install's controls meanwhile.
+function keysOnly(o, keysReady, p, stopRuns, lock) {
   const status = h("p", { class: "small", id: "usb-keys-status", role: "status", "aria-live": "polite" });
   const bar = h("progress", { id: "usb-keys-progress", max: 100, value: 0, hidden: true });
   const go = h("button", { class: "btn primary", type: "button", id: "usb-keys-go", disabled: !keysReady || !("serial" in navigator) }, "Write the keys over USB");
@@ -186,10 +194,13 @@ function keysOnly(o, keysReady) {
   go.addEventListener("click", async () => {
     go.disabled = true;
     bar.hidden = true;
+    lock(true);
     let step = "port", transport = null;
     try {
       // The port first, while the click still counts as one.
       const port = await navigator.serial.requestPort();
+      stopRuns(); // an install's console on this port
+      await held;
       step = "prepare";
       say("Preparing your keys…");
       const b = await send("api/build/keys", {});
@@ -202,8 +213,10 @@ function keysOnly(o, keysReady) {
       say("Connecting to the board…");
       const c = await flash.connect(port);
       transport = c.transport;
+      if (!p.aside.isConnected) return; // the panel closed meanwhile: nothing written
       const { loader, description } = c;
       step = "write";
+      p.busy(BUSY.keys);
       say(`Connected to ${description}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
       bar.hidden = false;
       bar.value = 0;
@@ -215,13 +228,16 @@ function keysOnly(o, keysReady) {
       if (back.length < KEYS_SIZE || keys.some((x, i) => back[i] !== x)) throw new Error("they differ");
       step = "reset";
       say("Restarting the board…");
+      p.busy("");
       await flash.reset(transport, loader);
       bar.value = 100;
       say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}). Its firmware and settings are as they were; it shows on Nodes again in a moment.`, "small ok");
     } catch (e) {
       say(flash.serialError(e, step, keysSaid), "small bad");
     } finally {
-      await flash.close(transport);
+      p.busy("");
+      await hold(flash.close(transport));
+      lock(false);
       go.disabled = !keysReady;
     }
   });
@@ -249,7 +265,8 @@ const STEP = { connect: "Connect", chip: "Check the chip", erase: "Erase the fla
 const WAIT_POLL = 3000, HINT_AFTER = 60000, NOLOG_AFTER = 8000, STATE_TRIES = 15, JOIN_FOR = 45000;
 const OWN_USB = 0x303a; // Espressif's USB vendor ID: the chip's own USB, not a USB-to-serial chip
 const BUSY = { erase: "Erasing the board: don't close this or unplug it until it's done.",
-  write: "Writing to the board: don't close this or unplug it until it's done." };
+  write: "Writing to the board: don't close this or unplug it until it's done.",
+  keys: "Writing the keys: don't close this or unplug it until it's done." };
 const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
 const INSTALLED = {
   wired: "Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.",
@@ -300,7 +317,7 @@ export async function openUSB(o = {}) {
     p.body.append(h("p", { class: "hint bad", id: "usb-nokeys" }, "Set up your keys first: the board is installed with them. ",
       h("a", { href: "setup.html#next" }, "Make your keys")));
   }
-  const writeKeys = keysOnly(o, keysReady);
+  const writeKeys = keysOnly(o, keysReady, p, () => stops.forEach(f => f()), on => lock(on));
   if (o.keys) p.body.append(writeKeys);
 
   // The board: a list to pick from, the board's facts, or the custom form.
@@ -505,14 +522,14 @@ export async function openUSB(o = {}) {
 
   // lock(true) holds the panel's other controls while an install runs (a new image prepared,
   // or another board chosen, would drop it); lock(false) gives them back as they were.
-  let held = null;
+  let locked = null;
   const lock = on => {
-    if (on && !held) {
-      held = [pick, q, prep, save, ...out.querySelectorAll("#usb-go, #usb-erase")].map(e => [e, e.disabled]);
-      for (const [e] of held) e.disabled = true;
-    } else if (!on && held) {
-      for (const [e, d] of held) e.disabled = d;
-      held = null;
+    if (on && !locked) {
+      locked = [pick, q, prep, save, ...p.body.querySelectorAll("#usb-go, #usb-erase, #usb-keys-go")].map(e => [e, e.disabled]);
+      for (const [e] of locked) e.disabled = true;
+    } else if (!on && locked) {
+      for (const [e, d] of locked) e.disabled = d;
+      locked = null;
     }
   };
 
@@ -542,9 +559,8 @@ export async function openUSB(o = {}) {
       if (halt) { halt(); halt = null; }
       p.busy("");
       log.restartable(false);
-      const closing = Promise.all([flash.close(transport), con && con.close()]);
+      hold(Promise.all([flash.close(transport), con && con.close()]));
       transport = con = onFrame = null;
-      return closing;
     };
     stops.push(stopRun);
     // On DHCP, the nodes found before it: a new one of this board is it.
@@ -582,7 +598,7 @@ export async function openUSB(o = {}) {
     };
 
     go.addEventListener("click", async () => {
-      const closing = stopRun(); // the port, as the last install left it
+      stopRun(); // the port, as the last install left it
       const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
       lock(true);
       say();
@@ -590,9 +606,14 @@ export async function openUSB(o = {}) {
       steps.hidden = true;
       log.clear();
       log.box.open = false;
-      let port, image;
-      // The port first, while the click still counts as one.
-      try { port = await navigator.serial.requestPort(); await closing; } catch (e) {
+      let port, image, others;
+      // The port first, while the click still counts as one; the ports there besides (the
+      // console looks for the board's own USB again after the restart, never on another board's).
+      try {
+        port = await navigator.serial.requestPort();
+        others = (await navigator.serial.getPorts()).filter(x => x !== port);
+        await held;
+      } catch (e) {
         lock(false);
         say(h("p", { class: "small bad", id: "usb-failed" }, flash.serialError(e, "port")));
         return;
@@ -612,15 +633,21 @@ export async function openUSB(o = {}) {
       let n = "connect";
       try {
         step("connect", "now", `Over ${kind}…`);
-        const c = await flash.connect(port, l => { for (const x of clean(l).split("\n")) if (x.trim() && !/^Writing at 0x/.test(x)) log.add(x); });
-        if (!live()) { flash.close(c.transport); return; }
+        // Stopped while it connects (the panel closed): the port is let go of, nothing written.
+        const c = await hold(flash.connect(port, l => { for (const x of clean(l).split("\n")) if (x.trim() && !/^Writing at 0x/.test(x)) log.add(x); })
+          .then(async x => { if (!live()) { await flash.close(x.transport); throw new Error("stopped"); } return x; }));
         transport = c.transport;
         step("connect", "done", `Over ${kind}: ${c.description}`);
         n = "chip";
         step("chip", "now", "");
-        const want = str(obj(build.chip).chip_family);
-        const wrong = want && c.chip.toUpperCase() !== want.toUpperCase() ? `Board Mismatch ${c.chip} in usb, firmware for ${want}`
-          : c.flashMB && board.flash_mb && c.flashMB < board.flash_mb ? `This board has ${c.flashMB} MB of flash; the image is for ${board.flash_mb} MB.` : "";
+        // The image's chip (image.json's chip_family, else its chip: esp32s3 is ESP32-S3), and the
+        // chip revisions its bootloader runs on (the two ESP32-P4 images: v1.x, v3.x).
+        const ch = obj(build.chip), want = str(ch.chip_family) || str(ch.chip).toUpperCase().replace(/^ESP32(?=.)/, "ESP32-");
+        const revs = flash.revisions(image, c.loader.chip.BOOTLOADER_FLASH_OFFSET), v = r => `v${Math.floor(r / 100)}.${r % 100}`;
+        const wrong = c.chip.toUpperCase() !== want.toUpperCase() ? `Board Mismatch ${c.chip} in usb, firmware for ${want || "another chip"}`
+          : revs && c.rev !== null && (c.rev < revs.min || c.rev > revs.max)
+            ? `Board Mismatch ${c.chip} ${v(c.rev)} in usb, firmware for ${want} ${v(revs.min)}${revs.max === 0xffff ? " and later" : ` to ${v(revs.max)}`}`
+            : c.flashMB && board.flash_mb && c.flashMB < board.flash_mb ? `This board has ${c.flashMB} MB of flash; the image is for ${board.flash_mb} MB.` : "";
         if (wrong) {
           await flash.close(transport);
           transport = null;
@@ -661,21 +688,20 @@ export async function openUSB(o = {}) {
       go.textContent = "Install again";
       go.classList.remove("primary");
       lock(false);
-      await watchBoard(port, own, live);
+      await watchBoard(port, own, live, others);
     });
 
     // watchBoard reads the board's console into the Board log once it restarts, asks for Wi-Fi
     // on a board that may run on it, then waits for it on the network.
-    async function watchBoard(port, own, live) {
+    async function watchBoard(port, own, live, others) {
       log.add("--- the board's console ---");
       if (!own) hint("usb-uart", "Logs and Wi-Fi setup use the board's own USB port; this one only shows the bootloader.");
       let app = false;
-      try {
-        con = await openConsole(port, { line: l => { log.add(l); if (/^[IWE] \(\d+\)/.test(l)) app = true; }, frame: (t, d) => onFrame && onFrame(t, d) });
-      } catch (e) {
-        log.add(`(couldn't open the port again: ${str(e && e.message)})`);
-      }
-      if (!live()) { if (con) con.close(); con = null; return; }
+      // Stopped while it opens: openConsole lets the port go itself.
+      const c = await hold(openConsole(port, { others, live, line: l => { log.add(l); if (/^[IWE] \(\d+\)/.test(l)) app = true; },
+        frame: (t, d) => onFrame && onFrame(t, d) }).catch(e => { if (live()) log.add(`(couldn't open the port again: ${str(e && e.message)})`); return null; }));
+      if (!live()) return;
+      con = c;
       log.restartable(!!con);
       timers.push(setTimeout(() => {
         if (!app && live()) hint("usb-nolog", "If it shows nothing, press RESET or unplug it and plug it in again.");
@@ -722,8 +748,13 @@ export async function openUSB(o = {}) {
         const notJoined = t => { clearTimeout(until); joining = ""; join.disabled = false; tell(t, "small bad"); };
         form.addEventListener("submit", e => {
           e.preventDefault();
-          const s = ssid.value.trim();
+          const s = ssid.value.trim(), bytes = t => new TextEncoder().encode(t).length;
           if (!s) return;
+          // As the firmware takes them (firmware/main/improv.c): a name up to 32 bytes, a password up to 64.
+          if (bytes(s) > 32 || bytes(pass.value) > 64) {
+            tell(bytes(s) > 32 ? "That network name is longer than Wi-Fi allows (32 bytes)." : "That password is longer than Wi-Fi allows (64 bytes).", "small bad");
+            return;
+          }
           joining = s;
           join.disabled = true;
           tell(`Joining ${s}…`);
