@@ -13,6 +13,9 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Fixed
 
+- The setup wizard keeps **Make the release key** when a node is listed before the keys
+  exist, and says why it matters: that node trusts the key it was installed with, so it is
+  installed again over USB to take the new one. Before, the step offered only importing a key.
 - The node now refuses a config whose status light is on a strapping, USB or serial-console
   pin (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25), as the
   controller does. It accepted them before from anything but a current controller. The push
