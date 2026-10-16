@@ -24,6 +24,8 @@ version may change anything. Write each change under Unreleased as it merges;
   changes it. Only added, adopted nodes count. Nor does an added node that trusts another
   release key (one another controller adopted): its state no longer holds up a rollout or a
   restart from the controller.
+- **Write keys only** now restarts the board when it is done. Before, the board could stay in
+  its bootloader until you unplugged it.
 
 ## [controller 0.0.6] - 2026-10-16
 

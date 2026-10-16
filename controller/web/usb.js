@@ -8,9 +8,9 @@
 // on Wi-Fi, ESP Web Tools then asks for the network over Improv (image.Chip.Manifest). The
 // image carries your keys (the release and recovery public keys, in its keys partition): until
 // both are set up (the first run's Make your keys) nothing is prepared. Write keys only (POST
-// /api/build/keys) writes the keys partition alone with the vendored esptool-js, not ESP Web
-// Tools, for a node in setup mode, and keeps the rest. A board whose chip image isn't in the
-// controller yet offers Get firmware (firmware.js: that chip image from the project's
+// /api/build/keys) writes the keys partition alone with flash.js (the vendored esptool-js),
+// not ESP Web Tools, for a node in setup mode, and keeps the rest. A board whose chip image
+// isn't in the controller yet offers Get firmware (firmware.js: that chip image from the project's
 // release, fetched, checked and imported); each board says which firmware it gets ("project release v0.0.3", "your
 // build"). Once installed, the panel waits for the node on the network (POST
 // /api/nodes/lookup at its address, or /api/nodes/found for one on DHCP) and, when it
@@ -21,6 +21,7 @@
 import { h, arr, obj, str, panel, api, hostOnly, getJSON, post } from "./shell.js";
 import { every } from "./common.js";
 import { firmwareBox, readFirmware, labelOf } from "./firmware.js";
+import * as flash from "./flash.js";
 
 // The builder's routes answer errors as text (http.Error), the others as JSON.
 async function send(url, body) {
@@ -225,32 +226,19 @@ const spinning = text => h("div", { class: "row small" }, h("span", { class: "sp
 // ---- Write keys only ------------------------------------------------------------------------
 // The controller's two public keys written to the board's keys partition and nothing else, for
 // a node in setup mode (no keys, or corrupt ones): POST /api/build/keys makes the 8 KB
-// partition image (/build/<id>/image.bin); the vendored esptool-js (web/vendor/esptool-js,
-// the version ESP Web Tools' bundle has) connects to the board's bootloader, writes it at
-// 0x1b000 with no erase of anything else (eraseAll false: esptool never sends an erase
-// command; the flasher stub rewrites only the two sectors it is given), reads it back, and
-// resets the board. No ESP Web Tools dialog: it has no way to offer erasing the flash here.
+// partition image (/build/<id>/image.bin); flash.js (the vendored esptool-js) connects to the
+// board's bootloader, writes it at 0x1b000 with no erase of anything else (esptool never
+// sends an erase command; the flasher stub rewrites only the two sectors it is given), reads
+// it back, and resets the board. No ESP Web Tools dialog: it has no way to offer erasing the
+// flash here.
 
 const KEYS_OFFSET = 0x1b000, KEYS_SIZE = 0x2000;
-let esptool = null;
-const loadEsptool = () => (esptool ||= import("./vendor/esptool-js/bundle.js"));
-
-// keysWriteError is what went wrong, in words, for the step that failed.
-function keysWriteError(e, step) {
-  const m = String((e && e.message) || e);
-  if (e && e.name === "NotFoundError") return "No port was chosen: nothing was written.";
-  if (e && (e.name === "InvalidStateError" || e.name === "NetworkError") || /open/i.test(m) && /port/i.test(m)) {
-    return "The board's port is busy: close the other tab or program using it (a serial monitor, another install) and try again.";
-  }
-  if (e && e.name === "SecurityError") return "The browser didn't allow the serial port: open this page on the controller's machine (localhost) in Chrome or Edge.";
-  switch (step) {
-    case "connect": return `Couldn't reach the board's bootloader (${m}). Unplug it, hold BOOT while you plug it back in, and try again.`;
-    case "write": return `Writing the keys failed (${m}). Nothing else was touched; try again.`;
-    case "verify": return `The keys read back don't match what was written (${m}). Try again.`;
-    case "reset": return `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`;
-  }
-  return m;
-}
+// What a failed step means here: only the keys partition is ever written.
+const keysSaid = {
+  write: m => `Writing the keys failed (${m}). Nothing else was touched; try again.`,
+  verify: m => `The keys read back don't match what was written (${m}). Try again.`,
+  reset: m => `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`,
+};
 
 function keysOnly(o, keysReady) {
   const status = h("p", { class: "small", id: "usb-keys-status", role: "status", "aria-live": "polite" });
@@ -272,36 +260,30 @@ function keysOnly(o, keysReady) {
       const keys = new Uint8Array(await r.arrayBuffer());
       if (keys.length !== KEYS_SIZE) throw new Error(`the keys partition is ${keys.length} bytes, not ${KEYS_SIZE}`);
       const k = obj(b.keys);
-      const { ESPLoader, Transport } = await loadEsptool();
       step = "connect";
       say("Connecting to the board…");
-      transport = new Transport(port, false);
-      const quiet = { clean() {}, write() {}, writeLine() {} };
-      const loader = new ESPLoader({ transport, baudrate: 115200, terminal: quiet });
-      const chip = await loader.main();
+      const c = await flash.connect(port);
+      transport = c.transport;
+      const { loader, description } = c;
       step = "write";
-      say(`Connected to ${chip}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
+      say(`Connected to ${description}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
       bar.hidden = false;
       bar.value = 0;
-      await loader.writeFlash({
-        fileArray: [{ data: keys, address: KEYS_OFFSET }],
-        flashMode: "keep", flashFreq: "keep", flashSize: "keep",
-        eraseAll: false, compress: true,
-        reportProgress: (_, written, total) => { bar.value = total ? Math.round(written / total * 100) : 100; },
-      });
+      await flash.write(loader, [{ data: keys, address: KEYS_OFFSET }],
+        { progress: (written, total) => { bar.value = total ? Math.round(written / total * 100) : 100; } });
       step = "verify";
       say("Reading it back…");
       const back = await loader.readFlash(KEYS_OFFSET, KEYS_SIZE);
       if (back.length < KEYS_SIZE || keys.some((x, i) => back[i] !== x)) throw new Error("they differ");
       step = "reset";
       say("Restarting the board…");
-      await loader.after("hard_reset");
+      await flash.reset(transport, loader);
       bar.value = 100;
       say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}). Its firmware and settings are as they were; it shows on Nodes again in a moment.`, "small ok");
     } catch (e) {
-      say(keysWriteError(e, step), "small bad");
+      say(flash.serialError(e, step, keysSaid), "small bad");
     } finally {
-      if (transport) { try { await transport.disconnect(); } catch { /* closed already */ } }
+      await flash.close(transport);
       go.disabled = !keysReady;
     }
   });
