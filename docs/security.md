@@ -148,7 +148,8 @@ recovery key in your browser (WebCrypto): the page downloads `recovery.pem` and 
 controller only the public half, kept as `keys/recovery.pub`. The private recovery key never
 reaches the controller. The recovery public key can be replaced from the page only on
 purpose and only while no node is listed; with nodes listed it must be the one they report
-(a node that trusts another release key is installed again, so it doesn't count).
+(a node that trusts another release key is installed again, so it doesn't count; while a key
+rotation is under way, or if the node keeps the controller's key as its retired one, it does).
 After that, the controller changes which keys a node trusts only by pushing KEYS releases
 you signed offline ([Rotating keys](#rotating-keys)), and then updates `recovery.pub`
 itself.

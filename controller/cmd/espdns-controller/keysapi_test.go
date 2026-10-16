@@ -6,9 +6,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/keyspart"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/release"
+	"github.com/skitzo2000/espdns/controller/internal/rotation"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
@@ -151,6 +154,13 @@ func TestKeysAPI(t *testing.T) {
 	if code, out := e.do("POST /api/keys/release", `{"reinstall":true}`); code != http.StatusOK || out["present"] != true {
 		t.Fatalf("generate with reinstall: %d %v", code, out)
 	}
+	before, _ := os.ReadFile(keys.Path(e.dir))
+	if code, _ := e.do("POST /api/keys/release", `{"reinstall":true}`); code != http.StatusConflict {
+		t.Fatalf("generate with reinstall over a key: %d", code)
+	}
+	if after, _ := os.ReadFile(keys.Path(e.dir)); !bytes.Equal(before, after) {
+		t.Fatal("the release key replaced")
+	}
 }
 
 // With a node listed, the recovery key posted must be the one it trusts (slot 1 of its
@@ -174,20 +184,49 @@ func TestRecoveryMustMatchListedNodes(t *testing.T) {
 }
 
 // A listed node that trusts another release key than the controller's (a new key made, the
-// node to be installed again over USB) doesn't vouch for the recovery key.
+// node to be installed again over USB) doesn't vouch for the recovery key. Unless it may
+// still trust the controller's: as its retired key, or with a rotation under way.
 func TestRecoveryNodeOfAnotherReleaseKey(t *testing.T) {
-	node := nodes.Node{Addr: "192.0.2.53", Source: nodes.SourceSettings,
-		Status: map[string]any{"keys": []any{"0123456789abcdef", keyspart.Fingerprint(newPub(t))}}}
-	e := newSetupEnv(t, func(s *server) { s.nodes = func() []nodes.Node { return []nodes.Node{node} } })
-	e.firstPassword()
-	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"192.0.2.53"}}); err != nil {
-		t.Fatal(err)
-	}
-	if code, out := e.do("POST /api/keys/release", `{"reinstall":true}`); code != http.StatusOK {
-		t.Fatalf("generate with reinstall: %d %v", code, out)
-	}
-	if code, out := e.do("POST /api/keys/recovery", recoveryBody(newPub(t), false)); code != http.StatusOK {
-		t.Fatalf("a new recovery key: %d %v", code, out)
+	for _, c := range []struct {
+		name     string
+		retired  bool // the node keeps the controller's release key as its retired key
+		rotating bool // a rotation is under way
+		want     int
+	}{{"another key", false, false, http.StatusOK}, {"retired", true, false, http.StatusConflict},
+		{"rotating", false, true, http.StatusConflict}} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := newPub(t)
+			st := map[string]any{"keys": []any{"0123456789abcdef", keyspart.Fingerprint(rec)}}
+			node := nodes.Node{Addr: "192.0.2.53", Source: nodes.SourceSettings, Status: st}
+			e := newSetupEnv(t, func(s *server) { s.nodes = func() []nodes.Node { return []nodes.Node{node} } })
+			e.firstPassword()
+			if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"192.0.2.53"}}); err != nil {
+				t.Fatal(err)
+			}
+			code, out := e.do("POST /api/keys/release", `{"reinstall":true}`)
+			if code != http.StatusOK {
+				t.Fatalf("generate with reinstall: %d %v", code, out)
+			}
+			if c.retired {
+				st["keys_retired"] = out["fingerprint"]
+			}
+			if c.rotating {
+				newRel, newRec := newPub(t), newPub(t)
+				p := &rotation.Plan{Version: 1, ID: "20261016-120000", Old: rotation.Keys{Release: out["fingerprint"].(string), Recovery: release.Fingerprint(rec)},
+					New:            rotation.Keys{Release: release.Fingerprint(newRel), Recovery: release.Fingerprint(newRec)},
+					OldRecoveryPub: hex.EncodeToString(rec), NewReleasePub: hex.EncodeToString(newRel), NewRecoveryPub: hex.EncodeToString(newRec),
+					Nodes: []*rotation.Node{{Addr: "192.0.2.53", NodeID: "aa:bb:cc:dd:ee:ff", Dir: "aabbccddeeff", State: rotation.StateKeys}}}
+				if err := p.Save(filepath.Join(rotation.Root(e.dir), p.ID)); err != nil {
+					t.Fatal(err)
+				}
+				if rotation.Pending(e.dir) == nil {
+					t.Fatal("the rotation isn't under way")
+				}
+			}
+			if code, out := e.do("POST /api/keys/recovery", recoveryBody(newPub(t), false)); code != c.want {
+				t.Fatalf("a new recovery key: %d %v, want %d", code, out, c.want)
+			}
+		})
 	}
 }
 

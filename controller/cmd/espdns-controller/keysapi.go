@@ -41,8 +41,9 @@ import (
 //	                              read from a file there; the private key never comes here. The
 //	                              same key again changes nothing; another is refused unless
 //	                              replace, and always while a node is listed. A listed node
-//	                              that trusts this release key and another recovery key
-//	                              refuses it too.
+//	                              that trusts another recovery key refuses it too, unless it
+//	                              surely trusts another release key (not this one, nor as
+//	                              its retired key, and no rotation under way).
 //
 // The GETs are open as the other reads are while no password is set; the POSTs need
 // a login.
@@ -176,22 +177,31 @@ func (s keysServer) setRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var relPub []byte
+	relFP := ""
 	if k, err := s.key.Key(); err == nil {
 		relPub = release.PublicRaw(k)
+		relFP = release.Fingerprint(relPub)
 	}
 	// A listed node that reports another recovery key (slot 1): this isn't the fleet's. Not a
-	// node that trusts another release key (slot 0) than this one: it is installed again over
-	// USB, with both keys, before it takes anything from here.
+	// node that surely trusts another release key (slot 0) than this one, neither it nor as
+	// its retired key, with no rotation under way: it is installed again over USB, with both
+	// keys, before it takes anything from here. Unsure (no release key here, a rotation), it
+	// counts.
+	rotating := rotation.Pending(s.dataDir) != nil
 	fp := keyspart.Fingerprint(pub)
 	for _, n := range s.nodes() {
 		if n.Source != nodes.SourceSettings {
 			continue
 		}
 		st, ok := status(n)
-		if ok && len(st.Keys) > 1 && st.Keys[1] != fp && (relPub == nil || st.Keys[0] == release.Fingerprint(relPub)) {
-			httpErr(w, http.StatusConflict, fmt.Errorf("%s trusts the recovery key %s, not %s: give the one your nodes trust", n.Addr, st.Keys[1], fp))
-			return
+		if !ok || len(st.Keys) < 2 || st.Keys[1] == fp {
+			continue
 		}
+		if relFP != "" && !rotating && st.Keys[0] != relFP && st.KeysRetired != relFP {
+			continue
+		}
+		httpErr(w, http.StatusConflict, fmt.Errorf("%s trusts the recovery key %s, not %s: give the one your nodes trust", n.Addr, st.Keys[1], fp))
+		return
 	}
 	same, err := keys.SetRecovery(s.dataDir, pub, relPub, body.Replace, len(ns) > 0)
 	switch {
