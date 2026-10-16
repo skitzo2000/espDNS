@@ -292,6 +292,9 @@ const char *settings_store(const uint8_t hdr[REL_HEADER_LEN], const rel_manifest
     } else if (c->led_config && !led_check(&c->led, err, sizeof(err))) {
         snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
         why = s_reply;
+    } else if (c->led_config && !board_led_caution(&board, &c->led, err, sizeof(err))) {
+        snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
+        why = s_reply;
     } else if (hosted_clash(c, err, sizeof(err)) != NULL) {
         snprintf(s_reply, sizeof(s_reply), "config refused: %s", err);
         why = s_reply;

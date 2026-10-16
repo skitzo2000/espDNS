@@ -11,6 +11,15 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Fixed
+
+- The node now refuses a config whose status light is on a strapping, USB or serial-console
+  pin (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25), as the
+  controller does. It accepted them before from anything but a current controller. The push
+  is refused with the reason, such as `config refused: led: GPIO 45 is a strapping pin`. A
+  pin the board's own LED already uses stays allowed, and board definitions are not checked.
+  A config already on the node keeps loading at boot.
+
 ## [controller 0.0.6] - 2026-10-16
 
 ### Changed
