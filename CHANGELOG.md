@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.8] - 2026-10-16
+
 ### Fixed
 
 - **Install over USB**: the Wi-Fi network is picked from a list, so a browser's password
