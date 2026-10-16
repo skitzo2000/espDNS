@@ -76,7 +76,7 @@ func vendorSums(t *testing.T, ewt string, must []string) {
 }
 
 // esptool-js's bundle is one module: no import of anything (pako and atob-lite are inlined),
-// and it exports what usb.js uses.
+// and it exports what flash.js uses.
 func TestEsptoolBundle(t *testing.T) {
 	b, err := fs.ReadFile(Files, "vendor/esptool-js/bundle.js")
 	if err != nil {

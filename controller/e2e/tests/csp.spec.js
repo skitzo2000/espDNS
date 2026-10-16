@@ -33,6 +33,7 @@ async function watch(page) {
 }
 
 const { login, apiGet } = require("./session");
+const { improvSerial } = require("./fakeboard");
 
 // serve.sh's controller lists no node and browses no mDNS (-browse-mdns=false): one found
 // here means it went on the network, to the nodes on this LAN.
@@ -234,56 +235,6 @@ test("Install over USB: the port picker cancelled, the no-port dialog shows, no 
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });
-
-// A Web Serial port with espDNS on it, speaking Improv Wi-Fi serial as firmware/main/improv.c
-// does: not on a network yet (READY), its info, two networks scanned, and a join that works.
-// What the dialog sends to join is kept in window.__improvJoin.
-function improvSerial() {
-  let ctl;
-  const readable = new ReadableStream({ start(c) { ctl = c; } });
-  const packet = (type, data) => {
-    const p = [..."IMPROV"].map(ch => ch.charCodeAt(0)).concat([1, type, data.length], data);
-    p.push(p.reduce((a, b) => (a + b) & 0xff, 0), 10);
-    ctl.enqueue(new Uint8Array(p));
-  };
-  const enc = new TextEncoder();
-  const result = (cmd, strs) => {
-    const d = strs.flatMap(s => { const b = [...enc.encode(s)]; return [b.length, ...b]; });
-    packet(4, [cmd, d.length, ...d]);
-  };
-  let state = 2, buf = [];
-  const rpc = (cmd, data) => {
-    if (cmd === 2) { packet(1, [state]); if (state === 4) result(2, ["http://192.0.2.52/status"]); }
-    else if (cmd === 3) result(3, ["espDNS", "0.0.4", "esp32s3", "espdns-e2e"]);
-    else if (cmd === 4) { result(4, ["example-net", "-48", "YES"]); result(4, ["example-guest", "-71", "NO"]); result(4, []); }
-    else if (cmd === 1) {
-      window.__improvJoin = new TextDecoder().decode(new Uint8Array(data));
-      packet(2, [0]); packet(1, [3]); state = 4; packet(1, [4]); result(1, ["http://192.0.2.52/status"]);
-    } else packet(2, [2]);
-  };
-  const writable = new WritableStream({ write(chunk) {
-    buf.push(...chunk);
-    for (;;) {
-      const i = buf.findIndex((_, k) => String.fromCharCode(...buf.slice(k, k + 6)) === "IMPROV");
-      if (i < 0 || buf.length < i + 9 || buf.length < i + 10 + buf[i + 8]) return;
-      const d = buf.slice(i + 9, i + 9 + buf[i + 8]);
-      buf = buf.slice(i + 10 + buf[i + 8]);
-      if (buf[0] === 10) buf.shift();
-      rpc(d[0], d.slice(2, 2 + d[1]));
-    }
-  } });
-  const port = {
-    readable, writable,
-    async open() {}, async close() {}, async setSignals() {}, async forget() {},
-    getInfo() { return { usbVendorId: 0x303a, usbProductId: 0x1001 }; },
-    addEventListener() {}, removeEventListener() {},
-  };
-  const serial = {
-    async requestPort() { return port; }, async getPorts() { return [port]; },
-    addEventListener() {}, removeEventListener() {},
-  };
-  Object.defineProperty(Navigator.prototype, "serial", { configurable: true, get: () => serial });
-}
 
 // A Wi-Fi board's manifest (no Improv wait of 0) on a board that already runs espDNS: the
 // dialog finds it over Improv and offers Connect to Wi-Fi; its form (the networks scanned,
