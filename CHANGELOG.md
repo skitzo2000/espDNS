@@ -29,6 +29,8 @@ version may change anything. Write each change under Unreleased as it merges;
   restart from the controller.
 - **Write keys only** now restarts the board when it is done. Before, the board could stay in
   its bootloader until you unplugged it.
+- A node's page no longer offers Restart, Update firmware or the quick fixes for a node not
+  added yet, or one listed but not adopted; the controller refuses them for such a node too.
 
 ## [controller 0.0.6] - 2026-10-16
 
