@@ -631,25 +631,36 @@ test("the MAC: on its row's address, and to copy in + Add node", async ({ page, 
 });
 
 // A node adopted by another controller (it trusts that one's release key): + Add node says
-// so and offers no Add; it is installed again over USB, which writes your keys.
+// so and offers no Add, but Reinstall over USB, which writes your keys.
 test("+ Add node: a node that trusts another controller's key says why it can't be added", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
   await fake(page);
-  const why = "it trusts another controller's release key: install it again with Install over USB, which writes your keys";
+  const why = "It trusts another controller's release key, so it takes no changes from here. Installing it again over USB erases it and writes your keys.";
   await page.route(/\/api\/nodes\/found$/, r => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ nodes: [
     { host: FOUND, id: "aa:bb:cc:00:00:37", hostname: "espdns-000037.local", source: "mdns", online: true, read: true, board: "xiao-s3-sense",
       image: "esp32s3-octal", version: "0.0.4", net: "wifi", mac: MACFOUND, adopted: true, listed: false, configs: true, name: "dns9",
-      refusals: [why], next: "" }] }) }));
+      refusals: ["it trusts another controller's release key: install it again with Install over USB, which writes your keys"], next: "",
+      install: "reinstall" }] }) }));
   await page.goto("./");
+  const row = page.locator("#nodes .r[data-found]");
+  await expect(row).toContainText("Trusts another controller's key: reinstall it over USB");
   await page.getByRole("button", { name: "+ Add node" }).click();
   const list = page.locator("#nqres");
-  await expect(list).toContainText(`Can't be added yet: ${why}`);
+  await expect(list).toContainText("Trusts another controller's key: reinstall it over USB");
   await expect(list.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
-  await list.getByRole("button", { name: "Set up" }).click();
+  await expect(list.getByRole("button", { name: "Reinstall over USB" })).toBeVisible();
+  // A click on it opens its setup panel.
+  await list.getByText("Trusts another controller's key").click();
   const d = page.getByRole("dialog", { name: "Seeed XIAO ESP32S3 Sense" });
-  await expect(d).toContainText(`Not yet: ${why}.`);
+  await expect(d).toContainText(why);
+  await expect(d).toContainText("Once it has your keys, it shows here again, ready to add.");
   await expect(d.getByRole("button", { name: "Add node" })).toHaveCount(0);
+  // Reinstall over USB: Install over USB on its board, as a reinstall.
+  await d.getByRole("button", { name: "Reinstall over USB" }).click();
+  const u = page.getByRole("dialog", { name: "Reinstall Seeed XIAO ESP32S3 Sense over USB" });
+  await expect(u).toBeVisible();
+  await expect(u.locator("#usb-board")).toHaveValue("xiao-s3-sense");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

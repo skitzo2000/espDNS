@@ -77,16 +77,19 @@ function follow(job, onProgress) {
 }
 
 // viaUSB: a found node moved on only over USB: firmware from before node configs ("usb"),
-// or a node with no keys (setup mode, "keys": Write keys only, which keeps its settings).
-const viaUSB = f => f.install === "usb" || f.install === "keys";
+// a node with no keys (setup mode, "keys": Write keys only, which keeps its settings), or
+// one that trusts another controller's release key ("reinstall": installed again, with yours).
+const viaUSB = f => f.install === "usb" || f.install === "keys" || f.install === "reinstall";
 
 // usbButton is "Update over USB" for a found node (or "Write keys over USB" for one with no
-// keys): the Install over USB panel with its board, chip image and address filled in.
+// keys, "Reinstall over USB" for one that trusts another controller's key): the Install over
+// USB panel with its board, chip image and address filled in.
 // before, if given, runs first (the address box closes: the panel is the next step); found,
 // if given, gets the node once it answers on the network after the install.
 export function usbButton(f, cls, name, before, found) {
-  return h("button", { class: cls, type: "button", onclick: () => { if (before) before(); openUSB({ ...usbFor(f, name), found }); } },
-    f.install === "keys" ? "Write keys over USB" : "Update over USB");
+  const again = f.install === "reinstall";
+  return h("button", { class: cls, type: "button", onclick: () => { if (before) before(); openUSB({ ...usbFor(f, name), ...(again ? { update: false, reinstall: true } : {}), found }); } },
+    f.install === "keys" ? "Write keys over USB" : again ? "Reinstall over USB" : "Update over USB");
 }
 
 // addNode draws + Add node into box. opts: found() the nodes found, nodes() the listed
@@ -613,6 +616,7 @@ export function addNode(box, opts) {
   // usbWhy is why a node is updated over USB first, and what that does.
   function usbWhy(f) {
     if (f.install === "keys") return "It has no keys (setup mode), so it takes nothing over the network. Writing your keys over USB keeps its firmware and settings.";
+    if (f.install === "reinstall") return "It trusts another controller's release key, so it takes no changes from here. Installing it again over USB erases it and writes your keys.";
     const v = f.image ? str(opts.imageVersion(f.image)) : "";
     return `Its firmware is older than 0.0.1; installing ${v || "the current firmware"} over USB erases it.`;
   }
@@ -629,18 +633,18 @@ export function addNode(box, opts) {
       m ? h("div", { class: "kv" }, m, h("div", { class: "hint" }, MACHINT)) : null,
       fact("Firmware", f.version ? str(f.version) : "unknown"),
       f.board || f.image ? fact("Board", [opts.boardName(f.board), f.image && `chip image ${f.image}`].filter(Boolean).join(" · ")) : null);
-    const usb = viaUSB(f), keys = f.install === "keys";
+    const usb = viaUSB(f), keys = f.install === "keys", again = f.install === "reinstall";
     const addNow = !!f.next;
     const other = !usb && !addNow ? (arr(f.refusals).join("; ") || "it's one of your nodes already") : "";
     const step = (cls, title, detail, action) => h("li", { class: cls }, h("span", { class: "m" }),
       h("div", {}, h("b", {}, title), detail ? h("div", { class: "hint" }, detail) : null, action ? h("div", { class: "actions" }, action) : null));
     const steps = h("ol", { class: "steps" },
-      usb ? step("next", keys ? "Write its keys over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer.`,
+      usb ? step("next", keys ? "Write its keys over USB" : again ? "Install it again over USB" : "Update its firmware over USB", `${usbWhy(f)} Plug it into this computer.`,
         usbButton(f, "btn primary", opts.boardName(f.board) || str(f.hostname), null, next))
         : step("done", "Firmware takes node configs", f.version ? `It runs ${f.version}.` : ""),
       step(addNow ? "next" : "", "Add it to your nodes",
         addNow ? "Give it a name and an address; it copies your zones and starts serving."
-          : usb ? (keys ? "Once it has its keys, it shows here again, ready to add." : "Once it runs 0.0.1 or later, it shows here again, ready to add.") : `Not yet: ${other}.`,
+          : usb ? (keys ? "Once it has its keys, it shows here again, ready to add." : again ? "Once it has your keys, it shows here again, ready to add." : "Once it runs 0.0.1 or later, it shows here again, ready to add.") : `Not yet: ${other}.`,
         addNow ? h("button", { class: "btn primary", type: "button", onclick: () => { p.close(); open(f); } }, "Add node") : null));
     p.body.append(facts, steps);
     p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Close"));
@@ -654,6 +658,7 @@ export function addNode(box, opts) {
 export function blocker(f) {
   if (f.install === "keys") return "No keys (setup mode): write them over USB first";
   if (f.install === "usb") return "Firmware older than 0.0.1: update it over USB first";
+  if (f.install === "reinstall") return "Trusts another controller's key: reinstall it over USB";
   return `Can't be added yet: ${arr(f.refusals).join("; ") || "it's one of your nodes already"}`;
 }
 
