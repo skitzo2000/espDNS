@@ -282,9 +282,15 @@ test("Install over USB: a Wi-Fi board asks for its network, joins it, and is wai
   await u.locator("#usb-go").click();
   await expect(step(u, "wifi")).toHaveClass("next", { timeout: 20000 });
   await expect(step(u, "wifi")).toContainText("espDNS 0.0.5 on esp32s3");
-  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one, or type its name.");
-  expect(await u.locator("#usb-ssids option").evaluateAll(os => os.map(o => o.value))).toEqual(["example-net", "example-guest"]);
-  await u.locator("#usb-ssid").fill("example-net");
+  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one.");
+  // A select, strongest first, then "Another network…": no text box with a list for a
+  // password manager to take for a login.
+  await expect(u.locator("#usb-ssid-pick option")).toHaveText(["example-net · -48 dBm · \u{1F512}", "example-guest · -71 dBm · open", "Another network…"]);
+  await expect(u.locator("#usb-wifi-form datalist")).toHaveCount(0);
+  await expect(u.locator("#usb-ssid")).toBeHidden();
+  await expect(u.locator("#usb-pass")).toHaveAttribute("autocomplete", "new-password");
+  await expect(u.locator("#usb-ssid-pick")).toHaveValue("example-net");
+  await u.locator("#usb-ssid-pick").selectOption("example-net");
   await u.locator("#usb-pass").fill("e2e password");
   if (process.env.E2E_SHOTS) {
     await u.locator("#usb-log summary").click();
@@ -309,8 +315,8 @@ test("Install over USB: a Wi-Fi board asks for its network, joins it, and is wai
 test("Install over USB: a Wi-Fi join refused says to check the password, and can be tried again", async ({ page }) => {
   const { u, violations } = await start(page, { board: "xiao-s3-sense", fake: { wifi: true, join: false } });
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one, or type its name.", { timeout: 20000 });
-  await u.locator("#usb-ssid").fill("example-net");
+  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one.", { timeout: 20000 });
+  await u.locator("#usb-ssid-pick").selectOption("example-guest");
   await u.locator("#usb-pass").fill("not it");
   await u.locator("#usb-join").click();
   await expect(u.locator("#usb-wifi-said")).toHaveText("Couldn't join: check the password");
@@ -318,6 +324,23 @@ test("Install over USB: a Wi-Fi join refused says to check the password, and can
   await expect(u.locator("#usb-join")).toBeEnabled();
   await expect(step(u, "wifi")).toHaveClass("next");
   await expect(u.locator("#usb-installed")).toHaveCount(0);
+  expect(await violations()).toEqual([]);
+});
+
+test("Install over USB: Another network… joins a network typed by name", async ({ page }) => {
+  const { u, violations } = await start(page, { board: "xiao-s3-sense", fake: { wifi: true } });
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one.", { timeout: 20000 });
+  await u.locator("#usb-ssid-pick").selectOption({ label: "Another network…" });
+  await expect(u.locator("#usb-ssid")).toBeVisible();
+  await expect(u.locator("#usb-ssid")).toBeFocused();
+  await expect(u.locator("#usb-ssid")).toHaveAttribute("autocomplete", "off");
+  await u.locator("#usb-ssid").fill("  hidden-net ");
+  await u.locator("#usb-pass").fill("e2e password");
+  await u.locator("#usb-join").click();
+  await expect(step(u, "wifi")).toHaveClass("done");
+  await expect(step(u, "wifi")).toContainText("joined hidden-net");
+  expect((await esp(page)).join).toBe("\x0ahidden-net\x0ce2e password");
   expect(await violations()).toEqual([]);
 });
 

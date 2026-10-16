@@ -125,7 +125,7 @@ test("Install over USB: a Wi-Fi board joined over Improv; something else at the 
   const u = await prepare(page, "xiao-s3-sense");
   await u.locator("#usb-go").click();
   await expect(u.locator("#usb-join")).toBeVisible({ timeout: 20000 });
-  await u.locator("#usb-ssid").fill("example-net");
+  await u.locator("#usb-ssid-pick").selectOption("example-net");
   await u.locator("#usb-pass").fill("e2e password");
   await u.locator("#usb-join").click();
   await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network. USB can stay in for power.");
