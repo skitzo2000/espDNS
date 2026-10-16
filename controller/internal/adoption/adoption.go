@@ -201,11 +201,7 @@ func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 		return b, err
 	}
 	if ns, err := rolling.Known(ctx, c, rr, logf); err == nil {
-		for _, n := range ns {
-			if n.Addr != host && (fleet.Adopted(n) || slices.Contains(r.Peers, n.Addr)) {
-				a.Peers = append(a.Peers, n.Addr)
-			}
-		}
+		a.Peers = peers(ns, host, s.Nodes, r.Peers, logf)
 	}
 	name := b.ConfigName
 	if name == "" {
@@ -310,4 +306,21 @@ func Run(ctx context.Context, c *fleet.Client, b Built, by string, logf func(str
 		logf("settings.json still lists %s, the address it moved from: change it to %s", b.Adopt.Host, ar.Addr)
 	}
 	return res, nil
+}
+
+// peers are the nodes besides host that count while it is adopted: those added (listed,
+// settings.json) and adopted, and the named ones (-peer). One found over mDNS and not
+// added (another controller's, say) doesn't count.
+func peers(ns []fleet.Node, host string, listed, named []string, logf func(string, ...any)) []string {
+	var out []string
+	for _, n := range ns {
+		switch {
+		case n.Addr == host:
+		case slices.Contains(named, n.Addr) || fleet.Adopted(n) && slices.Contains(listed, n.Addr):
+			out = append(out, n.Addr)
+		case !slices.Contains(listed, n.Addr):
+			logf("%s not counted as a peer: found but not added (not in settings.json)", n.Addr)
+		}
+	}
+	return out
 }

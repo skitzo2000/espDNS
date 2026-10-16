@@ -578,3 +578,23 @@ func TestRevert(t *testing.T) {
 		}
 	}
 }
+
+// A node in settings.json that another controller adopted (it trusts another release key)
+// isn't counted as a peer: its state doesn't hold up a restart, a DNS peer answering does.
+func TestRebootPeerOfAnotherController(t *testing.T) {
+	k := newTestKey(t)
+	n, other := newCtlNode(t, k, false), newCtlNode(t, newTestKey(t), false)
+	other.mu.Lock()
+	other.healthy = false
+	other.mu.Unlock()
+	j, err := runAction(t, k, settings.Settings{Nodes: []string{n.addr, other.addr}, DNSPeers: []string{"198.51.100.254"}},
+		"reboot", `{"node":"`+n.addr+`"}`)
+	logText := ""
+	for _, l := range j.Log {
+		logText += l.Text + "\n"
+	}
+	if err != nil || j.State != jobs.Done || len(n.commands()) != 1 || len(other.commands()) != 0 ||
+		!strings.Contains(logText, other.addr+" not counted as a peer: it trusts another release key") {
+		t.Fatalf("%+v %v\n%s", j, err, logText)
+	}
+}
