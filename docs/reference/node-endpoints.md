@@ -178,8 +178,12 @@ private address nor one in the config's [`allow`](node-config.md#allow); not cou
 `total`, `udp` or `tcp`), `tcp_closed` (TCP connections the node closed: no query within
 2 s or idle 10 s (either sooner while other connections wait), a query not all there within
 3 s of its first byte, a reply not taken within 10 s, or one client holding its share, 3 of
-the 6 places). The node has 2 TCP workers and a queue of 4; these times start when a worker
-takes the connection, so a connection that waited in the queue may be held longer.
+the 6 places). The node has 2 TCP workers and a queue of 4. These times start when a worker
+takes the connection, not when it is accepted, so time in the queue comes on top. A
+connection that sends nothing is closed 2 s after a worker takes it; at the back of a full
+queue of such connections it first waits up to 4 s, so about 6 s from accept. Connections
+ahead that each send a slow query hold a worker up to 5 s each (2 s, then 3 s), so the wait
+can be longer.
 `servfail` counts a forwarder's SERVFAIL passed on too, and `refused` a refused NOTIFY
 (counted in `notifies` as well).
 
