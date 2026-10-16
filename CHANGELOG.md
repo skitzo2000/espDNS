@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.7] - 2026-10-16
+
 ### Changed
 
 - **Install over USB** installs in its own panel, step by step, with no separate installer
@@ -27,12 +29,6 @@ version may change anything. Write each change under Unreleased as it merges;
 - The setup wizard keeps **Make the release key** when a node is listed before the keys
   exist, and says why it matters: that node trusts the key it was installed with, so it is
   installed again over USB to take the new one. Before, the step offered only importing a key.
-- The node now refuses a config whose status light is on a strapping, USB or serial-console
-  pin (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25), as the
-  controller does. It accepted them before from anything but a current controller. The push
-  is refused with the reason, such as `config refused: led: GPIO 45 is a strapping pin`. A
-  pin the board's own LED already uses stays allowed, and board definitions are not checked.
-  A config already on the node keeps loading at boot.
 - A rollout or adoption no longer counts a node found on the network but not added (one
   another controller adopted, say) as a node that must keep answering, and `-all` no longer
   changes it. Only added, adopted nodes count. Nor does an added node that trusts another
@@ -42,10 +38,19 @@ version may change anything. Write each change under Unreleased as it merges;
   its bootloader until you unplugged it.
 - A node's page no longer offers Restart, Update firmware or the quick fixes for a node not
   added yet, or one listed but not adopted; the controller refuses them for such a node too.
-- A firmware update waiting to apply is dropped for a node that already runs that version,
-  such as one installed again over USB. Its row no longer reads `0.0.4 → 0.0.4`.
 - A firmware update waiting to apply is dropped for a node online that already runs that
   version, such as one installed again over USB. Its row no longer reads `0.0.4 → 0.0.4`.
+
+## [firmware 0.0.5] - 2026-10-16
+
+### Fixed
+
+- The node now refuses a config whose status light is on a strapping, USB or serial-console
+  pin (ESP32-S3: 0, 3, 45, 46, 19, 20, 43, 44; ESP32-P4: 34 to 38, 24, 25), as the
+  controller does. It accepted them before from anything but a current controller. The push
+  is refused with the reason, such as `config refused: led: GPIO 45 is a strapping pin`. A
+  pin the board's own LED already uses stays allowed, and board definitions are not checked.
+  A config already on the node keeps loading at boot.
 
 ## [controller 0.0.6] - 2026-10-16
 
