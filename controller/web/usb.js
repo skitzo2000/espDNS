@@ -726,14 +726,21 @@ export async function openUSB(o = {}) {
       return new Promise(resolve => {
         const send = d => { if (con) con.send(IMPROV.RPC, d).catch(() => { /* gone */ }); };
         const nets = new Map();
-        const list = h("datalist", { id: "usb-ssids" });
-        const ssid = h("input", { class: "t", id: "usb-ssid", list: "usb-ssids", autocomplete: "off", spellcheck: "false", maxlength: 32, required: true });
-        const pass = h("input", { class: "t", id: "usb-pass", type: "password", autocomplete: "off", maxlength: 64 });
+        // A select, not a text box with a list: a browser's password manager takes a text box
+        // next to a password box for a login and fills over it. "Another network…" types one.
+        const other = h("option", { value: "" }, "Another network…");
+        const pick = h("select", { class: "t", id: "usb-ssid-pick", name: "wifi-network" }, h("option", { value: "" }, "Looking for networks…"), other);
+        const ssid = h("input", { class: "t", id: "usb-ssid", name: "wifi-other", autocomplete: "off", spellcheck: "false", maxlength: 32 });
+        const typed = h("label", { class: "f", hidden: true }, h("span", {}, "Network name"), ssid);
+        const pass = h("input", { class: "t", id: "usb-pass", name: "wifi-key", type: "password", autocomplete: "new-password", maxlength: 64,
+          "data-lpignore": "true", "data-1p-ignore": true, "data-bwignore": true });
         const join = h("button", { class: "btn primary", type: "submit", id: "usb-join" }, "Join");
         const said = h("p", { class: "small", id: "usb-wifi-said", role: "status" });
         const form = h("form", { class: "stack", id: "usb-wifi-form", autocomplete: "off" },
-          h("label", { class: "f" }, h("span", {}, "Network"), ssid, list),
+          h("label", { class: "f" }, h("span", {}, "Network"), pick), typed,
           h("label", { class: "f" }, h("span", {}, "Password"), pass), h("div", { class: "row" }, join), said);
+        const another = () => pick.selectedOptions[0] === other;
+        pick.addEventListener("change", () => { typed.hidden = !another(); if (another()) ssid.focus(); });
         let answered = false, tries = 0, joining = "", info = "", until = null;
         const tell = (t, cls = "small") => { said.className = cls; said.textContent = t; };
         const joined = url => {
@@ -748,7 +755,7 @@ export async function openUSB(o = {}) {
         const notJoined = t => { clearTimeout(until); joining = ""; join.disabled = false; tell(t, "small bad"); };
         form.addEventListener("submit", e => {
           e.preventDefault();
-          const s = ssid.value.trim(), bytes = t => new TextEncoder().encode(t).length;
+          const s = another() ? ssid.value.trim() : pick.value, bytes = t => new TextEncoder().encode(t).length;
           if (!s) return;
           // As the firmware takes them (firmware/main/improv.c): a name up to 32 bytes, a password up to 64.
           if (bytes(s) > 32 || bytes(pass.value) > 64) {
@@ -773,7 +780,7 @@ export async function openUSB(o = {}) {
                 send(rpc(IMPROV.INFO));
                 send(rpc(IMPROV.SCAN));
                 tell("Looking for networks…");
-                ssid.focus();
+                pick.focus();
               }
             }
           } else if (type === IMPROV.ERROR && joining && d[0]) {
@@ -786,9 +793,16 @@ export async function openUSB(o = {}) {
             } else if (r.cmd === IMPROV.SCAN) {
               if (r.strs.length) {
                 const [name, rssi, secure] = r.strs;
-                if (name && !(nets.get(name) >= Number(rssi))) nets.set(name, Number(rssi));
-                list.replaceChildren(...[...nets].sort((a, b) => b[1] - a[1]).map(([nm, rs]) => h("option", { value: nm, label: `${rs} dBm${secure === "YES" ? "" : ", open"}` })));
-              } else if (!joining) tell(nets.size ? `${nets.size} network${nets.size === 1 ? "" : "s"} found: pick one, or type its name.` : "No networks found: type its name.");
+                if (name && !(nets.get(name)?.rssi >= Number(rssi))) nets.set(name, { rssi: Number(rssi), secure: secure === "YES" });
+              } else {
+                // The scan is over: strongest first, then "Another network…".
+                const was = another();
+                pick.replaceChildren(...[...nets].sort((a, b) => b[1].rssi - a[1].rssi)
+                  .map(([nm, n]) => h("option", { value: nm }, `${nm} · ${n.rssi} dBm${n.secure ? " · \u{1F512}" : " · open"}`)), other);
+                if (was || !nets.size) other.selected = true;
+                typed.hidden = !another();
+                if (!joining) tell(nets.size ? `${nets.size} network${nets.size === 1 ? "" : "s"} found: pick one.` : "No networks found: type its name.");
+              }
             } else if ((r.cmd === IMPROV.WIFI || r.cmd === IMPROV.GET_STATE) && r.strs[0]) joined(r.strs[0]);
           }
         };
