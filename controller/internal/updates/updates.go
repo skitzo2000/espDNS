@@ -208,9 +208,10 @@ func node(n Node, newest Version) NodeUpdate {
 }
 
 // Left is the pending change c without the nodes it has nothing left to do on: a chip
-// image's update (images/<image>: the newest version) of a node that runs that version or
-// a newer one already (put on another way, over USB say), its summary said again for the
-// nodes left. A build's (builds/<board>) is kept whole: its version can be any.
+// image's update (images/<image>: the newest version) of a node online that runs that
+// version or a newer one already (put on another way, over USB say), its summary said again
+// for the nodes left. A node offline is kept: its last /status may no longer be what it
+// runs. A build's (builds/<board>) is kept whole: its version can be any.
 func (r Report) Left(c changes.Change) changes.Change {
 	if !strings.HasPrefix(c.Firmware, "images/") {
 		return c
@@ -218,7 +219,7 @@ func (r Report) Left(c changes.Change) changes.Change {
 	var left, names, from []string
 	for _, h := range c.Nodes {
 		i := slices.IndexFunc(r.Nodes, func(u NodeUpdate) bool { return u.Host == h })
-		if i >= 0 && (r.Nodes[i].State == Current || r.Nodes[i].State == Newer) {
+		if i >= 0 && r.Nodes[i].Online && (r.Nodes[i].State == Current || r.Nodes[i].State == Newer) {
 			continue
 		}
 		left, names = append(left, h), append(names, h)

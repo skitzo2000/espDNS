@@ -298,7 +298,15 @@ function openReview() {
       const params = { soak_s: rollout.soak };
       if (rollout.first) params.canary = rollout.first;
       startApply(await post("api/jobs", { kind: "apply", params }));
-    } catch (e) { msg.textContent = e.message; go.disabled = false; }
+    } catch (e) {
+      // The changes may have gone meanwhile (an update for nodes already on its version):
+      // the list read again, the panel closed when none is left.
+      await refreshChanges();
+      if (!pending.changes.length) { p.close(); toast(e.message); return; }
+      fill();
+      msg.textContent = e.message;
+      go.disabled = false;
+    }
   });
   p.body.append(list, note, msg);
   p.footer.append(discardAll, go);

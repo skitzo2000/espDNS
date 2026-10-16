@@ -524,6 +524,24 @@ test("an apply the controller no longer has doesn't stay Applying", async ({ pag
   await expect(chip).toHaveText("1 change to apply");
 });
 
+test("an apply with its changes gone meanwhile closes the list and says so", async ({ page }) => {
+  await login(page);
+  const state = await fake(page);
+  // The one change was an update for a node now on its version: the controller dropped it.
+  await page.route(/\/api\/jobs$/, r => {
+    if (r.request().method() !== "POST") return r.fallback();
+    state.changes = [];
+    return r.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "nothing to apply: no pending changes" }) });
+  });
+  await page.goto("./");
+  const chip = page.locator(".changes .chip-btn");
+  await chip.click();
+  await page.getByRole("dialog", { name: "Changes to apply" }).getByRole("button", { name: "Apply 1 change" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("#toast")).toContainText("nothing to apply");
+  await expect(chip).toHaveCount(0);
+});
+
 test("the pending changes show in the header, and Apply runs them", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
