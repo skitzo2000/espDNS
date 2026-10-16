@@ -11,6 +11,13 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Changed
+
+- **Install over USB** installs in its own panel, step by step, with no separate installer
+  window. It shows the board's log line by line (**Download log** saves it), asks for a
+  Wi-Fi board's network there, and says `Board Mismatch <chip found> in usb, firmware for
+  <image's chip>` when the board on the port isn't the one the image is for, writing nothing.
+
 ### Fixed
 
 - **+ Add node** no longer adds or adopts a node that trusts another controller's release key.

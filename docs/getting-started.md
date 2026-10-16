@@ -68,7 +68,8 @@ through it:
    nobody else can touch them. Your browser downloads `recovery.pem`: save it somewhere
    safe, off this computer.
 3. **Add your first node.** Two steps. First install it: press **Install over USB**, pick
-   your board, give it its address and gateway, plug it in over USB and press **Install**.
+   your board, give it its address and gateway, press **Prepare image**, plug it in over USB
+   and press **Install on the board over USB** ([installing over USB](#installing-over-usb)).
    The controller fetches the firmware for you and checks its signature. Once the board
    answers on your network, press **Add it now**, give it a name, and press **Add node**.
    A node already on your network skips the install: press **+ Add node** and pick it.
@@ -91,6 +92,33 @@ through it:
 
 > **Artie's tip:** no USB port to pick from? Try another cable, then hold the board's
 > BOOT button while you plug it in.
+
+### Installing over USB
+
+Press **Install on the board over USB** and the browser asks which port to use: pick the
+board. The panel then goes through the steps, one under the other:
+
+- **Connect.** It says whether this is the board's own USB port or a USB-to-serial chip.
+- **Check the chip.** The chip on the port must be the one the image is for. If not, it
+  says so, like `Board Mismatch ESP32-P4 in usb, firmware for ESP32-S3`, and writes nothing.
+- **Erase the flash**, only if you ticked **Erase the whole flash first (slower)**.
+- **Write espDNS**, with how far it has got. Keep the board plugged in: the panel won't
+  close until it's done.
+- **Restart.**
+- **Wi-Fi**, on a board that runs on Wi-Fi: pick your network from the list or type its
+  name, give the password and press **Join**. The network and password go to the board over
+  USB, not through the controller. A board with its Ethernet add-on fitted doesn't ask.
+- **On your network.** The panel waits for the board at its address.
+
+**Board log**, under the steps, shows what the board prints. **Download log** saves it,
+and **Restart the board** restarts it.
+
+Which USB port: many boards have two. Use the board's own one (often marked USB). The other
+(marked UART or COM) goes through a USB-to-serial chip: it installs, but shows only the
+bootloader, so the log and the Wi-Fi setup need the board's own port.
+
+If it can't reach the board, unplug it, hold BOOT while you plug it back in, and press
+**Install on the board over USB** again.
 
 ## Check it works
 

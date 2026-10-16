@@ -1,7 +1,7 @@
 // Every page of the controller under its Content-Security-Policy (internal/websec): it loads
-// with no violation and its scripts run, and Install over USB's flasher (the vendored
-// esp-web-tools, on Nodes) loads, opens its dialog on a stubbed Web Serial port and imports
-// every chunk it ships, with no hardware.
+// with no violation and its scripts run, and the vendored esp-web-tools (still shipped, no
+// longer used by Install over USB) loads, opens its dialog on a stubbed Web Serial port and
+// imports every chunk it ships, with no hardware.
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
@@ -33,7 +33,7 @@ async function watch(page) {
 }
 
 const { login, apiGet } = require("./session");
-const { improvSerial } = require("./fakeboard");
+const { fakeEsp } = require("./fakeboard");
 
 // serve.sh's controller lists no node and browses no mDNS (-browse-mdns=false): one found
 // here means it went on the network, to the nodes on this LAN.
@@ -156,12 +156,14 @@ function stubSerial() {
   Object.defineProperty(Navigator.prototype, "serial", { configurable: true, get: () => serial });
 }
 
-// openUSB opens Install over USB from its button on Nodes, as a click does: the flasher's module loads.
+// openUSB opens Install over USB from its button on Nodes, as a click does, and loads the
+// vendored flasher's module into the page.
 async function openUSB(page) {
   const r = await page.goto("./");
   expect(r.headers()["content-security-policy"]).toBe(USB_CSP);
   await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Install a board over USB" })).toBeVisible();
+  await page.evaluate(() => import("./vendor/esp-web-tools/install-button.js"));
   await page.waitForFunction(() => customElements.get("esp-web-install-button") !== undefined);
 }
 
@@ -241,7 +243,7 @@ test("Install over USB: the port picker cancelled, the no-port dialog shows, no 
 // the password) shows and joins, all under USB_CSP with no violation.
 test("Install over USB: a Wi-Fi board's Improv step, its Wi-Fi form, no CSP violation", async ({ page }) => {
   const violations = await watch(page);
-  await page.addInitScript(improvSerial);
+  await page.addInitScript(fakeEsp, { app: true, wifi: true, bootLog: [] });
   await page.route("**/build/e2e-wifi/manifest.json", r => r.fulfill({ json: {
     name: "espDNS xiao-s3-sense", version: "0.0.5", new_install_prompt_erase: true,
     builds: [{ chipFamily: "ESP32-S3", parts: [{ path: "image.bin", offset: 0 }] }] } }));
@@ -285,8 +287,8 @@ test("Install over USB: a Wi-Fi board's Improv step, its Wi-Fi form, no CSP viol
 });
 
 // Prepare image (its chip image given as imported, the build answered for it): a board that
-// may run on Wi-Fi gets the line saying the install asks for the Wi-Fi network over USB; a
-// wired one doesn't. The address field stays as it is.
+// may run on Wi-Fi (the build says so) gets the line saying the panel asks for the Wi-Fi
+// network over USB; a wired one doesn't. The address field stays as it is.
 test("Install over USB: a Wi-Fi board's install says it asks for the Wi-Fi network; a wired one's doesn't", async ({ page }) => {
   const violations = await watch(page);
   await page.route(/\/api\/boards$/, async r => {
@@ -299,7 +301,7 @@ test("Install over USB: a Wi-Fi board's install says it asks for the Wi-Fi netwo
     const list = await (await page.request.get("api/boards", { headers: { "X-Session-Token": await page.evaluate(() => localStorage.getItem("espdns.session")) } })).json();
     const board = list.find(e => e.board.name === name).board;
     await r.fulfill({ json: { id: `e2e-${name}`, board, chip: { image: board.image, version: "0.0.5", built: "2026-10-07", elf_sha256: "ab".repeat(32) },
-      keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
+      keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" }, wifi: name === "xiao-s3-sense" } });
   });
   // The keys a board is installed with (serve.sh's controller has none: Prepare would wait).
   await page.route(/\/api\/key$/, r => r.fulfill({ json: { present: true, fingerprint: "a1b2c3d4e5f60718", recovery: { present: true, fingerprint: "0f1e2d3c4b5a6978" } } }));
@@ -315,7 +317,7 @@ test("Install over USB: a Wi-Fi board's install says it asks for the Wi-Fi netwo
     await expect(u.locator("#usb-install")).toContainText("with your keys (release a1b2c3d4e5f60718, recovery 0f1e2d3c4b5a6978)");
     await expect(u.locator("#usb-addr")).toHaveValue("192.0.2.52/24");
     if (wifi) {
-      await expect(u.locator("#usb-wifi")).toHaveText("After it installs, it asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.");
+      await expect(u.locator("#usb-wifi")).toHaveText("After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.");
     } else {
       await expect(u.locator("#usb-wifi")).toHaveCount(0);
     }

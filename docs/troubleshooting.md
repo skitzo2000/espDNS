@@ -248,6 +248,35 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 5. Found over mDNS but not on the Nodes page? It isn't in `settings.json`. Add it
    (adopt it first if it's new).
 
+### Installing over USB
+
+**`Board Mismatch ESP32-P4 in usb, firmware for ESP32-S3`.** The chip on the port isn't
+the one the image is for: the first name is the chip found, the second the image's. Nothing
+was written. Choose the board that's plugged in, press **Prepare image**, and install again.
+
+**`Couldn't reach the board's bootloader`.** Unplug the board, hold its BOOT button while
+you plug it back in, and press **Install on the board over USB** again. Still nothing? Try
+another cable: some only carry power.
+
+**`The board's port is busy`.** Another tab or program has the port open (a serial monitor,
+another install). Close it and try again.
+
+**`Logs and Wi-Fi setup use the board's own USB port`.** The board is plugged in through
+its USB-to-serial chip (the port often marked UART or COM). That port installs, but the
+board's log and its Wi-Fi setup only come over its own USB port. Plug it into that one and
+install again.
+
+**It didn't restart, or `If it shows nothing, press RESET`.** The install is done, but the
+board printed no log after the restart. Press its RESET button, or unplug it and plug it in
+again. **Restart the board** under the Board log does the same over USB.
+
+**`Couldn't join: check the password`.** The board couldn't join that Wi-Fi network. Check
+the network's name and the password, and press **Join** again. The board joins 2.4 GHz
+networks only.
+
+**`It didn't ask for Wi-Fi`.** The board didn't answer the Wi-Fi setup: it has its Ethernet
+add-on fitted and uses that, or it isn't running espDNS yet (see the line above).
+
 ### The controller does not start
 
 Read `docker compose logs`.

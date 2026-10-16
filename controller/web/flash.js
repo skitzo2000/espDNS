@@ -1,4 +1,4 @@
-// The USB flasher (usb.js's Write keys only): the vendored esptool-js (web/vendor/esptool-js,
+// The USB flasher (usb.js's install and Write keys only): the vendored esptool-js (web/vendor/esptool-js,
 // esptool-js 0.6.0) on a Web Serial port the page asked for. connect reaches the board's
 // serial bootloader and says which chip and how much flash; write writes parts ({data,
 // address}) at their offsets, erasing the whole flash first only when asked; reset restarts
