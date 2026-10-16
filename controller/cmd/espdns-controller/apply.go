@@ -215,6 +215,8 @@ func (a applyKind) kind(raw json.RawMessage) (jobs.Func, error) {
 	if err := a.checkParams(p); err != nil {
 		return nil, err
 	}
+	// A firmware update for nodes already on its version is no work: it goes first.
+	updatesServer{dataDir: a.dataDir, catalog: a.catalog, store: a.store, nodes: a.images.nodes}.narrow()
 	cs, err := a.store.List()
 	if err != nil {
 		return nil, err

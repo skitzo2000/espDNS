@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/skitzo2000/espdns/controller/internal/auth"
@@ -35,13 +36,10 @@ func (u updatesServer) routes(mux *routes) {
 }
 
 // report is the fleet's update availability: the nodes in settings.json (any not seen yet
-// unknown), or every node the controller knows when it lists none (none offered then).
+// unknown), or every node the controller knows when it lists none (none offered then). The
+// pending firmware updates lose the nodes already on their version.
 func (u updatesServer) report() (updates.Report, error) {
 	s, err := settings.Load(settings.Path(u.dataDir))
-	if err != nil {
-		return updates.Report{}, err
-	}
-	pending, err := u.store.List()
 	if err != nil {
 		return updates.Report{}, err
 	}
@@ -70,7 +68,25 @@ func (u updatesServer) report() (updates.Report, error) {
 		un.OutOfService = s.IsOutOfService(h)
 		ns = append(ns, un)
 	}
-	return updates.For(ns, updates.Builds(u.dataDir, u.catalog), updates.Latest(u.dataDir), pending), nil
+	// A firmware update queued for a node that reached its version another way (over USB,
+	// say) drops out of the pending changes here (updates.Report.Left).
+	builds, latest := updates.Builds(u.dataDir, u.catalog), updates.Latest(u.dataDir)
+	pending, err := u.store.Narrow(updates.For(ns, builds, latest, nil).Left)
+	if err != nil {
+		return updates.Report{}, err
+	}
+	return updates.For(ns, builds, latest, pending), nil
+}
+
+// narrow drops from the pending firmware updates the nodes already on their version (as
+// report does), for the pages and the apply that read the pending changes themselves.
+func (u updatesServer) narrow() {
+	if u.nodes == nil {
+		return
+	}
+	if _, err := u.report(); err != nil {
+		log.Printf("pending firmware updates: %v", err)
+	}
 }
 
 func (u updatesServer) list(w http.ResponseWriter, r *http.Request) {

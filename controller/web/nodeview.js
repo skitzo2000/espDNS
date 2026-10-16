@@ -17,6 +17,10 @@ export function sinceWords(t) {
   return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 129600 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
 }
 
+// reached: a node's /api/updates entry says it runs the newest version already, or a newer
+// one: an update waiting for it has nothing to do.
+export const reached = u => u.state === "current" || u.state === "newer";
+
 // Reasons that don't make a node abnormal (docs/troubleshooting.md, Health reasons).
 export const INFO = ["config on trial", "reboot pending", "service restarting"];
 

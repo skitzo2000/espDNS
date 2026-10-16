@@ -345,3 +345,35 @@ func TestAddAll(t *testing.T) {
 		t.Errorf("pending after full %d", len(l))
 	}
 }
+
+// Narrow takes nodes out of the firmware changes an apply doesn't hold: one left with none
+// goes; a file change and a held one are left as they are.
+func TestNarrow(t *testing.T) {
+	s, _ := newStore(t)
+	two := mustAdd(t, s, Edit{Kind: Firmware, Firmware: "images/a", Nodes: []string{"n1", "n2"}, Summary: "Update n1, n2", Who: "admin"})
+	one := mustAdd(t, s, Edit{Kind: Firmware, Firmware: "images/a", Nodes: []string{"n3"}, Summary: "Update n3", Who: "admin"})
+	held := mustAdd(t, s, Edit{Kind: Firmware, Firmware: "images/a", Nodes: []string{"n4"}, Summary: "Update n4", Who: "admin"})
+	zone := mustAdd(t, s, Edit{Kind: Zone, Name: "example.com.zone", Text: zoneWith("1", "192.0.2.1"), Summary: "zone", Who: "admin"})
+	if err := s.Hold([]string{held.ID}); err != nil {
+		t.Fatal(err)
+	}
+	drop := func(c Change) Change {
+		c.Nodes = slices.DeleteFunc(slices.Clone(c.Nodes), func(n string) bool { return n != "n2" })
+		c.Summary = "Update " + strings.Join(c.Nodes, ", ")
+		return c
+	}
+	cs, err := s.Narrow(drop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 3 || cs[0].ID != two.ID || !slices.Equal(cs[0].Nodes, []string{"n2"}) || cs[0].Summary != "Update n2" ||
+		cs[1].ID != held.ID || cs[2].ID != zone.ID {
+		t.Fatalf("narrowed %+v", cs)
+	}
+	if l, _ := s.List(); !slices.EqualFunc(l, cs, func(a, b Change) bool { return a.ID == b.ID && slices.Equal(a.Nodes, b.Nodes) }) {
+		t.Errorf("saved %+v", l)
+	}
+	if slices.ContainsFunc(cs, func(c Change) bool { return c.ID == one.ID }) {
+		t.Error("a change left with no node kept")
+	}
+}

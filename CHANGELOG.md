@@ -31,6 +31,8 @@ version may change anything. Write each change under Unreleased as it merges;
   its bootloader until you unplugged it.
 - A node's page no longer offers Restart, Update firmware or the quick fixes for a node not
   added yet, or one listed but not adopted; the controller refuses them for such a node too.
+- A firmware update waiting to apply is dropped for a node that already runs that version,
+  such as one installed again over USB. Its row no longer reads `0.0.4 → 0.0.4`.
 
 ## [controller 0.0.6] - 2026-10-16
 

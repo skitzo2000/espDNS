@@ -12,7 +12,7 @@
 import { shell, h, arr, obj, str, hostOnly, led, addr, mac, toast, panel, refreshChanges, onChanges,
   api, getJSON, post, session, events, nodeText, ended, answering } from "./shell.js";
 import { onNodes, every, releaseKey } from "./common.js";
-import { stateOf, reason, upFor, linkWord, readBoards, mini, fmtNum, pct, andList, sentenceCase, sinceWords } from "./nodeview.js";
+import { stateOf, reason, upFor, linkWord, readBoards, mini, fmtNum, pct, andList, sentenceCase, sinceWords, reached } from "./nodeview.js";
 import { openUpdate } from "./update.js";
 import { openUSB } from "./usb.js";
 
@@ -274,7 +274,7 @@ function renderHead() {
     mac(n.mac || net.mac),
     facts ? h("span", { class: "muted small" }, facts) : null].filter(Boolean));
   const u = updateOf(n);
-  const upd = u && u.pending ? `Update waiting to apply: ${str(obj(u.runs).version)} → ${str(obj(u.newest).version)}`
+  const upd = u && u.pending && !reached(u) ? `Update waiting to apply: ${str(obj(u.runs).version)} → ${str(obj(u.newest).version)}`
     : offered(n) ? `Update available: ${str(obj(u.runs).version)} → ${str(obj(u.newest).version)}` : "";
   const line = [st.why, upd].filter(Boolean).join(" · ");
   why.textContent = line;

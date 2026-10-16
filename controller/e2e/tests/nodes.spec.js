@@ -811,6 +811,12 @@ test("two updates: one in each row, Update all in the head", async ({ page }) =>
   await expect(rows.nth(0).locator(".upd")).toHaveCount(0);
   await expect(rows.nth(1).locator(".upd")).toBeVisible();
   await expect(all).toBeHidden();
+
+  // dns2 got 0.0.4 another way (over USB) while its update waited: no update in its row.
+  nodes = [node(DNS2, "0.0.4", { pending: true, state: "current" }), node(DNS3, "0.0.2")];
+  await page.reload();
+  await expect(rows.nth(1).locator(".upd")).toBeVisible();
+  await expect(rows.nth(0)).not.toContainText("Update");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });
