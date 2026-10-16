@@ -243,22 +243,22 @@ test("+ Add node: every item opens its next step", async ({ page }) => {
   const items = page.locator("#nqres .opt.pick");
   const clickAt = async loc => { const b = await loc.boundingBox(); await page.mouse.click(b.x + 12, b.y + b.height / 2); };
   await add.click();
-  await expect(items).toHaveCount(3);
+  await expect(items).toHaveCount(2);
   const n = await items.count();
   for (let i = 0; i < n; i++) {
     if (i) await add.click();
     const text = await items.nth(i).innerText();
     await clickAt(items.nth(i));
     await expect(drawer(page), `item ${i}: ${text}`).toBeVisible();
-    await expect(drawer(page).locator("h2")).toHaveText(i === 2 ? "Install a board over USB" : "Seeed XIAO ESP32S3 Sense");
+    await expect(drawer(page).locator("h2")).toHaveText("Seeed XIAO ESP32S3 Sense");
     await page.keyboard.press("Escape");
     await expect(drawer(page)).toHaveCount(0);
   }
-  // An address with no node: Install a board over USB.
+  // An address with no node: a new board is installed with Install over USB first.
   await add.click();
   await page.locator("#nq").fill("192.0.2.99");
   await page.locator("#nq").press("Enter");
-  await page.locator("#nqres").getByRole("button", { name: "Install a board over USB" }).click();
+  await page.locator("#nqres").getByRole("button", { name: "Install over USB" }).click();
   await expect(drawer(page).locator("h2")).toHaveText("Install a board over USB");
   expect(await violations()).toEqual([]);
 });

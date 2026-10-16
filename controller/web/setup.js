@@ -4,7 +4,8 @@
 // set, only from the controller's own machine; it logs in), the keys (GET /api/key: the
 // release key made in the controller or imported, the recovery key made in this browser with
 // only its public half sent, recovery.pem saved offline; keys.js), the first and the second
-// node (+ Add node, addnode.js), your zone (optional: + Add zone, addzone.js, as the Zones
+// node (a new board installed with Install over USB, usb.js, then added with + Add node,
+// addnode.js), your zone (optional: + Add zone, addzone.js, as the Zones
 // page has it: a zone of your own hosted here first, or copied from a DNS server you run, or
 // forwarded; a pending change until Apply), telling the router (the nodes' addresses to
 // copy), and blocking (optional: the Blocking page). What is done comes from GET /api/setup;
@@ -15,6 +16,7 @@
 import { shell, h, arr, obj, str, hostOnly, addr, copyText, toast, getJSON, post, api, session, nodeText, refreshChanges, openAccountPanel } from "./shell.js";
 import { onNodes, every, loggedIn } from "./common.js";
 import { addNode } from "./addnode.js";
+import { openUSB } from "./usb.js";
 import { addZone, zoneEditor, readConfigs, primaryIP } from "./addzone.js";
 import { canMake, makeRecovery, readPublic, save, base64 } from "./keys.js";
 
@@ -30,7 +32,7 @@ const ui = { open: null, sig: "", bodies: new Map(), recovery: null, saved: fals
 const STEPS = {
   password: ["Set a password", "Every change needs it."],
   keys: ["Make your keys", "Your nodes take only changes signed with them."],
-  first_node: ["Add your first node", "Plug a board into this computer, or pick one found on the network."],
+  first_node: ["Add your first node", "Install a new board with Install over USB, then add it. A node already on your network is just added."],
   second_node: ["Add a second node", "Two nodes keep DNS answering while one restarts."],
   zones: ["Add your zone", "A name for your network, like home.example."],
   router: ["Tell your router", "So every device on your network asks espDNS."],
@@ -405,8 +407,9 @@ function keyBody() {
 
 // ---- 3, 4. the nodes --------------------------------------------------------------------
 
-// One + Add node for both steps, moved into the step open.
+// One Install over USB and one + Add node for both steps, moved into the step open.
 const nodeBox = h("div", { class: "setup-box" });
+const usbBtn = h("button", { class: "btn", type: "button", id: "setup-usb", onclick: () => openUSB({ found: adder && adder.next }) }, "Install over USB");
 let adder = null;
 function nodeBody(step) {
   const ns = listed();
@@ -424,7 +427,7 @@ function nodeBody(step) {
     out.push(h("p", { class: "small" }, `${ns[0] ? `${nodeText(ns[0])} is your first node. ` : ""}Add the second the same way; wired is best.`));
   }
   if (arr(data.found).length) out.push(h("p", { class: "hint" }, `${arr(data.found).length === 1 ? "One node is" : `${arr(data.found).length} nodes are`} on your network and not added yet.`));
-  out.push(nodeBox);
+  out.push(h("div", { class: "row" }, usbBtn), nodeBox);
   return out;
 }
 

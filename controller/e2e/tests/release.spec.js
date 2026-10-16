@@ -53,8 +53,7 @@ test("Install over USB: Get firmware fetches the board's chip image only, and th
   const started = jobsStarted(page);
   await login(page);
   await page.goto("./");
-  await page.getByRole("button", { name: "+ Add node" }).click();
-  await page.locator("#nqres").getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   const d = page.getByRole("dialog", { name: "Install a board over USB" });
   await expect(d).toBeVisible();
   await d.locator("#usb-board").selectOption("ws-s3-eth");

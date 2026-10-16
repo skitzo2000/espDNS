@@ -67,9 +67,12 @@ through it:
 2. **Make your keys.** Two clicks. Your nodes only take changes signed with your keys, so
    nobody else can touch them. Your browser downloads `recovery.pem`: save it somewhere
    safe, off this computer.
-3. **Add your first node.** Pick your board, give it its address and gateway, plug it in
-   over USB and press **Install**. The controller fetches the firmware for you and checks
-   its signature. Installing erases the board's flash, not its microSD card. Installing a
+3. **Add your first node.** Two steps. First install it: press **Install over USB**, pick
+   your board, give it its address and gateway, plug it in over USB and press **Install**.
+   The controller fetches the firmware for you and checks its signature. Once the board
+   answers on your network, press **Add it now**, give it a name, and press **Add node**.
+   A node already on your network skips the install: press **+ Add node** and pick it.
+   Installing erases the board's flash, not its microSD card. Installing a
    board again with new keys? At its first boot it deletes the old blocklist, allowed and
    blocked sites and hosted zones from its card, since they can't be checked any more
    ([what it deletes](hardware.md#what-espdns-keeps-on-the-card-and-what-it-deletes)).
