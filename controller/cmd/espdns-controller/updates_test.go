@@ -125,6 +125,42 @@ func TestUpdatesQueue(t *testing.T) {
 	}
 }
 
+// A queued update of a node that got the newest version another way (over USB, say) is
+// dropped from the pending changes: the node taken out of it, its summary said again for
+// the ones left, and an update left with none discarded. A build's update is kept whole.
+func TestUpdatesReachedDropped(t *testing.T) {
+	e := updatesEnv(t)
+	add := func(fw, summary string, hosts ...string) changes.Change {
+		c, err := e.store.Add(changes.Edit{Kind: changes.Firmware, Firmware: fw, Nodes: hosts, Summary: summary, Who: "admin"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	both := add("images/esp32p4-rev1", "Update dns3, dns2 from 0.0.3 to 0.0.4", "192.0.2.53", "192.0.2.52")
+	build := add("builds/p4-board", "Update dns4 to builds/p4-board", "192.0.2.54")
+	var out struct {
+		Changes []changes.Change `json:"changes"`
+	}
+	e.json(e.do("GET", "/api/changes", ""), http.StatusOK, &out)
+	if len(out.Changes) != 2 || out.Changes[0].ID != both.ID || !slices.Equal(out.Changes[0].Nodes, []string{"192.0.2.52"}) ||
+		out.Changes[0].Summary != "Update dns2 from 0.0.1 to 0.0.4" || out.Changes[1].ID != build.ID || len(out.Changes[1].Nodes) != 1 {
+		t.Errorf("changes %+v", out.Changes)
+	}
+	if _, err := e.store.Discard(both.ID); err != nil {
+		t.Fatal(err)
+	}
+	add("images/esp32s3", "Update dns3 from 0.0.3 to 0.0.4", "192.0.2.53")
+	var rep updates.Report
+	e.json(e.do("GET", "/api/updates", ""), http.StatusOK, &rep)
+	if rep.Nodes[1].Pending != "" || rep.Nodes[2].Pending != build.ID {
+		t.Errorf("nodes %+v", rep.Nodes)
+	}
+	if cs, _ := e.store.List(); len(cs) != 1 || cs[0].ID != build.ID {
+		t.Errorf("pending %+v", cs)
+	}
+}
+
 func TestUpdatesRefused(t *testing.T) {
 	e := updatesEnv(t)
 	for _, bad := range []string{

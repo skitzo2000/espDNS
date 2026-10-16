@@ -16,7 +16,7 @@ import { shell, h, arr, obj, str, hostOnly, led, addr, copyText, toast, refreshC
 import { onNodes, every, releaseKey } from "./common.js";
 import { addNode, blocker, usbButton } from "./addnode.js";
 import { openUSB } from "./usb.js";
-import { stateOf, upFor, readBoards, mini, fmtNum, pct, andList } from "./nodeview.js";
+import { stateOf, upFor, readBoards, mini, fmtNum, pct, andList, reached } from "./nodeview.js";
 import { openUpdate as updatePanel } from "./update.js";
 import { setupCheck } from "./setupcheck.js";
 
@@ -36,10 +36,10 @@ const nodeKey = n => n.id || n.addr;
 const offered = () => arr(obj(data.updates).nodes).filter(u => u.state === "available" && u.listed && !u.out_of_service && !u.pending);
 
 // updateOf is a node's firmware update (/api/updates), waiting to apply or offered: its
-// entry and versions; null for none.
+// entry and versions; null for none, or for one waiting on a node already on its version.
 function updateOf(n) {
   const u = arr(obj(data.updates).nodes).find(x => x.host === n.addr);
-  if (!u || !(u.pending || offered().includes(u))) return null;
+  if (!u || !((u.pending && !reached(u)) || offered().includes(u))) return null;
   return { pending: !!u.pending, from: str(obj(u.runs).version), to: str(obj(u.newest).version) };
 }
 

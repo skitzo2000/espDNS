@@ -15,7 +15,9 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
+	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
+	"github.com/skitzo2000/espdns/controller/internal/updates"
 )
 
 // applyEnv is a rolling push's environment with the pending changes and the apply.
@@ -455,5 +457,29 @@ func TestApplyListAfterStopReachesItsNodes(t *testing.T) {
 	j, r, p = e.runApply(nil)
 	if j.State != jobs.Done || len(r.Rollouts) != 1 || r.Rollouts[0].Kind != "blocklist" || !slices.Equal(r.Rollouts[0].Done, e.addrs) {
 		t.Fatalf("definitions again: %+v %+v %+v", j, r, p)
+	}
+}
+
+// An apply with only a firmware update for nodes already on its version (put on over USB,
+// say) has nothing to do: the update goes, and the apply is refused before it is queued.
+func TestApplyReachedUpdate(t *testing.T) {
+	e := newApplyEnv(t, 2)
+	st, v := fakeStatus(e.nodes[0]), "0.0.4"
+	st["version"] = v
+	if err := updates.SetLatest(e.dir, v); err != nil {
+		t.Fatal(err)
+	}
+	e.apply.images = fetchKind{dataDir: e.dir, nodes: func() []nodes.Node {
+		return []nodes.Node{{Addr: e.addrs[0], Online: true, Status: st}}
+	}}
+	if _, err := e.store.Add(changes.Edit{Kind: changes.Firmware, Firmware: "images/esp32s3", Nodes: []string{e.addrs[0]},
+		Summary: "Update dns1 to " + v, Who: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.runner.Start("apply", "admin", nil); err == nil || !strings.Contains(err.Error(), "nothing to apply") {
+		t.Errorf("apply: %v", err)
+	}
+	if cs := e.pending(); len(cs) != 0 {
+		t.Errorf("still pending: %+v", cs)
 	}
 }
