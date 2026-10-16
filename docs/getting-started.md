@@ -106,8 +106,8 @@ board. The panel then goes through the steps, one under the other:
 - **Write espDNS**, with how far it has got. Keep the board plugged in: the panel won't
   close until it's done.
 - **Restart.**
-- **Wi-Fi**, on a board that runs on Wi-Fi: pick your network from the list or type its
-  name, give the password and press **Join**. The network and password go to the board over
+- **Wi-Fi**, on a board that runs on Wi-Fi: pick your network from the list, or pick
+  **Another network…** and type its name, give the password and press **Join**. The network and password go to the board over
   USB, not through the controller. A board with its Ethernet add-on fitted doesn't ask.
 - **On your network.** The panel waits for the board at its address.
 
