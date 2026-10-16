@@ -21,7 +21,9 @@ version may change anything. Write each change under Unreleased as it merges;
   A config already on the node keeps loading at boot.
 - A rollout or adoption no longer counts a node found on the network but not added (one
   another controller adopted, say) as a node that must keep answering, and `-all` no longer
-  changes it. Only added, adopted nodes count.
+  changes it. Only added, adopted nodes count. Nor does an added node that trusts another
+  release key (one another controller adopted): its state no longer holds up a rollout or a
+  restart from the controller.
 
 ## [controller 0.0.6] - 2026-10-16
 

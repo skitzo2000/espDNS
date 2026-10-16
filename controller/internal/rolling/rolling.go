@@ -261,7 +261,7 @@ func (r Request) counted(s settings.Settings, ns []fleet.Node, logf func(string,
 	return slices.DeleteFunc(ns, func(n fleet.Node) bool {
 		switch {
 		case !slices.Contains(s.Nodes, n.Addr) && !slices.Contains(r.Peers, n.Addr):
-			logf("%s: skipped: found but not added (not in settings.json): not changed, not counted", n.Addr)
+			logf("%s: skipped: found but not added to settings.json (not changed, not counted)", n.Addr)
 			return true
 		case s.IsOutOfService(n.Addr) && n.Addr != r.Returning:
 			logf("%s: skipped: out of service (not changed, not counted)", n.Addr)
