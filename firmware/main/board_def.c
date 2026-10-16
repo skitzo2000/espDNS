@@ -182,11 +182,11 @@ bool board_led_parse(const cJSON *o, const board_desc_t *b, board_led_t *out, ch
     return !c.failed;
 }
 
-bool board_led_caution(const board_desc_t *b, const board_led_t *l, char *err, size_t errlen)
+bool board_led_caution(const board_desc_t *b, const char *image, const board_led_t *l, char *err, size_t errlen)
 {
     for (int i = 0; i < 3 && l->kind != BOARD_LED_NONE; i++) {
         int p = l->pin[i];
-        const char *why = p != BOARD_NC ? board_pin_caution(b->image, p) : NULL;
+        const char *why = p != BOARD_NC ? board_pin_caution(image, p) : NULL;
         bool own = b->led.kind != BOARD_LED_NONE && (b->led.pin[0] == p || b->led.pin[1] == p || b->led.pin[2] == p);
         if (why && !own) {
             snprintf(err, errlen, "led: GPIO %d is %s", p, why);

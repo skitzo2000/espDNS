@@ -3965,7 +3965,7 @@ static bool led_caution(cfg_t *cf, const board_desc_t *b, const char *j, const c
     char err[96];
     if (!cfg_build(cf, b, j, strlen(j), err, sizeof(err)) || !cf->led_config)
         return false;
-    bool ok = board_led_caution(b, &cf->led, err, sizeof(err));
+    bool ok = board_led_caution(b, b->image, &cf->led, err, sizeof(err));
     return msg ? !ok && strstr(err, msg) : ok;
 }
 
@@ -4119,6 +4119,10 @@ static void test_board_defs(void)
     CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"gpio\",\"pin\":25}}", "led: GPIO 25 is the USB port (logs)"));
     /* the board's 35; 45 and 19 are free on the P4 */
     CHECK(led_caution(&cf, &b, "{\"led\":{\"kind\":\"rgb\",\"red\":35,\"green\":45,\"blue\":19}}", NULL));
+    /* A node without a board definition: the image it runs still names the chip. */
+    board_desc_t none = { 0 };
+    board_led_t l45 = { .kind = BOARD_LED_GPIO, .pin = { 45, BOARD_NC, BOARD_NC } };
+    CHECK(!board_led_caution(&none, "esp32s3-quad", &l45, err, sizeof(err)) && strstr(err, "GPIO 45"));
     CHECK(board_pin_caution("esp32s3-eth", 44) && !board_pin_caution("esp32p4-rev1", 44) &&
           board_pin_caution("esp32p4", 34) && !board_pin_caution("esp32s3-octal", 34) && !board_pin_caution("esp32s3-quad", 4));
 
