@@ -2,8 +2,10 @@
 // dialog (its _installState; the dialog here is a stand-in with that property, no hardware),
 // then waits for the node on the network: POST /api/nodes/lookup at its address, answered
 // here. Nothing for a minute (the page's clock moved on): what to check. It answers: the
-// panel closes and + Add node has it chosen, as its Add does. An install that fails, or a
+// panel says so, and Add it now closes it and opens + Add node with it chosen, its address
+// and gateway as given at the install. An install that fails, or a
 // dialog closed partway, says so and leaves the Install button there.
+const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 const { login } = require("./session");
 
@@ -45,8 +47,7 @@ async function routes(page, state) {
 
 async function prepare(page, board) {
   await page.goto("./");
-  await page.getByRole("button", { name: "+ Add node" }).click();
-  await page.locator("#nqres").getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   const u = page.getByRole("dialog", { name: "Install a board over USB" });
   await u.locator("#usb-board").selectOption(board);
   await u.locator("#usb-addr").fill("192.0.2.52/24");
@@ -62,7 +63,7 @@ const dialogIn = page => page.evaluate(() => { window.__ewt = document.createEle
 const installState = (page, state, message = "") => page.evaluate(([state, message]) => { window.__ewt._installState = { state, message }; }, [state, message]);
 const dialogOut = page => page.evaluate(() => window.__ewt.remove());
 
-test("Install over USB: installed, it waits at its address, says what to check, then it's chosen in + Add node", async ({ page }) => {
+test("Install over USB: installed, it waits at its address, says what to check, then Add it now chooses it in + Add node", async ({ page }) => {
   const violations = await watch(page);
   const state = { lookup: { address: "192.0.2.52", found: false, answered: false }, lookups: [] };
   await page.clock.install();
@@ -92,13 +93,32 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   await expect(hint).toContainText("Its gateway is 192.0.2.1. That has to be your router's address on this network.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
 
-  // It answers: the panel closes, + Add node has it chosen.
+  // It answers: the panel says so, with Add it now.
   state.lookup = { address: "192.0.2.52", found: true, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
     board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1", next: "adopt" } };
   await page.clock.fastForward("00:05");
+  await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.");
+  await expect(u.locator("#usb-waiting")).toHaveCount(0);
+  // Add it now is the one primary button; Install again steps back.
+  await expect(u.locator("#usb-add")).toHaveClass(/primary/);
+  await expect(u.locator("#usb-go")).not.toHaveClass(/primary/);
+  if (process.env.E2E_SHOTS) {
+    await u.locator("#usb-add").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS, "install-arrived.png") });
+  }
+  // Add it now: the panel closes, + Add node has it chosen, the address given at the install in.
+  await u.getByRole("button", { name: "Add it now" }).click();
   await expect(u).toBeHidden();
-  await expect(page.locator("#nqres")).toContainText("Found at 192.0.2.52 over Wired, firmware 0.0.5.");
-  await expect(page.locator("#nqres").getByRole("button", { name: "Add node" })).toBeVisible();
+  const list = page.locator("#nqres");
+  await expect(list).toContainText("Found at 192.0.2.52 over Wired, firmware 0.0.5.");
+  await expect(list.locator("#nnhow-fixed")).toBeChecked();
+  await expect(list.locator("#nnip")).toHaveValue("192.0.2.52/24");
+  await expect(list.locator("#nngw")).toHaveValue("192.0.2.1");
+  await expect(list.getByRole("button", { name: "Add node" })).toBeVisible();
+  // No config yet: a new name, nothing to read.
+  await expect(list.locator("#nnname")).toHaveValue("+new");
+  await expect(list.locator("#nnfile")).toBeHidden();
+  if (process.env.E2E_SHOTS) await page.screenshot({ path: path.join(process.env.E2E_SHOTS, "install-add-it-now.png") });
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

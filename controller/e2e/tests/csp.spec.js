@@ -11,7 +11,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 // The pages that open Install over USB (websec.USBCSP, websec.USBPages): style attributes
 // with exactly the two values of esp-web-tools' "no port picked" dialog and the three its
 // Wi-Fi form's styleMaps start with, by hash; nothing else.
-const USB_PAGES = ["index.html", "setup.html"];
+const USB_PAGES = ["index.html", "node.html", "setup.html"];
 const USB_CSP = CSP + "; style-src-attr 'unsafe-hashes' " +
   "'sha256-w68cv7ZL7DW/1c2v0g4i6aPlMi0iRw663JuMxEmNmU4=' 'sha256-2PZQPqAcY6IE7H879XiZ2Hm3cBUNVB41T1m3kjNvN6E=' " +
   "'sha256-EDKRS+IvBWVSFJYjnWOymFAGVOawal4UoghutFq1ngI=' 'sha256-0EZqoz+oBhx7gF4nvY2bSqoGyy4zLjNF+SDQXGp/ZrY=' " +
@@ -155,12 +155,11 @@ function stubSerial() {
   Object.defineProperty(Navigator.prototype, "serial", { configurable: true, get: () => serial });
 }
 
-// openUSB opens Install over USB from + Add node, as a click does: the flasher's module loads.
+// openUSB opens Install over USB from its button on Nodes, as a click does: the flasher's module loads.
 async function openUSB(page) {
   const r = await page.goto("./");
   expect(r.headers()["content-security-policy"]).toBe(USB_CSP);
-  await page.getByRole("button", { name: "+ Add node" }).click();
-  await page.locator("#nqres").getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Install a board over USB" })).toBeVisible();
   await page.waitForFunction(() => customElements.get("esp-web-install-button") !== undefined);
 }
@@ -182,7 +181,7 @@ test("Install over USB: the flasher loads, opens on a stubbed port, every chunk 
     b.append(act);
     document.querySelector("aside.drawer .body").append(b);
   });
-  await page.getByRole("button", { name: "Install over USB" }).click();
+  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
   await page.waitForFunction(() => customElements.get("ewt-install-dialog") !== undefined &&
     document.querySelector("ewt-install-dialog") !== null);
 
@@ -226,7 +225,7 @@ test("Install over USB: the port picker cancelled, the no-port dialog shows, no 
     b.append(act);
     document.querySelector("aside.drawer .body").append(b);
   });
-  await page.getByRole("button", { name: "Install over USB" }).click();
+  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
   const dialog = page.locator("ewt-no-port-picked-dialog");
   await expect(dialog.getByText("Try Again")).toBeVisible();
   // Its icon, with the two style attributes, was drawn.
@@ -306,7 +305,7 @@ test("Install over USB: a Wi-Fi board's Improv step, its Wi-Fi form, no CSP viol
     b.append(act);
     document.querySelector("aside.drawer .body").append(b);
   });
-  await page.getByRole("button", { name: "Install over USB" }).click();
+  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
   const dialog = page.locator("ewt-install-dialog");
   await expect(dialog.getByText("Connected to espdns-e2e")).toBeVisible();
   await expect(dialog.getByText("Install espDNS xiao-s3-sense")).toBeVisible();

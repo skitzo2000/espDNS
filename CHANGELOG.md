@@ -11,6 +11,13 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Changed
+
+- Installing a board and adding a node are now two steps. Nodes has its own **Install over
+  USB** button, and **+ Add node** lists only nodes on your network. Once an installed board
+  answers, **Add it now** opens + Add node with it and its address filled in. A node's page
+  has **Reinstall over USB**.
+
 ## [controller 0.0.5] - 2026-10-15
 
 ### Fixed

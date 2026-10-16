@@ -15,10 +15,9 @@ import (
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
 	"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
-// USBPages are the pages whose CSP is USBCSP: Nodes, at its two paths, and the first run,
-// where + Add node and a found node's setup open the Install over USB panel (web/usb.js)
-// with the flasher in it.
-var USBPages = []string{"/", "/index.html", "/setup.html"}
+// USBPages are the pages whose CSP is USBCSP: Nodes, at its two paths, the first run, and a
+// node's page, which open the Install over USB panel (web/usb.js) with the flasher in it.
+var USBPages = []string{"/", "/index.html", "/setup.html", "/node.html"}
 
 // USBStyleHashes are the SHA-256 hashes (base64) of the only static inline style attributes
 // the vendored esp-web-tools has, both in its "no port picked" dialog (shown when the port

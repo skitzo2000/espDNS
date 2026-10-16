@@ -34,8 +34,7 @@ async function keys(page) {
 
 async function openUSB(page) {
   await page.goto("./");
-  await page.getByRole("button", { name: "+ Add node" }).click();
-  await page.locator("#nqres").getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   const d = page.getByRole("dialog", { name: "Install a board over USB" });
   await expect(d).toBeVisible();
   return d;

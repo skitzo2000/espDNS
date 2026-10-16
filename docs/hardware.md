@@ -37,7 +37,7 @@ These boards are described from the maker's pinout, arduino-esp32 or ESPHome (ea
 `notes` say which) and checked by the catalog's tests, but they aren't on the bench for
 every release. Boards marked
 **community** in the picker have been reported running; the rest wait for a report. Pick
-yours in Install over USB (on Nodes, **+ Add node**, **A new board over USB**): the list is
+yours in Install over USB (on Nodes, **Install over USB**): the list is
 grouped by maker, and the search box takes a maker, a model, a catalog name, a chip image or
 a word like `w5500` or `poe`. espDNS boards have 8 MB of PSRAM or more: that is what is
 tested, and smaller boards join once they have been.
@@ -249,7 +249,7 @@ chip yet, so P4 nodes are wired only.
 ## Describing your own board
 
 Any ESP32-S3 or ESP32-P4 board with 8 MB of PSRAM or more can be described from its
-pinout. On the Nodes page, press **+ Add node**, choose **A new board over USB**, and pick
+pinout. On the Nodes page, press **Install over USB** and pick
 **Describe your own board…**. Or pick a catalog board and press **Change it: describe a
 board from this one**. The form asks for:
 

@@ -162,6 +162,25 @@ test("Nodes: the list renders from the controller's nodes", async ({ page }) => 
   expect(await violations()).toEqual([]);
 });
 
+// Installing and adding are two steps: Install over USB, its own button beside + Add node,
+// opens the panel; + Add node has no new board in it.
+test("Install over USB: its own button beside + Add node opens the panel", async ({ page }) => {
+  const violations = await watch(page);
+  await login(page);
+  await fake(page);
+  await page.goto("./");
+  const usb = page.locator("#head-actions").getByRole("button", { name: "Install over USB" });
+  await expect(usb).toHaveClass("btn");
+  await expect(page.locator("#head-actions > *").last()).toHaveAttribute("id", "add-node"); // + Add node last, Install over USB just before
+  await usb.click();
+  const u = page.getByRole("dialog", { name: "Install a board over USB" });
+  await expect(u).toBeVisible();
+  await expect(u.locator("#usb-board option").nth(1)).toBeAttached();
+  await expect(u.locator("#usb-addr")).toHaveValue("");
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
 test("+ Add node: the found nodes, then an address looked up", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
@@ -172,12 +191,14 @@ test("+ Add node: the found nodes, then an address looked up", async ({ page }) 
   await expect(box).toBeFocused();
   await expect(list).toContainText("Found on your network");
   await expect(list).toContainText(FOUND);
-  await expect(list).toContainText("A new board over USB");
+  // Nodes on the network only: a new board is Install over USB's, its own button.
+  await expect(list).not.toContainText("A new board over USB");
+  await expect(list.locator(".opt.pick")).toHaveCount(1);
 
-  // Nothing at this address.
+  // Nothing at this address: a new board is installed with Install over USB first.
   await box.fill(NOBODY);
   await box.press("Enter");
-  await expect(list).toContainText("No espDNS node answers there");
+  await expect(list).toContainText("No espDNS node answers there. A new board is installed with Install over USB first, then added here.");
   // A node at this one: chosen, with its name to give it and the address it runs on.
   await box.fill(TYPED);
   await box.press("Enter");
@@ -688,7 +709,7 @@ test("+ Add node: every item acts on a click and on Enter", async ({ page }) => 
 
   // The node ready to add: its setup panel, then the Add flow with it.
   await add.click();
-  await expect(items).toHaveCount(3);
+  await expect(items).toHaveCount(2);
   await clickAt(items.nth(0));
   let d = page.getByRole("dialog");
   await expect(d).toContainText("Add it to your nodes");
@@ -725,18 +746,10 @@ test("+ Add node: every item acts on a click and on Enter", async ({ page }) => 
   await page.locator("#nq").fill("");
   await page.locator("#nq").press("Escape");
 
-  // A new board over USB: a click on the item, not its button, opens Install over USB.
+  // No new board in the list: only the nodes found.
   await add.click();
-  await clickAt(items.nth(2));
-  let u = page.getByRole("dialog", { name: "Install a board over USB" });
-  await expect(u).toBeVisible();
-  await expect(u.locator("#usb-board option").nth(1)).toBeAttached();
-  await page.keyboard.press("Escape");
-  // ... and its Start button too.
-  await add.click();
-  await list.getByRole("button", { name: "Start" }).click();
-  u = page.getByRole("dialog", { name: "Install a board over USB" });
-  await expect(u).toBeVisible();
+  await expect(items).toHaveCount(2);
+  await page.locator("#nq").press("Escape");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });
