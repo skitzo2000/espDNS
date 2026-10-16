@@ -314,19 +314,23 @@ test("Make your keys: a recovery public key file, a private key file refused", a
   expect(await violations()).toEqual([]);
 });
 
-// With nodes listed already (an existing fleet): the release key isn't made here (they trust
-// one: import it), and the recovery key is the one they trust, as a file.
-test("Make your keys: an existing fleet imports its keys", async ({ page }) => {
+// With a node listed already (added before the keys, or an existing fleet): importing the key
+// it trusts is offered first, and making a new one stays, saying the node is then installed
+// again over USB; made so, it is sent as such (reinstall).
+test("Make your keys: a node listed first imports its key or makes a new one", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
-  await fake(page, ["password", "first_node"]);
+  const state = await fake(page, ["password", "first_node"]);
   await page.goto("setup.html");
   await row(page, "keys").getByRole("button", { name: "Start" }).click();
   const body = row(page, "keys").locator(".sb");
-  await expect(body.locator("#keys-release-make")).toHaveCount(0);
-  await expect(body).toContainText("Your nodes trust a release key already: import that one.");
+  await expect(body.locator("#keys-listed")).toContainText("it trusts the release key it was installed with");
+  await expect(body.locator("#keys-listed")).toContainText("install it again over USB");
   await expect(body.locator("#keys-import")).toHaveAttribute("open", "");
   await expect(body.locator("#keys-recovery-import")).toHaveAttribute("open", "");
+  await body.locator("#keys-release-make").click();
+  await expect(body.locator("#keys-release-fp")).toHaveText(RELFP);
+  expect(state.posts).toEqual([["release", { reinstall: true }]]);
   expect(await violations()).toEqual([]);
 });
 

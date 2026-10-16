@@ -147,6 +147,10 @@ func TestKeysAPI(t *testing.T) {
 	if _, err := os.Stat(keys.Path(e.dir)); err == nil {
 		t.Fatal("a release key made with a node listed")
 	}
+	// Made anyway on purpose: the node listed is installed again over USB to take it.
+	if code, out := e.do("POST /api/keys/release", `{"reinstall":true}`); code != http.StatusOK || out["present"] != true {
+		t.Fatalf("generate with reinstall: %d %v", code, out)
+	}
 }
 
 // With a node listed, the recovery key posted must be the one it trusts (slot 1 of its
@@ -166,6 +170,24 @@ func TestRecoveryMustMatchListedNodes(t *testing.T) {
 	}
 	if code, out := e.do("POST /api/keys/recovery", recoveryBody(rec, false)); code != http.StatusOK {
 		t.Fatalf("the node's: %d %v", code, out)
+	}
+}
+
+// A listed node that trusts another release key than the controller's (a new key made, the
+// node to be installed again over USB) doesn't vouch for the recovery key.
+func TestRecoveryNodeOfAnotherReleaseKey(t *testing.T) {
+	node := nodes.Node{Addr: "192.0.2.53", Source: nodes.SourceSettings,
+		Status: map[string]any{"keys": []any{"0123456789abcdef", keyspart.Fingerprint(newPub(t))}}}
+	e := newSetupEnv(t, func(s *server) { s.nodes = func() []nodes.Node { return []nodes.Node{node} } })
+	e.firstPassword()
+	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"192.0.2.53"}}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.do("POST /api/keys/release", `{"reinstall":true}`); code != http.StatusOK {
+		t.Fatalf("generate with reinstall: %d %v", code, out)
+	}
+	if code, out := e.do("POST /api/keys/recovery", recoveryBody(newPub(t), false)); code != http.StatusOK {
+		t.Fatalf("a new recovery key: %d %v", code, out)
 	}
 }
 

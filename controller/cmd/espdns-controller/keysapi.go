@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -31,15 +32,17 @@ import (
 //	                              "rotation": a key rotation under way, its id and new keys
 //	                              ({"id", "release", "recovery"}), or null
 //	POST /api/keys/release        {} makes a new release key in <data>/keys/release.pem, as
-//	                              espdns key generate: never over one there, never while a
-//	                              node is listed (it trusts another key)
+//	                              espdns key generate: never over one there. While a node is
+//	                              listed (it trusts another key) only with {"reinstall": true}:
+//	                              the nodes listed refuse it until installed again over USB
 //	GET  /api/keys/release.pub    the release key's public half, the 65-byte point
 //	POST /api/keys/recovery       {"public_key": base64 of the 65-byte point, "replace": false}:
 //	                              the recovery public key, made in the browser (WebCrypto) or
 //	                              read from a file there; the private key never comes here. The
 //	                              same key again changes nothing; another is refused unless
 //	                              replace, and always while a node is listed. A listed node
-//	                              that trusts another recovery key refuses it too.
+//	                              that trusts this release key and another recovery key
+//	                              refuses it too.
 //
 // The GETs are open as the other reads are while no password is set; the POSTs need
 // a login.
@@ -105,14 +108,21 @@ func (s keysServer) logAction(r *http.Request, action, fp string) {
 }
 
 func (s keysServer) generate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Reinstall bool `json:"reinstall"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
 	ns, err := s.listed()
 	switch {
 	case err != nil:
 		httpErr(w, http.StatusInternalServerError, err)
 		return
-	case len(ns) > 0:
+	case len(ns) > 0 && !body.Reinstall:
 		httpErr(w, http.StatusConflict, fmt.Errorf("settings.json lists %d node(s): they trust a release key already; "+
-			"import that one (espdns key import), a new one would sign releases they all refuse", len(ns)))
+			"import that one (espdns key import), or make a new one with reinstall and install them again over USB", len(ns)))
 		return
 	}
 	src, ok := s.key.(keys.FileSource)
@@ -165,20 +175,23 @@ func (s keysServer) setRecovery(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	// A listed node that reports another recovery key (slot 1): this isn't the fleet's.
+	var relPub []byte
+	if k, err := s.key.Key(); err == nil {
+		relPub = release.PublicRaw(k)
+	}
+	// A listed node that reports another recovery key (slot 1): this isn't the fleet's. Not a
+	// node that trusts another release key (slot 0) than this one: it is installed again over
+	// USB, with both keys, before it takes anything from here.
 	fp := keyspart.Fingerprint(pub)
 	for _, n := range s.nodes() {
 		if n.Source != nodes.SourceSettings {
 			continue
 		}
-		if st, ok := status(n); ok && len(st.Keys) > 1 && st.Keys[1] != fp {
+		st, ok := status(n)
+		if ok && len(st.Keys) > 1 && st.Keys[1] != fp && (relPub == nil || st.Keys[0] == release.Fingerprint(relPub)) {
 			httpErr(w, http.StatusConflict, fmt.Errorf("%s trusts the recovery key %s, not %s: give the one your nodes trust", n.Addr, st.Keys[1], fp))
 			return
 		}
-	}
-	var relPub []byte
-	if k, err := s.key.Key(); err == nil {
-		relPub = release.PublicRaw(k)
 	}
 	same, err := keys.SetRecovery(s.dataDir, pub, relPub, body.Replace, len(ns) > 0)
 	switch {
