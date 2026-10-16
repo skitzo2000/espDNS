@@ -52,7 +52,7 @@ function actionWhy(n, identify) {
   if (!n.online && n.out_of_service) return "It isn't answering: return it to service once it does, or remove it.";
   if (!n.online) return n.source === "settings" ? "It isn't answering: it can still be taken out of service, or removed." : "It isn't answering: no actions until it does.";
   if (!identify && n.source !== "settings") return "It isn't one of your nodes yet: add it from Nodes first.";
-  if (!identify && unadopted(n)) return "It isn't adopted: it runs on its board's defaults. Remove it from the group, then add it again from Nodes.";
+  if (!identify && unadopted(n)) return "It isn't adopted: it runs on its board's defaults. Take it out of service, then return it to service: its settings are sent to it again.";
   return "";
 }
 
@@ -370,7 +370,7 @@ function renderAttention() {
       out.push(h("b", {}, `${name} isn't one of your nodes yet.`), h("p", {}, "Found on your network. Add it to change its settings and send it changes."),
         h("div", { class: "row" }, h("a", { class: "btn primary", href: `./#found=${encodeURIComponent(ip(n))}` }, "Set it up")));
     } else if (unadopted(n)) {
-      out.push(h("b", {}, `${name} isn't adopted.`), h("p", {}, "It runs on its board's defaults, as after a reinstall over USB, so it takes no changes. Remove it from the group, then add it again from Nodes."));
+      out.push(h("b", {}, `${name} isn't adopted.`), h("p", {}, "It runs on its board's defaults, as after a reinstall over USB, so it takes no changes. Take it out of service, then return it to service: its settings are sent to it again."));
     }
   }
   box.className = cls;

@@ -452,6 +452,7 @@ test("a node not added yet, and one listed but not adopted: no Restart, no signe
   await page.goto("about:blank");
   await open(page, ID2);
   await expect(page.locator("#attention")).toContainText("dns2 isn't adopted.");
+  await expect(page.locator("#attention")).toContainText("Take it out of service, then return it to service");
   await expect(page.locator("#acts button")).toHaveText(["Blink its light", "Reinstall over USB", "Take out of service", "Remove from the group"]);
   await expect(page.getByRole("button", { name: /^Restart/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Flush its cache" })).toBeHidden();

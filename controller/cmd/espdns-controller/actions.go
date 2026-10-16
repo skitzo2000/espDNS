@@ -250,10 +250,11 @@ func (a actions) control(ctx context.Context, run *jobs.Run, host string, what s
 }
 
 // needAdopted refuses a node that runs on its board's defaults (no node config: one
-// reinstalled over USB): it isn't adopted, so it takes nothing signed but identify.
+// reinstalled over USB): it isn't adopted, so it takes nothing signed but identify. Taking
+// it out of service and returning it sends it its config again (node-in).
 func needAdopted(host string, st release.NodeStatus) error {
-	if st.Config != nil && st.Config.Source != "node" {
-		return fmt.Errorf("%s isn't adopted: it runs on its board's defaults (no node config). Remove it from the group, then add it again from Nodes", host)
+	if st.Config != nil && st.Config.Source != "" && st.Config.Source != "node" {
+		return fmt.Errorf("%s isn't adopted: it runs on its board's defaults (no node config). Take it out of service, then return it to service: its config is sent to it again", host)
 	}
 	return nil
 }
