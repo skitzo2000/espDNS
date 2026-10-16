@@ -134,27 +134,40 @@ export function toast(msg) {
 
 // ---- the slide-out panel ----------------------------------------------------------------
 // panel opens a slide-out panel: straight-edged, full height (a bottom sheet on a phone),
-// closed by its x, Esc or a click outside. It returns {body, footer, title, close}; the
-// caller fills body and footer. onClose hears it close. One is open at a time.
+// closed by its x, Esc or a click outside. It returns {body, footer, title, close, busy}; the
+// caller fills body and footer. onClose hears it close. One is open at a time. busy(why)
+// keeps it open: closing it then says why, in red, until busy("") lets it close again; while
+// busy, another panel doesn't open (the one asked for is never shown) and leaving the page
+// asks first.
 let openOne = null;
+const stay = e => { e.preventDefault(); e.returnValue = ""; };
 export function panel(title, onClose) {
   if (openOne) openOne.close();
+  const blocked = !!openOne;
   const back = document.activeElement;
   const h2 = h("h2", { id: "panel-title" }, title);
   const x = h("button", { class: "x", type: "button", "aria-label": "Close" }, icon("x"));
   const body = h("div", { class: "body" });
   const footer = h("footer", {});
+  const veto = h("p", { class: "bad veto", id: "panel-busy", role: "alert" });
   const aside = h("aside", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-labelledby": "panel-title" },
     h("header", {}, h2, x), body, footer);
   const scrim = h("div", { class: "scrim" });
-  // Esc closes the panel, unless a dialog over it (askPassword, the USB installer's) is open:
-  // Esc is that one's.
-  const key = e => { if (e.key === "Escape" && !document.querySelector("dialog[open], ewt-install-dialog")) { e.preventDefault(); p.close(); } };
+  let why = "";
+  // Esc closes the panel, unless a dialog over it (askPassword) is open: Esc is that one's.
+  const key = e => { if (e.key === "Escape" && !document.querySelector("dialog[open]")) { e.preventDefault(); p.close(); } };
   const p = {
     body, footer, aside,
     title: t => { h2.textContent = t; },
+    busy: t => {
+      why = t || "";
+      if (!why) { veto.remove(); window.removeEventListener("beforeunload", stay); return; }
+      veto.textContent = why;
+      window.addEventListener("beforeunload", stay);
+    },
     close: () => {
       if (openOne !== p) return;
+      if (why) { footer.prepend(veto); return; }
       openOne = null;
       document.removeEventListener("keydown", key);
       aside.remove(); scrim.remove();
@@ -162,6 +175,7 @@ export function panel(title, onClose) {
       if (onClose) onClose();
     },
   };
+  if (blocked) return p;
   x.addEventListener("click", p.close);
   scrim.addEventListener("click", p.close);
   document.addEventListener("keydown", key);

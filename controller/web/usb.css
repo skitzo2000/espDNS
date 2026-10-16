@@ -1,5 +1,5 @@
 /* Install over USB (usb.js), loaded when the panel first opens, on top of shell.css: the
-   board's facts, the custom board form in the panel, and the flasher's button. */
+   board's facts, the custom board form in the panel, the install's progress and the Board log. */
 .usb .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13.5px; margin: 0 }
 .usb .kv dt { color: var(--muted) }
 .usb .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
@@ -11,9 +11,11 @@
 .usb .usb-form label.f > span { font-size: 12.5px }
 .usb .usb-form label.check { grid-column: 1 / -1 }
 .usb [hidden] { display: none !important }
-.usb esp-web-install-button { display: block }
 /* Write keys only, under its summary. */
 .usb details.sub-ex > summary { cursor: pointer; color: var(--muted); font-size: 14px }
 .usb details.sub-ex[open] > summary { margin-bottom: 10px }
-.usb #usb-keys-progress { width: 100%; accent-color: var(--orange) }
+.usb #usb-keys-progress, .usb #usb-progress { width: 100%; accent-color: var(--orange) }
+/* The Board log: one row per line, kept as it came, scrolling on its own. */
+.usb .log { max-height: 320px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; font-size: 12px; line-height: 1.45 }
+.usb .log > div { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.45em }
 @media (max-width: 520px) { .usb .kv { grid-template-columns: 1fr; gap: 2px } .usb .kv dd { margin-bottom: 6px } }

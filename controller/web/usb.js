@@ -1,27 +1,32 @@
 // Install over USB (its own button on Nodes and in the first run, a found node's "Update
-// over USB", and a node page's "Reinstall over USB"): a panel that installs espDNS on a board plugged
-// into this computer, with ESP Web Tools (the vendored copy, web/vendor/esp-web-tools). The
-// board from the catalogue, or one of yours, or one described from its pinout (the custom
-// board form, POST /api/boards/check, saved with POST /api/boards); the node's address,
-// which goes into its board partition; Prepare image (POST /api/build) gives the install
-// button for /build/<id>/manifest.json. Installing erases the board; on a board that may run
-// on Wi-Fi, ESP Web Tools then asks for the network over Improv (image.Chip.Manifest). The
-// image carries your keys (the release and recovery public keys, in its keys partition): until
-// both are set up (the first run's Make your keys) nothing is prepared. Write keys only (POST
-// /api/build/keys) writes the keys partition alone with flash.js (the vendored esptool-js),
-// not ESP Web Tools, for a node in setup mode, and keeps the rest. A board whose chip image
-// isn't in the controller yet offers Get firmware (firmware.js: that chip image from the project's
-// release, fetched, checked and imported); each board says which firmware it gets ("project release v0.0.3", "your
-// build"). Once installed, the panel waits for the node on the network (POST
+// over USB", and a node page's "Reinstall over USB"): a panel that installs espDNS on a board
+// plugged into this computer, all inside the panel. The board from the catalogue, or one of
+// yours, or one described from its pinout (the custom board form, POST /api/boards/check,
+// saved with POST /api/boards); the node's address, which goes into its board partition;
+// Prepare image (POST /api/build) makes /build/<id>/image.bin. Install on the board over USB
+// asks for the port, then, with flash.js (the vendored esptool-js) at 115200: connects to the
+// board's bootloader (saying whether it is the board's own USB or a USB-to-serial chip),
+// checks the chip is the image's (else "Board Mismatch <found> in usb, firmware for <image's>",
+// nothing written) and its flash is big enough, erases the whole flash if asked, writes the
+// image at 0 and restarts the board. Closing the panel is refused while it erases or writes.
+// Then the board's console is read into the Board log (boardlog.js), and on a board that may
+// run on Wi-Fi (build.wifi: boards.Board.MayRunOnWiFi) the panel asks for the network over
+// Improv in that same stream; the network and password go to the board over USB, never
+// through the controller. The image carries your keys (the release and recovery public keys,
+// in its keys partition): until both are set up (the first run's Make your keys) nothing is
+// prepared. Write keys only (POST /api/build/keys) writes the keys partition alone, for a
+// node in setup mode, and keeps the rest. A board whose chip image isn't in the controller yet
+// offers Get firmware (firmware.js: that chip image from the project's release, fetched,
+// checked and imported); each board says which firmware it gets ("project release v0.0.3",
+// "your build"). Once installed, the panel waits for the node on the network (POST
 // /api/nodes/lookup at its address, or /api/nodes/found for one on DHCP) and, when it
 // answers, says so with Add it now, which hands it to o.found (+ Add node, with it chosen and
-// its address filled in). Installing and adding are two steps. The page that opens it needs
-// websec.USBCSP: the flasher's "no port picked" dialog has two style attributes, and its
-// Wi-Fi form three it sets first, allowed by hash there only.
+// its address filled in). Installing and adding are two steps.
 import { h, arr, obj, str, panel, api, hostOnly, getJSON, post } from "./shell.js";
 import { every } from "./common.js";
 import { firmwareBox, readFirmware, labelOf } from "./firmware.js";
 import * as flash from "./flash.js";
+import { logView, openConsole, clean, IMPROV, rpc, joinData, result } from "./boardlog.js";
 
 // The builder's routes answer errors as text (http.Error), the others as JSON.
 async function send(url, body) {
@@ -40,6 +45,12 @@ async function read(url) {
   return r.json();
 }
 
+// held is what's left to do with a port an install or a keys write let go of (the panel
+// closed, Install again): the next one, on this panel or another, waits for it first, so the
+// port is closed before it is opened again. hold(p) adds p, which settles once its port is shut.
+let held = Promise.resolve();
+const hold = p => { held = Promise.all([held, Promise.resolve(p).catch(() => {})]); return p; };
+
 // usb.css: loaded once, before the panel first opens.
 let css = null;
 function loadCSS() {
@@ -54,10 +65,6 @@ function loadCSS() {
   return css;
 }
 
-// The flasher: its module, once.
-let flasher = null;
-const loadFlasher = () => (flasher ||= import("./vendor/esp-web-tools/install-button.js"));
-
 function summary(b) {
   const e = b.ethernet || { kind: "none" };
   const wired = e.kind === "emac" ? `${str(e.phy || "ip101").toUpperCase()} on the built-in MAC` : e.kind === "w5500" ? "W5500" : "";
@@ -65,11 +72,6 @@ function summary(b) {
   const sd = !b.sd || b.sd.kind === "none" ? "no SD" : b.sd.kind === "sdmmc" ? "SDMMC" : "SD over SPI";
   return `${net} · ${sd}`;
 }
-
-// onWiFi is whether the board may come up on Wi-Fi (boards.Board.MayRunOnWiFi): no Ethernet,
-// or Ethernet that may not be fitted. Its manifest then has ESP Web Tools ask for the Wi-Fi
-// network over Improv once it has installed (image.Chip.Manifest).
-const onWiFi = b => !b.ethernet || b.ethernet.kind === "none" || !!b.ethernet.optional;
 
 function problems(box, errors, warnings) {
   box.replaceChildren(...arr(errors).map(t => h("div", { class: "bad small" }, str(t))),
@@ -166,71 +168,13 @@ function boardToForm(f, b) {
   if (b.wifi) set("wifi_tx", b.wifi.tx_power_dbm);
 }
 
-// ---- the panel ----------------------------------------------------------------------------
-// openUSB opens it. o: board (a board's name, chosen), image (a chip image: a board not in
-// the list opens the custom form on it), address and gateway (prefilled), update (a found
-// node's firmware updated: the title says so), reinstall (one of your nodes installed again,
-// from its page: the title says so), at (the address it has: on DHCP, waited for there),
-// name (what the board is called in the title), found(node) (the node installed, once it
-// answers on the network: Add it now closes the panel and calls it).
-// flashButton is ESP Web Tools' install button for a prepared build's manifest, its activate
-// slot our own button.
-function flashButton(id, label, actId) {
-  const btn = document.createElement("esp-web-install-button");
-  btn.setAttribute("manifest", `build/${encodeURIComponent(str(id))}/manifest.json`);
-  const act = h("button", { class: "btn primary", type: "button", slot: "activate", id: actId }, label);
-  btn.append(act, h("span", { slot: "unsupported", class: "hint bad" }, "This browser can't reach USB devices: use Chrome or Edge."),
-    h("span", { slot: "not-allowed", class: "hint bad" }, "USB needs this page over https, or on this computer (localhost)."));
-  return btn;
-}
-
-// ---- after the install ------------------------------------------------------------------------
-// ESP Web Tools fires no event as an install goes: its dialog (ewt-install-dialog, which the
-// install button adds to the page) keeps it in _installState, {state, message}, the state
-// "initializing", "manifest", "preparing", "erasing", "writing", then "finished" or "error".
-// watchInstall reads that while a dialog is open and calls on(state, message) as it changes
-// ("busy" for the ones before the end), and on("closed", the last state) when the dialog
-// goes. It returns a function that stops it.
-const INSTALL_POLL = 500, WAIT_POLL = 3000, HINT_AFTER = 60000;
-function watchInstall(on) {
-  let dialog = null, timer = null, last = "";
-  const check = () => {
-    const s = obj(dialog && dialog._installState), st = str(s.state);
-    if (!st || st === last) return;
-    last = st;
-    on(st === "finished" || st === "error" ? st : "busy", str(s.message));
-  };
-  const drop = () => { clearInterval(timer); timer = null; dialog = null; };
-  const mo = new MutationObserver(recs => {
-    for (const r of recs) {
-      for (const n of r.addedNodes) {
-        if (n.localName !== "ewt-install-dialog") continue;
-        drop();
-        dialog = n; last = "";
-        timer = setInterval(check, INSTALL_POLL);
-      }
-      for (const n of r.removedNodes) {
-        if (!dialog || n !== dialog) continue;
-        check();
-        const ended = last;
-        drop();
-        on("closed", ended);
-      }
-    }
-  });
-  mo.observe(document.body, { childList: true });
-  return () => { mo.disconnect(); drop(); };
-}
-const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
-
 // ---- Write keys only ------------------------------------------------------------------------
 // The controller's two public keys written to the board's keys partition and nothing else, for
 // a node in setup mode (no keys, or corrupt ones): POST /api/build/keys makes the 8 KB
 // partition image (/build/<id>/image.bin); flash.js (the vendored esptool-js) connects to the
 // board's bootloader, writes it at 0x1b000 with no erase of anything else (esptool never
 // sends an erase command; the flasher stub rewrites only the two sectors it is given), reads
-// it back, and resets the board. No ESP Web Tools dialog: it has no way to offer erasing the
-// flash here.
+// it back, and resets the board.
 
 const KEYS_OFFSET = 0x1b000, KEYS_SIZE = 0x2000;
 // What a failed step means here: only the keys partition is ever written.
@@ -240,7 +184,9 @@ const keysSaid = {
   reset: m => `The keys are written, but the board didn't restart (${m}): unplug it and plug it in again.`,
 };
 
-function keysOnly(o, keysReady) {
+// p is the panel (kept open while it writes); stopRuns stops an install, whose console may
+// hold the port; lock(on) holds the install's controls meanwhile.
+function keysOnly(o, keysReady, p, stopRuns, lock) {
   const status = h("p", { class: "small", id: "usb-keys-status", role: "status", "aria-live": "polite" });
   const bar = h("progress", { id: "usb-keys-progress", max: 100, value: 0, hidden: true });
   const go = h("button", { class: "btn primary", type: "button", id: "usb-keys-go", disabled: !keysReady || !("serial" in navigator) }, "Write the keys over USB");
@@ -248,10 +194,13 @@ function keysOnly(o, keysReady) {
   go.addEventListener("click", async () => {
     go.disabled = true;
     bar.hidden = true;
+    lock(true);
     let step = "port", transport = null;
     try {
       // The port first, while the click still counts as one.
       const port = await navigator.serial.requestPort();
+      stopRuns(); // an install's console on this port
+      await held;
       step = "prepare";
       say("Preparing your keys…");
       const b = await send("api/build/keys", {});
@@ -264,8 +213,10 @@ function keysOnly(o, keysReady) {
       say("Connecting to the board…");
       const c = await flash.connect(port);
       transport = c.transport;
+      if (!p.aside.isConnected) return; // the panel closed meanwhile: nothing written
       const { loader, description } = c;
       step = "write";
+      p.busy(BUSY.keys);
       say(`Connected to ${description}. Writing the keys (release ${str(k.release)}, recovery ${str(k.recovery)})…`);
       bar.hidden = false;
       bar.value = 0;
@@ -277,13 +228,16 @@ function keysOnly(o, keysReady) {
       if (back.length < KEYS_SIZE || keys.some((x, i) => back[i] !== x)) throw new Error("they differ");
       step = "reset";
       say("Restarting the board…");
+      p.busy("");
       await flash.reset(transport, loader);
       bar.value = 100;
       say(`Done: the board has your keys (release ${str(k.release)}, recovery ${str(k.recovery)}). Its firmware and settings are as they were; it shows on Nodes again in a moment.`, "small ok");
     } catch (e) {
       say(flash.serialError(e, step, keysSaid), "small bad");
     } finally {
-      await flash.close(transport);
+      p.busy("");
+      await hold(flash.close(transport));
+      lock(false);
       go.disabled = !keysReady;
     }
   });
@@ -296,10 +250,36 @@ function keysOnly(o, keysReady) {
       h("div", { class: "row" }, go), bar, status));
 }
 
+// ---- the panel ----------------------------------------------------------------------------
+// openUSB opens it. o: board (a board's name, chosen), image (a chip image: a board not in
+// the list opens the custom form on it), address and gateway (prefilled), update (a found
+// node's firmware updated: the title says so), reinstall (one of your nodes installed again,
+// from its page: the title says so), at (the address it has: on DHCP, waited for there),
+// name (what the board is called in the title), found(node) (the node installed, once it
+// answers on the network: Add it now closes the panel and calls it).
+
+// The install's steps; how long things are given; what the panel says while closing it
+// would break the board; what each way of being on the network means once installed.
+const STEP = { connect: "Connect", chip: "Check the chip", erase: "Erase the flash", write: "Write espDNS", restart: "Restart",
+  wifi: "Wi-Fi", net: "On your network" };
+const WAIT_POLL = 3000, HINT_AFTER = 60000, NOLOG_AFTER = 8000, STATE_TRIES = 15, JOIN_FOR = 45000;
+const OWN_USB = 0x303a; // Espressif's USB vendor ID: the chip's own USB, not a USB-to-serial chip
+const BUSY = { erase: "Erasing the board: don't close this or unplug it until it's done.",
+  write: "Writing to the board: don't close this or unplug it until it's done.",
+  keys: "Writing the keys: don't close this or unplug it until it's done." };
+const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
+const INSTALLED = {
+  wired: "Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.",
+  joined: "Installed, and on your Wi-Fi network. USB can stay in for power.",
+  ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on: plug it into your network with a cable.",
+  elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
+};
+const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
+
 export async function openUSB(o = {}) {
   await loadCSS();
-  // What runs after an install (watching the installer, waiting for the node): stopped when
-  // the panel closes or another image is prepared.
+  // What runs for an install (the board's port, waiting for the node): stopped when the
+  // panel closes or another image is prepared.
   let stops = [];
   const stopAll = () => { stops.forEach(f => f()); stops = []; };
   const p = panel(o.keys ? `Write keys to ${o.name || "it"} over USB` : o.update ? `Update ${o.name || "it"} over USB`
@@ -309,11 +289,12 @@ export async function openUSB(o = {}) {
   p.body.append(h("p", { class: "small" }, o.keys
     ? "Plug the board into this computer with a USB cable. Writing the keys keeps everything else; a fresh install (below) erases the board."
     : "Plug the board into this computer with a USB cable. Installing erases it, then it starts espDNS on the address below."),
-  ...(supported ? [] : [h("p", { class: "hint bad", id: "usb-unsupported" }, "This browser can't reach USB devices: use Chrome or Edge on this computer.")]));
+  ...(supported ? [] : [h("p", { class: "hint bad", id: "usb-unsupported" }, window.isSecureContext
+    ? "This browser can't reach USB devices: use Chrome or Edge on this computer."
+    : "USB needs this page over https, or on this computer (localhost).")]));
   const loading = h("p", { class: "hint" }, "Reading the boards…");
   p.body.append(loading);
   p.footer.append(h("button", { class: "btn", type: "button", onclick: p.close }, "Close"));
-  loadFlasher().catch(() => { /* shown when the button is drawn */ });
 
   let entries, known, key, labels = {};
   // Which firmware each chip image is (project release or your build), for the board's facts
@@ -336,7 +317,7 @@ export async function openUSB(o = {}) {
     p.body.append(h("p", { class: "hint bad", id: "usb-nokeys" }, "Set up your keys first: the board is installed with them. ",
       h("a", { href: "setup.html#next" }, "Make your keys")));
   }
-  const writeKeys = keysOnly(o, keysReady);
+  const writeKeys = keysOnly(o, keysReady, p, () => stops.forEach(f => f()), on => lock(on));
   if (o.keys) p.body.append(writeKeys);
 
   // The board: a list to pick from, the board's facts, or the custom form.
@@ -520,72 +501,320 @@ export async function openUSB(o = {}) {
     out.replaceChildren(spinning("Preparing the image…"));
     try {
       const build = await send("api/build", body);
-      try { await loadFlasher(); } catch (e) { throw new Error(`The installer didn't load: ${e.message}`); }
-      const btn = flashButton(build.id, "Install on the board over USB", "usb-go");
-      const c = obj(build.chip), k = obj(build.keys);
-      const after = h("div", { class: "stack", id: "usb-after" }, h("p", { class: "hint" }, "Once it's installed, this panel waits for it to show up on your network."));
-      out.replaceChildren(h("p", { class: "small" }, `Ready: ${str(obj(build.board).title) || str(obj(build.board).name)}, ${str(c.image)} ${str(c.version)}, with your keys (release `,
-        h("span", { class: "mono" }, str(k.release)), ", recovery ", h("span", { class: "mono" }, str(k.recovery)), ")."), btn,
-        ...(onWiFi(obj(build.board)) ? [h("p", { class: "hint", id: "usb-wifi" },
-          "After it installs, it asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.")] : []),
+      const c = obj(build.chip), k = obj(build.keys), b = obj(build.board);
+      const go = h("button", { class: "btn primary", type: "button", id: "usb-go", disabled: !supported }, "Install on the board over USB");
+      const erase = h("input", { type: "checkbox", id: "usb-erase" });
+      const box = h("div", { class: "stack" });
+      out.replaceChildren(h("p", { class: "small" }, `Ready: ${str(b.title) || str(b.name)}, ${str(c.image)} ${str(c.version)}, with your keys (release `,
+        h("span", { class: "mono" }, str(k.release)), ", recovery ", h("span", { class: "mono" }, str(k.recovery)), ")."),
+        h("label", { class: "check" }, erase, h("span", {}, "Erase the whole flash first (slower)")),
+        h("div", { class: "row" }, go),
+        ...(build.wifi ? [h("p", { class: "hint", id: "usb-wifi" },
+          "After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.")] : []),
         h("p", { class: "hint mono" }, `built ${str(c.built)} · ${str(c.elf_sha256).slice(0, 12)} · image ${str(build.id)}`),
-        after);
-      afterInstall(after, btn.querySelector("#usb-go"), body.network, obj(build.board));
+        box);
+      installer(box, go, erase, build, body.network);
     } catch (e) {
       out.replaceChildren(h("p", { class: "hint bad" }, e.message));
     }
     prep.disabled = !keysReady;
   });
 
-  // afterInstall follows the install in ESP Web Tools' dialog and says how it went, in box.
-  // Once it's done, it waits for the node on the network: at its address (POST
-  // /api/nodes/lookup), or, on DHCP, as a node of this board not found before
+  // lock(true) holds the panel's other controls while an install runs (a new image prepared,
+  // or another board chosen, would drop it); lock(false) gives them back as they were.
+  let locked = null;
+  const lock = on => {
+    if (on && !locked) {
+      locked = [pick, q, prep, save, ...p.body.querySelectorAll("#usb-go, #usb-erase, #usb-keys-go")].map(e => [e, e.disabled]);
+      for (const [e] of locked) e.disabled = true;
+    } else if (!on && locked) {
+      for (const [e, d] of locked) e.disabled = d;
+      locked = null;
+    }
+  };
+
+  // installer runs the install from go, in box: the steps (connect, check the chip, erase,
+  // write, restart, Wi-Fi, on your network), what went wrong, the hints, the Board log.
+  // Then it waits for the node on the network: at its address (POST /api/nodes/lookup; the
+  // one Improv said, on Wi-Fi), or, on DHCP, as a node of this board not found before
   // (/api/nodes/found). One that answers is said, with Add it now when there is o.found
   // (+ Add node, with it chosen). Nothing after a minute: what to check, still waiting.
-  function afterInstall(box, act, net, board) {
+  function installer(box, go, erase, build, net) {
+    const board = obj(build.board), wifi = !!build.wifi;
     // A node of yours reinstalled on DHCP isn't found again (it's listed): it is waited for
     // at the address it had (o.at).
-    const ip = net.address === "dhcp" ? str(o.at) : str(net.address).split("/")[0];
-    const wifi = onWiFi(board);
-    const say = (...kids) => box.replaceChildren(...kids);
-    let gen = 0, halt = null;
-    const stopWait = () => { gen++; if (halt) { halt(); halt = null; } };
-    stops.push(stopWait);
+    let ip = net.address === "dhcp" ? str(o.at) : str(net.address).split("/")[0];
+    const steps = h("ol", { class: "steps", id: "usb-steps", hidden: true });
+    const msg = h("div", { class: "stack", id: "usb-after" }, h("p", { class: "hint" }, "Once it's installed, this panel waits for it to show up on your network."));
+    const hints = h("div", { class: "stack nogap", id: "usb-hints" });
+    let con = null, transport = null, gen = 0, halt = null, timers = [], onFrame = null;
+    const log = logView(() => `espdns-${str(board.name) || "board"}-log.txt`, () => con && con.restart());
+    box.replaceChildren(steps, msg, hints, log.box);
+    const say = (...kids) => msg.replaceChildren(...kids.filter(Boolean));
+    const hint = (id, text) => hints.append(h("p", { class: "hint", id }, text));
+    const stopRun = () => {
+      gen++;
+      timers.forEach(clearTimeout);
+      timers = [];
+      if (halt) { halt(); halt = null; }
+      p.busy("");
+      log.restartable(false);
+      hold(Promise.all([flash.close(transport), con && con.close()]));
+      transport = con = onFrame = null;
+    };
+    stops.push(stopRun);
     // On DHCP, the nodes found before it: a new one of this board is it.
     const keyOf = n => `${str(n.id)}|${str(n.host)}|${str(n.version)}|${str(n.install)}`;
     const readFound = async () => arr(obj(await getJSON("api/nodes/found")).nodes);
     let before = new Set();
     if (!ip) readFound().then(ns => { before = new Set(ns.map(keyOf)); }).catch(() => { /* none known */ });
-    const failed = (what, next) => {
-      stopWait();
-      say(h("p", { class: "small bad", id: "usb-failed" }, what), h("p", { class: "hint" }, next));
+
+    // The steps, each a row of ol.steps: step(name, state, hint, ...more) sets one.
+    let rows = {};
+    const draw = names => {
+      rows = {};
+      steps.replaceChildren(...names.map(n => {
+        const r = { hint: h("div", { class: "hint" }), more: h("div", { class: "stack" }) };
+        r.li = h("li", { id: `usb-step-${n}` }, h("span", { class: "m" }), h("div", {}, h("b", {}, STEP[n]), r.hint, r.more));
+        rows[n] = r;
+        return r.li;
+      }));
+      steps.hidden = false;
+      steps.scrollIntoView({ block: "nearest" });
+    };
+    const step = (n, state, text, ...more) => {
+      const r = rows[n];
+      if (!r) return;
+      r.li.className = state;
+      if (text !== undefined) r.hint.textContent = text;
+      if (more.length) r.more.replaceChildren(...more);
+    };
+    const failed = (n, what, next) => {
+      p.busy("");
+      step(n, "failed");
+      say(h("p", { class: "small bad", id: "usb-failed" }, what), next && h("p", { class: "hint" }, next));
+      log.box.open = true;
+      lock(false);
     };
 
-    stops.push(watchInstall((state, msg) => {
-      if (!box.isConnected) { stopAll(); return; }
-      if (state === "busy") {
-        stopWait();
-        act.classList.add("primary");
-        say(spinning("Installing. Keep the board plugged in until the installer says it's done."));
-      } else if (state === "finished") {
-        wait();
-      } else if (state === "error") {
-        failed(`The install stopped: ${msg || "the installer hit an error"}`, `Unplug the board, plug it back in, and press ${act.textContent} to try again.`);
-      } else if (state === "closed" && msg && msg !== "finished" && msg !== "error") {
-        // The dialog closed partway through (msg is the last state it had).
-        failed("The installer closed before it finished, so the board isn't ready.", `Press ${act.textContent} to start again.`);
+    go.addEventListener("click", async () => {
+      stopRun(); // the port, as the last install left it
+      const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
+      lock(true);
+      say();
+      hints.replaceChildren();
+      steps.hidden = true;
+      log.clear();
+      log.box.open = false;
+      let port, image, others;
+      // The port first, while the click still counts as one; the ports there besides (the
+      // console looks for the board's own USB again after the restart, never on another board's).
+      try {
+        port = await navigator.serial.requestPort();
+        others = (await navigator.serial.getPorts()).filter(x => x !== port);
+        await held;
+      } catch (e) {
+        lock(false);
+        say(h("p", { class: "small bad", id: "usb-failed" }, flash.serialError(e, "port")));
+        return;
       }
-    }));
+      try {
+        const r = await api(`build/${encodeURIComponent(str(build.id))}/image.bin`);
+        if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+        image = new Uint8Array(await r.arrayBuffer());
+      } catch (e) {
+        lock(false);
+        say(h("p", { class: "small bad", id: "usb-failed" }, `Couldn't read the image (${e.message}): press Prepare image again.`));
+        return;
+      }
+      if (!live()) return;
+      const own = port.getInfo().usbVendorId === OWN_USB, kind = own ? "the board's own USB" : "a USB-to-serial chip";
+      draw(["connect", "chip", ...(wipe ? ["erase"] : []), "write", "restart", ...(wifi ? ["wifi"] : []), "net"]);
+      let n = "connect";
+      try {
+        step("connect", "now", `Over ${kind}…`);
+        // Stopped while it connects (the panel closed): the port is let go of, nothing written.
+        const c = await hold(flash.connect(port, l => { for (const x of clean(l).split("\n")) if (x.trim() && !/^Writing at 0x/.test(x)) log.add(x); })
+          .then(async x => { if (!live()) { await flash.close(x.transport); throw new Error("stopped"); } return x; }));
+        transport = c.transport;
+        step("connect", "done", `Over ${kind}: ${c.description}`);
+        n = "chip";
+        step("chip", "now", "");
+        // The image's chip (image.json's chip_family, else its chip: esp32s3 is ESP32-S3), and the
+        // chip revisions its bootloader runs on (the two ESP32-P4 images: v1.x, v3.x).
+        const ch = obj(build.chip), want = str(ch.chip_family) || str(ch.chip).toUpperCase().replace(/^ESP32(?=.)/, "ESP32-");
+        const revs = flash.revisions(image, c.loader.chip.BOOTLOADER_FLASH_OFFSET), v = r => `v${Math.floor(r / 100)}.${r % 100}`;
+        const wrong = c.chip.toUpperCase() !== want.toUpperCase() ? `Board Mismatch ${c.chip} in usb, firmware for ${want || "another chip"}`
+          : revs && c.rev !== null && (c.rev < revs.min || c.rev > revs.max)
+            ? `Board Mismatch ${c.chip} ${v(c.rev)} in usb, firmware for ${want} ${v(revs.min)}${revs.max === 0xffff ? " and later" : ` to ${v(revs.max)}`}`
+            : c.flashMB && board.flash_mb && c.flashMB < board.flash_mb ? `This board has ${c.flashMB} MB of flash; the image is for ${board.flash_mb} MB.` : "";
+        if (wrong) {
+          await flash.close(transport);
+          transport = null;
+          failed("chip", wrong, "Nothing was written. Choose the board that's plugged in above, then press Prepare image again.");
+          return;
+        }
+        step("chip", "done", `${c.chip}${c.flashMB ? `, ${c.flashMB} MB flash` : ""}`);
+        const bar = h("progress", { id: "usb-progress", max: 100, value: 0 });
+        let writing = false;
+        const writeNow = () => {
+          writing = true;
+          if (wipe) step("erase", "done", "Erased");
+          n = "write";
+          p.busy(BUSY.write);
+          step("write", "now", "0%", bar);
+        };
+        if (wipe) { n = "erase"; p.busy(BUSY.erase); step("erase", "now", "The whole flash: a minute or two."); } else writeNow();
+        await flash.write(c.loader, [{ data: image, address: 0 }], { erase: wipe, progress: (w, t) => {
+          if (!writing) writeNow();
+          bar.value = t ? Math.round(w / t * 100) : 100;
+          step("write", "now", `${bar.value}%`);
+        } });
+        p.busy("");
+        step("write", "done", "100%");
+        n = "reset";
+        step("restart", "now", "");
+        await flash.reset(transport, c.loader);
+        await flash.close(transport);
+        transport = null;
+        step("restart", "done", "Restarted into espDNS");
+      } catch (e) {
+        if (!live()) return;
+        await flash.close(transport);
+        transport = null;
+        failed(n === "reset" ? "restart" : n, flash.serialError(e, n, SAID));
+        return;
+      }
+      go.textContent = "Install again";
+      go.classList.remove("primary");
+      lock(false);
+      await watchBoard(port, own, live, others);
+    });
 
-    function wait() {
-      stopWait();
+    // watchBoard reads the board's console into the Board log once it restarts, asks for Wi-Fi
+    // on a board that may run on it, then waits for it on the network.
+    async function watchBoard(port, own, live, others) {
+      log.add("--- the board's console ---");
+      if (!own) hint("usb-uart", "Logs and Wi-Fi setup use the board's own USB port; this one only shows the bootloader.");
+      let app = false;
+      // Stopped while it opens: openConsole lets the port go itself.
+      const c = await hold(openConsole(port, { others, live, line: l => { log.add(l); if (/^[IWE] \(\d+\)/.test(l)) app = true; },
+        frame: (t, d) => onFrame && onFrame(t, d) }).catch(e => { if (live()) log.add(`(couldn't open the port again: ${str(e && e.message)})`); return null; }));
+      if (!live()) return;
+      con = c;
+      log.restartable(!!con);
+      timers.push(setTimeout(() => {
+        if (!app && live()) hint("usb-nolog", "If it shows nothing, press RESET or unplug it and plug it in again.");
+      }, NOLOG_AFTER));
+      let how = wifi ? "ethernet" : "wired";
+      if (wifi && !(own && con)) {
+        step("wifi", "", "Not over this port: plug it into the board's own USB port to set up Wi-Fi.");
+        how = "elsewhere";
+      } else if (wifi) {
+        const got = await askWiFi(live);
+        if (!live()) return;
+        if (got) { ip = got; how = "joined"; }
+      }
+      wait(how);
+    }
+
+    // askWiFi asks the board for its Wi-Fi network over Improv: its state every second, up to
+    // 15 s; once it answers, its version, the networks it sees, and the form to join one.
+    // It resolves to the address the board has once joined, or null when it never answered
+    // (the Ethernet add-on fitted: no Improv).
+    function askWiFi(live) {
+      return new Promise(resolve => {
+        const send = d => { if (con) con.send(IMPROV.RPC, d).catch(() => { /* gone */ }); };
+        const nets = new Map();
+        const list = h("datalist", { id: "usb-ssids" });
+        const ssid = h("input", { class: "t", id: "usb-ssid", list: "usb-ssids", autocomplete: "off", spellcheck: "false", maxlength: 32, required: true });
+        const pass = h("input", { class: "t", id: "usb-pass", type: "password", autocomplete: "off", maxlength: 64 });
+        const join = h("button", { class: "btn primary", type: "submit", id: "usb-join" }, "Join");
+        const said = h("p", { class: "small", id: "usb-wifi-said", role: "status" });
+        const form = h("form", { class: "stack", id: "usb-wifi-form", autocomplete: "off" },
+          h("label", { class: "f" }, h("span", {}, "Network"), ssid, list),
+          h("label", { class: "f" }, h("span", {}, "Password"), pass), h("div", { class: "row" }, join), said);
+        let answered = false, tries = 0, joining = "", info = "", until = null;
+        const tell = (t, cls = "small") => { said.className = cls; said.textContent = t; };
+        const joined = url => {
+          let at = "";
+          try { at = new URL(url).hostname; } catch { /* none */ }
+          clearTimeout(until);
+          onFrame = null;
+          step("wifi", "done", `${info ? `${info} · ` : ""}joined ${joining || "your Wi-Fi"}`);
+          rows.wifi.more.replaceChildren(...(at ? [h("p", { class: "small", id: "usb-wifi-at" }, `On your Wi-Fi at ${at}`)] : []));
+          resolve(at || ip);
+        };
+        const notJoined = t => { clearTimeout(until); joining = ""; join.disabled = false; tell(t, "small bad"); };
+        form.addEventListener("submit", e => {
+          e.preventDefault();
+          const s = ssid.value.trim(), bytes = t => new TextEncoder().encode(t).length;
+          if (!s) return;
+          // As the firmware takes them (firmware/main/improv.c): a name up to 32 bytes, a password up to 64.
+          if (bytes(s) > 32 || bytes(pass.value) > 64) {
+            tell(bytes(s) > 32 ? "That network name is longer than Wi-Fi allows (32 bytes)." : "That password is longer than Wi-Fi allows (64 bytes).", "small bad");
+            return;
+          }
+          joining = s;
+          join.disabled = true;
+          tell(`Joining ${s}…`);
+          send(rpc(IMPROV.WIFI, joinData(s, pass.value)));
+          clearTimeout(until);
+          until = setTimeout(() => notJoined("Couldn't join in time: check the network and the password, and try again."), JOIN_FOR);
+          timers.push(until);
+        });
+        onFrame = (type, d) => {
+          if (!live()) return;
+          if (type === IMPROV.STATE) {
+            if (!answered) {
+              answered = true;
+              if (d[0] !== IMPROV.PROVISIONED) {
+                step("wifi", "next", "Choose its network.", form);
+                send(rpc(IMPROV.INFO));
+                send(rpc(IMPROV.SCAN));
+                tell("Looking for networks…");
+                ssid.focus();
+              }
+            }
+          } else if (type === IMPROV.ERROR && joining && d[0]) {
+            notJoined(d[0] === IMPROV.NO_CONNECT ? "Couldn't join: check the password" : `Couldn't join (error ${d[0]}).`);
+          } else if (type === IMPROV.RESULT) {
+            const r = result(d);
+            if (r.cmd === IMPROV.INFO) {
+              info = `${r.strs[0] || "espDNS"} ${r.strs[1] || ""} on ${r.strs[2] || ""}`.replace(/\s+/g, " ").trim();
+              rows.wifi.hint.textContent = `${info} · choose its network.`;
+            } else if (r.cmd === IMPROV.SCAN) {
+              if (r.strs.length) {
+                const [name, rssi, secure] = r.strs;
+                if (name && !(nets.get(name) >= Number(rssi))) nets.set(name, Number(rssi));
+                list.replaceChildren(...[...nets].sort((a, b) => b[1] - a[1]).map(([nm, rs]) => h("option", { value: nm, label: `${rs} dBm${secure === "YES" ? "" : ", open"}` })));
+              } else if (!joining) tell(nets.size ? `${nets.size} network${nets.size === 1 ? "" : "s"} found: pick one, or type its name.` : "No networks found: type its name.");
+            } else if ((r.cmd === IMPROV.WIFI || r.cmd === IMPROV.GET_STATE) && r.strs[0]) joined(r.strs[0]);
+          }
+        };
+        step("wifi", "now", "Asking the board…");
+        const ask = () => {
+          if (answered || !live()) return;
+          if (tries++ >= STATE_TRIES) {
+            onFrame = null;
+            step("wifi", "", "It didn't ask for Wi-Fi: it uses its Ethernet add-on.");
+            resolve(null);
+            return;
+          }
+          send(rpc(IMPROV.GET_STATE));
+          timers.push(setTimeout(ask, 1000));
+        };
+        ask();
+      });
+    }
+
+    function wait(how) {
+      if (halt) halt();
       const my = gen, started = Date.now();
-      act.textContent = "Install again";
-      const hint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
-      say(h("p", { class: "small", id: "usb-installed" }, wifi
-        ? `Installed. It joins the Wi-Fi network you enter in the installer${obj(board.ethernet).optional ? ", or uses Ethernet if its add-on is fitted" : ""}. USB can stay in for power.`
-        : "Installed. Plug it into your network with an Ethernet cable; USB can stay in for power."),
-      h("div", { id: "usb-waiting" }, spinning(ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…")), hint);
+      const waitHint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
+      step("net", "now", ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…");
+      say(h("p", { class: "small", id: "usb-installed" }, INSTALLED[how]),
+        h("div", { id: "usb-waiting" }, spinning(ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…")), waitHint);
       halt = every(async () => {
         if (!box.isConnected) { stopAll(); return; }
         let node = null, listed = false, other = false;
@@ -596,21 +825,21 @@ export async function openUSB(o = {}) {
             else if (r.found && r.node) node = r.node;
             else other = !!r.answered;
           } else {
-            node = (await readFound()).find(n => str(n.board) === str(board.name) && !before.has(keyOf(n))) || null;
+            node = (await readFound()).find(x => str(x.board) === str(board.name) && !before.has(keyOf(x))) || null;
           }
         } catch { /* not there yet */ }
         if (my !== gen) return; // stopped meanwhile
-        if (node) { stopWait(); arrived(node, listed); return; }
+        if (node) { halt(); halt = null; arrived(node, listed); return; }
         if (!other && Date.now() - started < HINT_AFTER) return;
-        hint.hidden = false;
-        hint.replaceChildren(...nothingYet(other));
+        waitHint.hidden = false;
+        waitHint.replaceChildren(...nothingYet(other, how));
       }, WAIT_POLL);
     }
 
-    function nothingYet(other) {
+    function nothingYet(other, how) {
       const again = h("p", { class: "hint" }, "To use another address, change it above, press Prepare image and install again.");
       if (other) return [h("p", { class: "small bad" }, `Something else answers at ${ip}, so that address is taken.`), again];
-      const check = wifi ? "Check the installer said it joined your Wi-Fi" : "Check the cable is in";
+      const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up, or its cable is in" : "Check the cable is in";
       return [h("p", { class: "small" }, ip
         ? `Nothing yet. ${check}, and that ${ip} is free on your network and outside your router's DHCP pool.`
         : `Nothing yet. ${check}, and that your router hands out addresses on that network.`),
@@ -618,13 +847,13 @@ export async function openUSB(o = {}) {
       again];
     }
 
-    function arrived(n, listed) {
-      const at = hostOnly(n.host) || ip;
+    function arrived(x, listed) {
+      const at = hostOnly(x.host) || ip;
+      step("net", "done", `At ${at}`);
       if (listed) { say(h("p", { class: "small", id: "usb-arrived" }, `It's back on your network at ${at}, and on Nodes as before.`)); return; }
       if (o.found) {
-        act.classList.remove("primary"); // Add it now is the next step
         say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Next, add it to your nodes.`),
-          h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(n); } }, "Add it now")));
+          h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(x); } }, "Add it now")));
         return;
       }
       say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Add it from + Add node on Nodes.`));

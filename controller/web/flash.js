@@ -1,4 +1,4 @@
-// The USB flasher (usb.js's Write keys only): the vendored esptool-js (web/vendor/esptool-js,
+// The USB flasher (usb.js's install and Write keys only): the vendored esptool-js (web/vendor/esptool-js,
 // esptool-js 0.6.0) on a Web Serial port the page asked for. connect reaches the board's
 // serial bootloader and says which chip and how much flash; write writes parts ({data,
 // address}) at their offsets, erasing the whole flash first only when asked; reset restarts
@@ -12,7 +12,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // connect opens the port and the bootloader (the flasher stub uploaded and run). log(line),
 // if given, gets esptool-js's output. chip is the chip's name ("ESP32-S3"), description what
 // the bootloader says of it (its package and revision too); flashMB is the flash chip's size
-// as its ID says, or null when it doesn't say.
+// as its ID says, or null when it doesn't say; rev the chip's revision (major * 100 + minor),
+// null when esptool-js can't read it.
 export async function connect(port, log) {
   const { ESPLoader, Transport } = await loadEsptool();
   const transport = new Transport(port, false);
@@ -36,7 +37,19 @@ export async function connect(port, log) {
     const size = loader.DETECTED_FLASH_SIZES[(await loader.readFlashId()) >> 16 & 0xff];
     if (size) flashMB = loader.flashSizeBytes(size) / 0x100000;
   } catch { /* unknown */ }
-  return { loader, transport, chip: loader.chip.CHIP_NAME, description, flashMB };
+  let rev = null;
+  try { if (loader.chip.getChipRevision) rev = await loader.chip.getChipRevision(loader); } catch { /* unknown */ }
+  return { loader, transport, chip: loader.chip.CHIP_NAME, description, flashMB, rev };
+}
+
+// revisions is the chip revisions a whole-flash image's bootloader runs on, as its header says
+// (esp_image_header_t: min_chip_rev_full and max_chip_rev_full, major * 100 + minor; max 0xffff
+// is any): {min, max}, or null when there is no bootloader image at offset (the chip's
+// BOOTLOADER_FLASH_OFFSET: 0 on the ESP32-S3, 0x2000 on the ESP32-P4).
+export function revisions(image, offset) {
+  if (image.length < offset + 24 || image[offset] !== 0xe9) return null;
+  const u16 = o => image[offset + o] | image[offset + o + 1] << 8;
+  return { min: u16(15), max: u16(17) || 0xffff };
 }
 
 // write writes parts, [{data: Uint8Array, address}], compressed. erase erases the whole flash
