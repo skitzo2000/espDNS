@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -16,7 +17,9 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
+	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
+	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
 // recorder is an HTTP transport that notes each request (method, host, path) before the
@@ -85,6 +88,16 @@ func (e *addNodeEnv) lookup(address string) (int, lookupReply) {
 	return w.Code, out
 }
 
+// silent takes dns1 off its address (203.0.113.51), as a reinstall elsewhere leaves it: the
+// controller still knows it there, listed, by its ID, offline.
+func (e *addNodeEnv) silent() {
+	e.peer.Do(func(n *fakenode.Node) { n.Addr = "203.0.113.200" })
+	e.seen = slices.DeleteFunc(e.seen, func(a string) bool { return a == "203.0.113.51" })
+	old := nodes.Node{ID: e.peer.ID(), Addr: "203.0.113.51", Source: nodes.SourceSettings}
+	all := func() []nodes.Node { return append(append(e.found(), old), e.reg.List()...) }
+	e.adopt.nodes, e.add.adopt.nodes = all, all
+}
+
 func (e *addNodeEnv) foundList() []foundNode {
 	e.t.Helper()
 	w := httptest.NewRecorder()
@@ -131,10 +144,11 @@ func TestAddNodeFound(t *testing.T) {
 	if !slices.Equal(hosts(got), []string{"203.0.113.52", "203.0.113.55"}) || got[1].Next != nextSettingsAdd || !got[1].Adopted {
 		t.Fatalf("found %+v", got)
 	}
-	// One that says it is a node the controller knows elsewhere: nothing adds it, and why.
+	// One that says it is a node the controller knows elsewhere, still answering there: nothing
+	// adds it, and why (not a move: that is only once the old address is silent).
 	adopted.Do(func(n *fakenode.Node) { n.MAC = e.peer.MAC })
 	got = e.foundList()
-	if got[1].Next != "" || len(got[1].Refusals) == 0 || !strings.Contains(got[1].Refusals[0], "same ID") {
+	if got[1].Next != "" || got[1].Move != "" || len(got[1].Refusals) == 0 || !strings.Contains(got[1].Refusals[0], "same ID") {
 		t.Fatalf("found %+v", got[1])
 	}
 	if got[1].Install != "" || got[0].Install != "" {
@@ -164,7 +178,18 @@ func TestAddNodeFound(t *testing.T) {
 			t.Fatalf("no keys %+v", o)
 		}
 	}
-	if len(got) != 5 {
+	// Two nodes that both answer as the same ID, neither one listed: nothing adds either, and
+	// why (the ID match is against another unlisted node, not a settings.json entry: not a move).
+	twin := fakenode.New("twin", e.node.MAC, "esp32p4-rev1", "p4-ip101", release.PublicRaw(e.key))
+	twin.Addr = "203.0.113.59"
+	e.lan.Add(twin)
+	e.seen = append(e.seen, twin.Addr)
+	got = e.foundList()
+	k := slices.IndexFunc(got, func(f foundNode) bool { return f.Host == "203.0.113.59" })
+	if k < 0 || got[k].Move != "" || got[k].Next != "" || len(got[k].Refusals) == 0 || !strings.Contains(got[k].Refusals[0], "same ID") {
+		t.Fatalf("twin %+v", got)
+	}
+	if len(got) != 6 {
 		t.Fatalf("found %v", hosts(got))
 	}
 	if reqs := e.rec.take(); len(reqs) != 0 {
@@ -205,6 +230,162 @@ func TestAddNodeLookup(t *testing.T) {
 	web["dry_run"] = true
 	if j := e.run("adopt", web); j.State != jobs.Done {
 		t.Fatalf("dry run %s: %s", j.State, j.Error)
+	}
+}
+
+// A node of yours reinstalled over USB at a new fixed address: the same node ID (its MAC)
+// answers at 203.0.113.61, where settings.json lists it at the old 203.0.113.51. The lookup
+// says so (found, not listed, move to the old address, next settings-move), the found list
+// says the same with no dead-ended refusal, and only the typed address is read.
+func TestAddNodeLookupMoved(t *testing.T) {
+	e := newAddNodeEnv(t)
+	moved := fakenode.New("dns1", e.peer.MAC, "esp32p4-rev1", "p4-ip101", release.PublicRaw(e.key))
+	moved.Addr, moved.Gateway = "203.0.113.61", "203.0.113.1"
+	e.lan.Add(moved)
+	e.seen = append(e.seen, moved.Addr)
+	e.silent()
+
+	code, r := e.lookup("203.0.113.61")
+	if code != http.StatusOK || !r.Found || r.Listed || r.Node == nil {
+		t.Fatalf("%d %+v", code, r)
+	}
+	n := r.Node
+	if n.ID != e.peer.ID() || n.Move != "203.0.113.51" || n.Next != nextSettingsMove || len(n.Refusals) != 0 {
+		t.Fatalf("lookup %+v", n)
+	}
+	if reqs := e.rec.take(); !slices.Equal(reqs, []string{"GET 203.0.113.61/status"}) {
+		t.Fatalf("requests %v", reqs)
+	}
+	// The found list shows it as the same node's move, not a refusal.
+	got := e.foundList()
+	i := slices.IndexFunc(got, func(f foundNode) bool { return f.Host == "203.0.113.61" })
+	if i < 0 || got[i].Move != "203.0.113.51" || got[i].Next != nextSettingsMove || len(got[i].Refusals) != 0 {
+		t.Fatalf("found %+v", got)
+	}
+}
+
+// The settings-move job moves a listed node's settings entry from its old address to the new
+// one, once, only when the new address answers as that node's ID; a wrong ID, a `from` not
+// listed, or the node already moved is refused.
+func TestSettingsMoveJob(t *testing.T) {
+	e := newAddNodeEnv(t)
+	moved := fakenode.New("dns1", e.peer.MAC, "esp32p4-rev1", "p4-ip101", release.PublicRaw(e.key))
+	moved.Addr, moved.Gateway = "203.0.113.61", "203.0.113.1"
+	e.lan.Add(moved)
+	e.seen = append(e.seen, moved.Addr)
+
+	// A `from` that isn't in settings.json: refused.
+	if _, err := e.start("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.99"}); err == nil ||
+		!strings.Contains(err.Error(), "not in settings.json") {
+		t.Fatalf("unknown from: %v", err)
+	}
+	// The address answering with an ID that isn't the listed node's: refused (the lookup's own read).
+	if _, err := e.start("settings-move", map[string]any{"node": "203.0.113.52", "from": "203.0.113.51"}); err == nil ||
+		!strings.Contains(err.Error(), "same ID") {
+		t.Fatalf("wrong ID: %v", err)
+	}
+	// The node still answering at its old address: not a move.
+	if _, err := e.start("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"}); err == nil ||
+		err.Error() != "dns1 still answers at 203.0.113.51, so this isn't it moved" {
+		t.Fatalf("old address live: %v", err)
+	}
+	// Moving onto an address pinned to another node: refused.
+	if _, err := pins.Open(e.dir).Pin(e.node.ID(), "203.0.113.61"); err != nil {
+		t.Fatal(err)
+	}
+	e.silent()
+	if _, err := e.start("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"}); err == nil ||
+		!strings.Contains(err.Error(), "is pinned to node "+e.node.ID()) {
+		t.Fatalf("pinned to another: %v", err)
+	}
+	if _, err := pins.Open(e.dir).Pin(e.node.ID(), "203.0.113.52"); err != nil {
+		t.Fatal(err)
+	}
+	// Seen offline, but answering at the old address when the job runs (read then): not moved.
+	// (The registry's view stays as silent() left it.)
+	e.peer.Do(func(n *fakenode.Node) { n.Addr = "203.0.113.51" })
+	if j := e.run("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"}); j.State == jobs.Done ||
+		!strings.Contains(j.Error, "still answers at 203.0.113.51") {
+		t.Fatalf("old address answering at the run: %s %s", j.State, j.Error)
+	}
+	e.peer.Do(func(n *fakenode.Node) { n.Addr = "203.0.113.200" })
+	// The move itself: done, settings.json lists the new address and no longer the old.
+	j := e.run("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"})
+	if j.State != jobs.Done {
+		t.Fatalf("%s %s", j.State, j.Error)
+	}
+	s, _ := settings.Load(settings.Path(e.dir))
+	if !slices.Equal(s.Nodes, []string{"203.0.113.61"}) {
+		t.Fatalf("settings %v", s.Nodes)
+	}
+	// Again: the old address is no longer listed (it moved already).
+	if _, err := e.start("settings-move", map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"}); err == nil {
+		t.Fatal("moved twice")
+	}
+}
+
+// Its ID alone doesn't move an entry when a node key is pinned for that ID: a node at the
+// new address with another node key is refused (in the found list and by the job), one
+// trusting another release key too; the one holding the pinned key moves.
+func TestSettingsMoveNodeKey(t *testing.T) {
+	e := newAddNodeEnv(t)
+	moved := fakenode.New("dns1", e.peer.MAC, "esp32p4-rev1", "p4-ip101", release.PublicRaw(e.key))
+	moved.Addr, moved.Gateway = "203.0.113.61", "203.0.113.1"
+	e.lan.Add(moved)
+	e.seen = append(e.seen, moved.Addr)
+	e.silent()
+	l := pins.Open(e.dir)
+	if _, err := l.Pin(e.peer.ID(), "203.0.113.51"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SetNodeKey(e.peer.ID(), e.peer.NodeKey()); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"node": "203.0.113.61", "from": "203.0.113.51"}
+	movedAt := func() foundNode {
+		got := e.foundList()
+		i := slices.IndexFunc(got, func(f foundNode) bool { return f.Host == "203.0.113.61" })
+		if i < 0 {
+			t.Fatalf("found %v", hosts(got))
+		}
+		return got[i]
+	}
+
+	// Another node key than the pinned one: not offered, and the job refuses it.
+	if f := movedAt(); f.Next != "" || f.Move != "203.0.113.51" || len(f.Refusals) == 0 || !strings.Contains(f.Refusals[0], "node key") {
+		t.Fatalf("other key %+v", f)
+	}
+	if _, err := e.start("settings-move", params); err == nil || !strings.Contains(err.Error(), "node key") {
+		t.Fatalf("other key: %v", err)
+	}
+	if id, err := l.Pinned("203.0.113.51"); err != nil || id != e.peer.ID() {
+		t.Fatalf("pin moved on a refusal: %q %v", id, err)
+	}
+	// The pinned key, but trusting another controller's release key: refused.
+	if err := l.SetNodeKey(e.peer.ID(), moved.NodeKey()); err != nil {
+		t.Fatal(err)
+	}
+	moved.Do(func(n *fakenode.Node) { n.Pub = release.PublicRaw(newTestKey(t)) })
+	if _, err := e.start("settings-move", params); err == nil || !strings.Contains(err.Error(), "doesn't trust your release key") {
+		t.Fatalf("other release key: %v", err)
+	}
+	moved.Do(func(n *fakenode.Node) { n.Pub = release.PublicRaw(e.key) })
+	// The pinned key: offered and moved.
+	if f := movedAt(); f.Next != nextSettingsMove || len(f.Refusals) != 0 {
+		t.Fatalf("same key %+v", f)
+	}
+	if j := e.run("settings-move", params); j.State != jobs.Done {
+		t.Fatalf("%s %s", j.State, j.Error)
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Equal(s.Nodes, []string{"203.0.113.61"}) {
+		t.Fatalf("settings %v", s.Nodes)
+	}
+	// Its pin moved with it: releases are signed for it at the new address, none at the old.
+	if id, err := l.Pinned("203.0.113.61"); err != nil || id != e.peer.ID() {
+		t.Fatalf("pinned at the new address: %q %v", id, err)
+	}
+	if _, err := l.Pinned("203.0.113.51"); !errors.Is(err, pins.ErrNotPinned) {
+		t.Fatalf("still pinned at the old address: %v", err)
 	}
 }
 

@@ -151,3 +151,46 @@ test("Install over USB: a Wi-Fi board joined over Improv; something else at the 
   expect(await page.evaluate(() => navigator.serial.getPorts().then(ps => ps[0].readable))).toBeNull();
   expect(await violations()).toEqual([]);
 });
+
+// A node of yours reinstalled over USB at a new address: the lookup says it is the same node
+// moved (found, move from its old address, next settings-move), and the panel says so -- not
+// "Add it from + Add node on Nodes". Add it now opens + Add node at the move step, whose
+// button runs the settings-move job.
+test("Install over USB: a node of yours reinstalled at a new address is said as the same node, and Add it now moves its entry", async ({ page }) => {
+  const violations = await watch(page);
+  const state = { lookup: { address: "192.0.2.52", found: false, answered: false }, lookups: [], jobs: [] };
+  await page.addInitScript(fakeEsp);
+  await page.clock.install();
+  await routes(page, state);
+  await page.route(/\/api\/jobs$/, r => {
+    const b = r.request().postDataJSON();
+    state.jobs.push(b);
+    return r.fulfill({ status: 201, json: { id: "j1", kind: b.kind, who: "admin", state: "running", created: new Date().toISOString() } });
+  });
+  await page.route(/\/api\/jobs\/j1\/events/, r => r.fulfill({ status: 200, contentType: "text/event-stream",
+    body: "id: 1\nevent: end\ndata: " + JSON.stringify({ id: "j1", kind: "settings-move", state: "done" }) + "\n\n" }));
+  await login(page);
+  const u = await prepare(page, "ws-s3-eth");
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…", { timeout: 20000 });
+  await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
+
+  // It answers, restarted since the install (the chip installed, by its MAC): the same node, moved from its old address.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 2, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
+    board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1",
+    move: "192.0.2.51", next: "settings-move" } };
+  await page.clock.fastForward("00:05");
+  await expect(u.locator("#usb-arrived")).toHaveText("It's espdns-000052 at 192.0.2.52 — the same node, moved from 192.0.2.51. Add it there to move its entry.");
+  await expect(u.locator("#usb-arrived")).not.toContainText("Add it from + Add node on Nodes");
+  await u.getByRole("button", { name: "Add it now" }).click();
+  await expect(u).toBeHidden();
+
+  // + Add node, at the move step, with the button that runs the settings-move job.
+  const list = page.locator("#nqres");
+  await expect(list).toContainText("which settings.json lists at 192.0.2.51: add it to move its entry there");
+  await list.getByRole("button", { name: "Add node" }).click();
+  await expect.poll(() => state.jobs.length).toBeGreaterThan(0);
+  expect(state.jobs[0]).toEqual({ kind: "settings-move", params: { node: "192.0.2.52", from: "192.0.2.51" } });
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});

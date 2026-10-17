@@ -595,11 +595,12 @@ export async function openUSB(o = {}) {
       transport = con = onFrame = null;
     };
     stops.push(stopRun);
-    // On DHCP, the nodes found before it: a new one of this board is it.
+    // On DHCP, the nodes found before it: a new one of this board is it (or, for a node of
+    // yours waited for at its old address, the same node found moved to another).
     const keyOf = n => `${str(n.id)}|${str(n.host)}|${str(n.version)}|${str(n.install)}`;
     const readFound = async () => arr(obj(await getJSON("api/nodes/found")).nodes);
     let before = new Set();
-    if (!ip) readFound().then(ns => { before = new Set(ns.map(keyOf)); }).catch(() => { /* none known */ });
+    if (net.address === "dhcp") readFound().then(ns => { before = new Set(ns.map(keyOf)); }).catch(() => { /* none known */ });
 
     // The steps, each a row of ol.steps: step(name, state, hint, ...more) sets one.
     let rows = {};
@@ -948,6 +949,7 @@ export async function openUSB(o = {}) {
           } else {
             node = (await readFound()).find(x => str(x.board) === str(board.name) && !before.has(keyOf(x)) && (!mac || macOf(x.id) === mac)) || null;
           }
+          if (!node && ip && mac && net.address === "dhcp") node = (await readFound()).find(x => x.move && macOf(x.id) === mac && !before.has(keyOf(x))) || null;
         } catch { /* not there yet */ }
         if (my !== gen) return; // stopped meanwhile
         if (node) { halt(); halt = null; arrived(node, listed); return; }
@@ -973,6 +975,19 @@ export async function openUSB(o = {}) {
       const at = hostOnly(x.host) || ip;
       step("net", "done", `At ${at}`);
       if (listed) { say(h("p", { class: "small", id: "usb-arrived" }, `It's back on your network at ${at}, and on Nodes as before.`)); return; }
+      // A node of yours reinstalled at a new address: its ID is one settings.json lists (at
+      // its old address, `x.move`). It's the same node moved, not a new one to add again.
+      if (x.move && x.next === "settings-move") {
+        const name = str(x.name) || str(x.hostname) || "Your node";
+        const text = `It's ${name} at ${at} — the same node, moved from ${x.move}. Add it there to move its entry.`;
+        if (o.found) {
+          say(h("p", { class: "small", id: "usb-arrived" }, text),
+            h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(x); } }, "Add it now")));
+          return;
+        }
+        say(h("p", { class: "small", id: "usb-arrived" }, `${text} + Add node on Nodes has it: add it there.`));
+        return;
+      }
       if (o.found) {
         say(h("p", { class: "small", id: "usb-arrived" }, `It's on your network at ${at}. Next, add it to your nodes.`),
           h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", id: "usb-add", onclick: () => { p.close(); o.found(x); } }, "Add it now")));
