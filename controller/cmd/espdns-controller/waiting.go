@@ -39,6 +39,17 @@ import (
 // key, one is said found only as mDNS names it, and so needs that click too. Added, it
 // leaves the list (as does one in settings.json, or adopted, meanwhile); a failure stays,
 // with its error, until it is tried again or removed.
+//
+// One of your nodes installed again over USB from here (its chip MAC a node pinned at an
+// address settings.json lists) waits as a reinstall: no name or address of its own, it
+// keeps them. It is matched by a /status read now, at its listed address, or, with the node
+// key read over USB, wherever the controller finds it with that key. Then, as the user who
+// installed it: its pinned node key set to the one read over USB (its Wi-Fi password is
+// sealed to it), its settings entry moved when it answers at a new address (settings-move,
+// with its rules: the old address silent), and node-restore sends it what it runs (service.go).
+// Done, it leaves the list; a failure, or a node still on its board's settings after, stays
+// failed with why, until Retry: never sent again by itself. Nothing is sent to a node on its
+// board's settings with no entry here: /status is anyone's to answer.
 
 // waitingNode is one board waiting.
 type waitingNode struct {
@@ -56,6 +67,9 @@ type waitingNode struct {
 	// to reserve that address for in the router.
 	Found string `json:"found,omitempty"`
 	MAC   string `json:"mac,omitempty"`
+	// Reinstall: one of your nodes installed again, sent its settings back (not added);
+	// Address is the one settings.json lists it at.
+	Reinstall bool `json:"reinstall,omitempty"`
 }
 
 const (
@@ -174,7 +188,7 @@ func (w waiter) once(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if e.State != waitingAdding && w.added(e.ID) {
+		if !e.Reinstall && e.State != waitingAdding && w.added(e.ID) {
 			changeWaiting(dir, func(ws []waitingNode) ([]waitingNode, error) {
 				return slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID && x.State != waitingAdding }), nil
 			})
@@ -195,16 +209,22 @@ func (w waiter) once(ctx context.Context) {
 			failWaiting(dir, e.ID, err.Error())
 			continue
 		}
-		if e.Address == "dhcp" {
+		switch {
+		case e.Reinstall:
+			w.restore(ctx, e, n.Addr)
+		case e.Address == "dhcp":
 			setWaiting(dir, e.ID, func(x *waitingNode) { x.State, x.Found, x.MAC = waitingFound, n.Addr, release.MAC(st.Net.MAC) })
-			continue
+		default:
+			w.add(ctx, e, n.Addr)
 		}
-		w.add(ctx, e, n.Addr)
 	}
 }
 
 // find is the node answering as e (see above).
 func (w waiter) find(ctx context.Context, e waitingNode) (nodes.Node, bool) {
+	if e.Reinstall {
+		return w.reinstalled(ctx, e)
+	}
 	host := strings.Split(e.Address, "/")[0]
 	for _, n := range w.adopt.nodes() {
 		if !n.Online || !strings.EqualFold(n.ID, e.ID) {
@@ -283,29 +303,90 @@ func (w waiter) add(ctx context.Context, e waitingNode, addr string) {
 		for k, v := range extra {
 			p[k] = v
 		}
-		b, _ := json.Marshal(p)
-		j, err := w.runner.Start("adopt", cmp.Or(e.User, "install"), b)
-		if err != nil {
-			return j, err
-		}
-		for !j.State.Ended() {
-			select {
-			case <-ctx.Done():
-				return j, ctx.Err()
-			case <-time.After(250 * time.Millisecond):
-			}
-			j, _ = w.runner.Get(j.ID)
-		}
-		if j.State != jobs.Done {
-			return j, errors.New(cmp.Or(j.Error, "the adoption "+string(j.State)))
-		}
-		return j, nil
+		return w.run(ctx, e.User, "adopt", p)
 	}
 	dry, err := run(map[string]any{"dry_run": true})
 	if err == nil {
 		delete(p, "dry_run")
 		_, err = run(map[string]any{"after": dry.ID, "add_to_settings": true})
 	}
+	if ctx.Err() != nil {
+		return // waited for again at the next start
+	}
+	if err != nil {
+		failWaiting(dir, e.ID, err.Error())
+		return
+	}
+	changeWaiting(dir, func(ws []waitingNode) ([]waitingNode, error) {
+		return slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), nil
+	})
+}
+
+// run runs a job of kind with params as user ("install" for none) to its end: an error
+// unless it is done.
+func (w waiter) run(ctx context.Context, user, kind string, params map[string]any) (jobs.Job, error) {
+	b, _ := json.Marshal(params)
+	j, err := w.runner.Start(kind, cmp.Or(user, "install"), b)
+	if err != nil {
+		return j, err
+	}
+	for !j.State.Ended() {
+		select {
+		case <-ctx.Done():
+			return j, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+		j, _ = w.runner.Get(j.ID)
+	}
+	if j.State != jobs.Done {
+		return j, errors.New(cmp.Or(j.Error, kind+" "+string(j.State)))
+	}
+	return j, nil
+}
+
+// reinstalled is the node answering as reinstall e, read now: at its listed address, or,
+// with its node key, wherever the controller found its ID.
+func (w waiter) reinstalled(ctx context.Context, e waitingNode) (nodes.Node, bool) {
+	if w.lookup == nil {
+		return nodes.Node{}, false
+	}
+	addrs := []string{e.Address}
+	for _, n := range w.adopt.nodes() {
+		if e.NodeKey != "" && strings.EqualFold(n.ID, e.ID) && !slices.Contains(addrs, n.Addr) {
+			addrs = append(addrs, n.Addr)
+		}
+	}
+	for _, a := range addrs {
+		lctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+		n, err := w.lookup(lctx, a)
+		cancel()
+		if st, ok := status(n); err == nil && ok && strings.EqualFold(n.ID, e.ID) && (e.NodeKey == "" || st.NodeKey == e.NodeKey) {
+			return n, true
+		}
+	}
+	return nodes.Node{}, false
+}
+
+// restore sends reinstall e, answering at addr, its settings back, as its user: its node key
+// pinned anew (the one read over USB), its entry moved to addr if it answers there
+// (settings-move), then node-restore. Done, it leaves the list; else it fails, with why.
+func (w waiter) restore(ctx context.Context, e waitingNode, addr string) {
+	dir := w.adopt.dataDir
+	setWaiting(dir, e.ID, func(x *waitingNode) { x.State, x.Error = waitingAdding, "" })
+	err := func() error {
+		if e.NodeKey != "" {
+			if err := pins.Open(dir).SetNodeKey(e.ID, e.NodeKey); err != nil {
+				return err
+			}
+		}
+		if addr != e.Address {
+			if _, err := w.run(ctx, e.User, "settings-move", map[string]any{"node": addr, "from": e.Address}); err != nil {
+				return err
+			}
+		}
+		_, err := w.run(ctx, e.User, "node-restore", map[string]any{"node": addr})
+		return err
+	}()
 	if ctx.Err() != nil {
 		return // waited for again at the next start
 	}

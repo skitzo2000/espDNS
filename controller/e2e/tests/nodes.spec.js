@@ -246,6 +246,15 @@ test("Nodes: a board waiting to be added, adding, failed with Retry, and Remove"
   await page.reload();
   await expect(page.locator('#nodes [data-waiting="aa:bb:cc:00:00:37"]')).toContainText("Couldn't add it: no");
   await expect(page.locator("#nodes")).toContainText("New device found");
+  // One of your nodes installed again: getting its settings back, or why that failed.
+  state.waiting = [{ id: "aa:bb:cc:00:00:61", name: "dns7", reinstall: true, address: "192.0.2.61", state: "adding" }];
+  await page.reload();
+  const dns7 = page.locator('#nodes [data-waiting="aa:bb:cc:00:00:61"]');
+  await expect(dns7.locator(".flag")).toHaveText("Restoring its settings…");
+  state.waiting[0] = { ...state.waiting[0], state: "failed", error: "192.0.2.61 still runs on its board's settings" };
+  await page.reload();
+  await expect(dns7.locator(".flag")).toHaveText("Couldn't restore its settings: 192.0.2.61 still runs on its board's settings");
+  await expect(dns7.getByRole("button", { name: "Retry" })).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
+	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
@@ -295,5 +298,144 @@ func TestAdoptNodeKeyExpected(t *testing.T) {
 	}
 	if j := e.run("adopt", e.web(map[string]any{"address": "203.0.113.60/24", "dry_run": true, "node_key": e.node.NodeKey()})); j.State != jobs.Done {
 		t.Fatal(j.State, j.Error)
+	}
+}
+
+// reinstalled pins dns1 (the node in service at .51) with its node key, its config with a
+// Wi-Fi password, then installs it again over USB: on its board's settings, a new node key
+// if erase.
+func (e *addNodeEnv) reinstalled(erase bool) {
+	e.t.Helper()
+	l := pins.Open(e.dir)
+	if _, err := l.Pin(e.peer.ID(), "203.0.113.51"); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := l.SetNodeKey(e.peer.ID(), e.peer.NodeKey()); err != nil {
+		e.t.Fatal(err)
+	}
+	writeFile(e.t, filepath.Join(configs.Path(e.dir), "n1.json"),
+		[]byte(`{"name": "dns1", "secondary": {"zones": ["home.example"]}, "wifi": {"ssid": "home", "password": "wifi-secret-pass-123"}}`))
+	e.peer.Reinstall(erase)
+}
+
+func (e *addNodeEnv) postReinstall(key string) (int, string) {
+	return e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.peer.ID(), "node_key": key, "name": "dns1"})
+}
+
+func (e *addNodeEnv) source(n *fakenode.Node) string {
+	st, err := (&fleet.Client{HTTP: e.lan.HTTP()}).Status(context.Background(), n.Addr)
+	if err != nil || st.Config == nil {
+		e.t.Fatal(err)
+	}
+	return st.Config.Source
+}
+
+// One of your nodes installed again over USB, its NVS erased (a new node key): waited for as
+// a reinstall at its listed address; another node key there is not it, and nothing is sent.
+// With the key read over USB: that key pinned, its config sent with its Wi-Fi password
+// sealed to it (the node opens it), and no longer waiting. A board that isn't one of your
+// nodes is refused as a reinstall; a node on its board's settings with no entry is sent
+// nothing.
+func TestWaitingReinstall(t *testing.T) {
+	e := newAddNodeEnv(t)
+	e.reinstalled(true)
+	e.waiter().once(context.Background())
+	if slices.Contains(e.peer.Events(), "push config") {
+		t.Fatal("a node on its board's settings with no entry was sent its config")
+	}
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.node.ID()}); code != 409 ||
+		!strings.Contains(body, "not one of your nodes") {
+		t.Fatal(code, body)
+	}
+	if code, body := e.postReinstall(e.node.NodeKey()); code != 200 {
+		t.Fatal(code, body)
+	}
+	if ws := e.waitingList(); len(ws) != 1 || !ws[0].Reinstall || ws[0].Address != "203.0.113.51" || ws[0].State != waitingWait {
+		t.Fatalf("%+v", ws)
+	}
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingWait || slices.Contains(e.peer.Events(), "push config") {
+		t.Fatalf("another node key: %+v %v", ws, e.peer.Events())
+	}
+	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
+		t.Fatal(code, body)
+	}
+	setWaiting(e.dir, e.peer.ID(), func(x *waitingNode) { x.User = "alice" })
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if k, _ := pins.Open(e.dir).NodeKey(e.peer.ID()); k != e.peer.NodeKey() {
+		t.Fatal("the node key read over USB isn't pinned")
+	}
+	if !slices.Contains(e.peer.Events(), "push config") || e.source(e.peer) != "node" {
+		t.Fatalf("%v", e.peer.Events())
+	}
+	for _, j := range e.runner.List() {
+		if j.Kind == "node-restore" && (j.State != jobs.Done || j.Who != "alice") {
+			t.Fatalf("%+v", j)
+		}
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Equal(s.Nodes, []string{"203.0.113.51"}) || len(s.OutOfService) != 0 {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// Without a node key, a reinstall is matched only at its listed address: found elsewhere
+// over mDNS, it isn't it. With its node key (kept: NVS not erased), it is, and its entry is
+// moved there (its old address silent) before its settings are sent.
+func TestWaitingReinstallElsewhere(t *testing.T) {
+	e := newAddNodeEnv(t)
+	e.reinstalled(false)
+	e.silent()
+	e.seen = append(e.seen, "203.0.113.200")
+	if code, body := e.postReinstall(""); code != 200 {
+		t.Fatal(code, body)
+	}
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingWait || slices.Contains(e.peer.Events(), "push config") {
+		t.Fatalf("no key, elsewhere: %+v", ws)
+	}
+	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
+		t.Fatal(code, body)
+	}
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Equal(s.Nodes, []string{"203.0.113.200"}) {
+		t.Fatal(s.Nodes)
+	}
+	if e.source(e.peer) != "node" {
+		t.Fatal(e.peer.Events())
+	}
+}
+
+// Still on its board's settings after its catch-up (no config of its here): failed, with
+// why, and not sent again by the next check.
+func TestWaitingReinstallStillDefaults(t *testing.T) {
+	e := newAddNodeEnv(t)
+	e.reinstalled(false)
+	if err := os.Remove(filepath.Join(configs.Path(e.dir), "n1.json")); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
+		t.Fatal(code, body)
+	}
+	w := e.waiter()
+	w.once(context.Background())
+	ws := e.waitingList()
+	if len(ws) != 1 || ws[0].State != waitingFailed || !strings.Contains(ws[0].Error, "board's settings") || !strings.Contains(ws[0].Error, "no config file") {
+		t.Fatalf("%+v", ws)
+	}
+	w.once(context.Background())
+	n := 0
+	for _, j := range e.runner.List() {
+		if j.Kind == "node-restore" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d node-restore jobs", n)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/actionlog"
+	"github.com/skitzo2000/espdns/controller/internal/changes"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
@@ -75,7 +76,11 @@ func newAdoptEnv(t *testing.T) *adoptEnv {
 	e.runner = jobs.New(e.dir, map[string]jobs.Kind{
 		"adopt":         func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.kind(raw) },
 		"settings-add":  func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsAdd(raw) },
-		"settings-move": func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsMove(raw) }})
+		"settings-move": func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsMove(raw) },
+		"node-restore": func(raw json.RawMessage) (jobs.Func, error) {
+			ak := applyKind{actions: act, store: changes.New(e.dir), adjust: func(p *fleet.Plan) { p.Soak = 0 }}
+			return serviceKind{apply: ak}.restore(raw)
+		}})
 	e.runner.Logf = t.Logf
 	runJobs(t, e.runner)
 	return e

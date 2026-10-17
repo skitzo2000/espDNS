@@ -153,6 +153,27 @@ test("Install over USB: a wired board written at 0, restarted, its log line by l
   expect(await violations()).toEqual([]);
 });
 
+// A board that is one of your nodes (its chip MAC a listed node's ID), installed from Nodes:
+// OK hands it to the controller as a reinstall, by its ID, board, name and node key (the name
+// typed is not its: it keeps its own), and Nodes has it waiting to get its settings back.
+test("Install over USB: one of your nodes installed again, OK hands it over as a reinstall, waiting on Nodes", async ({ page }) => {
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [{ id: "aa:bb:cc:00:00:52", addr: "192.0.2.52", hostname: "espdns-000052.local", source: "settings",
+    online: false, status: { node_id: "aa:bb:cc:00:00:52", board: "ws-s3-eth", config: { name: "dns2", source: "node", seq: 7 } } }] }));
+  const { u, state, violations } = await start(page);
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it gets its settings back as soon as it answers.", { timeout: 20000 });
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(state.waiting.map(({ since, state: st, ...w }) => w)).toEqual([{ reinstall: true, id: "aa:bb:cc:00:00:52", board: "ws-s3-eth", name: "dns2",
+    node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
+  expect(state.lookups).toEqual([]);
+  const row = page.locator('#nodes [data-waiting="aa:bb:cc:00:00:52"]');
+  await expect(row.locator(".flag")).toHaveText("Waiting for it: plug it into your network");
+  await expect(row).toContainText("dns2");
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
 test("Install over USB: Erase the whole flash first erases, then writes; a USB-to-serial port says logs need the board's own USB", async ({ page }) => {
   const { u, violations } = await start(page, { fake: { vid: 0x10c4 } });
   await u.locator("#usb-erase").check();

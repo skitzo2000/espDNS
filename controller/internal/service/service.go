@@ -1,7 +1,8 @@
 // Package service is a node taken out of service, returned to it, or removed from the group
 // (settings.json "out_of_service" and "nodes"; docs/operations.md, Taking a node out of
 // service): the rules each one follows, and what a node returned to service is sent first.
-// The controller's jobs ("node-out", "node-in", "node-remove") and the CLI (espdns node)
+// The controller's jobs ("node-out", "node-in", "node-remove"; "node-restore" sends a node
+// installed again over USB what node-in sends) and the CLI (espdns node)
 // both take them from here.
 //
 // A node out of service stays listed, polled and shown with its last status, but nothing is

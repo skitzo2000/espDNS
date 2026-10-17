@@ -33,6 +33,8 @@ import (
 //	POST /api/nodes/lookup  {"address": "192.0.2.10"}: the node at that address, read there only
 //	GET  /api/nodes/waiting the boards installed over USB, waiting to be added (waiting.go)
 //	POST /api/nodes/waiting {"name", "board", "id", "address", "gateway", "node_key"}: one more
+//	POST /api/nodes/waiting {"reinstall": true, "id", "node_key", "name", "board"}: one of your
+//	                        nodes installed again, sent its settings back once it answers
 //	POST /api/nodes/waiting/{id}/add     one on DHCP found, its address reserved: added
 //	POST /api/nodes/waiting/{id}/retry   a failed one waited for again
 //	POST /api/nodes/waiting/{id}/delete  one removed (its config file stays)
@@ -275,6 +277,10 @@ func (a addNodeServer) addWaiting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.ID = strings.ToLower(strings.ReplaceAll(e.ID, "-", ":"))
+	if e.Reinstall {
+		a.addReinstalled(w, r, e)
+		return
+	}
 	net := nodecfg.Network{Address: e.Address, Gateway: e.Gateway}
 	switch {
 	case !nodeName.MatchString(e.Name):
@@ -337,6 +343,51 @@ func (a addNodeServer) addWaiting(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusConflict, fmt.Errorf("%w by another board waiting: choose another name", err))
 		return
 	}
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, e)
+}
+
+// addReinstalled takes one of your nodes installed again over USB from here: its chip MAC (a
+// node pinned at an address settings.json lists), the node key its console said, if read,
+// and the name it is shown by. It waits at that address and is sent its settings back once
+// it answers (waiting.go); its config file is its own, not written here.
+func (a addNodeServer) addReinstalled(w http.ResponseWriter, r *http.Request, e waitingNode) {
+	if !macID.MatchString(e.ID) {
+		httpErr(w, http.StatusBadRequest, fmt.Errorf("id: %q is not a chip MAC (aa:bb:cc:dd:ee:ff)", e.ID))
+		return
+	}
+	if e.NodeKey != "" {
+		if _, err := release.ParseNodeKey(e.NodeKey); err != nil {
+			httpErr(w, http.StatusBadRequest, fmt.Errorf("node_key: %v", err))
+			return
+		}
+	}
+	s, err := settings.Load(settings.Path(a.adopt.dataDir))
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	rs, err := pins.Open(a.adopt.dataDir).List()
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	i := slices.IndexFunc(rs, func(p pins.Record) bool { return p.ID == e.ID && p.Addr != "" && listed(s, p.Addr) })
+	if i < 0 {
+		httpErr(w, http.StatusConflict, fmt.Errorf("node %s is not one of your nodes: add it as a new board", e.ID))
+		return
+	}
+	if e.Name = strings.TrimSpace(e.Name); e.Name == "" || len(e.Name) > 64 {
+		e.Name = e.ID
+	}
+	e.Address, e.Gateway, e.User, e.Found, e.MAC = rs[i].Addr, "", auth.User(r.Context()), "", ""
+	e.Since, e.State, e.Error = time.Now().UTC(), waitingWait, ""
+	err = changeWaiting(a.adopt.dataDir, func(ws []waitingNode) ([]waitingNode, error) {
+		return append(slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), e), nil
+	})
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err)
 		return

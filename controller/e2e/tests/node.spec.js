@@ -382,15 +382,58 @@ test("Reinstall over USB opens Install over USB on the node's board and address"
   expect(await violations()).toEqual([]);
 });
 
-// A node of yours on DHCP isn't among the nodes found (it's listed): once reinstalled, it is
-// waited for at the address it has. Listed isn't back: on USB only, it says to plug its cable
-// in. Its console's "no link" while booting isn't said; past booting it is, at once, and gone
-// again once the link is up ("no address": the cable is in). Its old run answering isn't it;
-// it is back once it answers there, restarted since the install, with nothing to add.
-test("Reinstall over USB on DHCP: waited for at its address until it answers, back on Nodes as before", async ({ page }) => {
+// One of your nodes installed again, its chip MAC read: handed to the controller with OK, as
+// a reinstall (its ID, board, name and the node key its console said; no name asked), which
+// sends it its settings back once it answers; nothing is waited for in the panel.
+test("Reinstall over USB: OK hands it to the controller, which gives it its settings back once it answers", async ({ page }) => {
+  const violations = await watch(page);
+  await page.addInitScript(fakeEsp, { mac: ID2 });
+  await login(page);
+  await fake(page);
+  const posted = [], lookups = [];
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [node(DNS2, ID2, "dns2", "ws-s3-eth", { state: "healthy", answering: true, reasons: [] }, { mac: MAC2 },
+    { config: { name: "dns2", source: "node", seq: 7, address: "static", ip: `${DNS2}/24`, gateway: "192.0.2.1" } })] }));
+  await page.route(/\/api\/key$/, r => r.fulfill({ json: { present: true, fingerprint: "a1b2c3d4e5f60718", recovery: { present: true, fingerprint: "0f1e2d3c4b5a6978" } } }));
+  await page.route(/\/api\/boards$/, async r => {
+    const res = await r.fetch();
+    await r.fulfill({ response: res, json: (await res.json()).map(e => ({ ...e, image_ready: true })) });
+  });
+  await page.route(/\/api\/build$/, async r => {
+    const board = { name: "ws-s3-eth", title: "Waveshare ESP32-S3-ETH", image: "esp32s3-eth" };
+    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
+      keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
+  });
+  await page.route(/\/build\/e2e-ws-s3-eth\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x4000, 0x5a) }));
+  await page.route(/\/api\/nodes\/lookup$/, r => { lookups.push(r.request().postDataJSON().address); return r.fulfill({ json: { address: DNS2, found: false } }); });
+  await page.route(/\/api\/nodes\/waiting$/, r => { posted.push(r.request().postDataJSON()); return r.fulfill({ json: { ...posted.at(-1), state: "waiting" } }); });
+  await open(page, ID2);
+  await page.locator("#acts").getByRole("button", { name: "Reinstall over USB" }).click();
+  const u = page.getByRole("dialog", { name: "Reinstall dns2 over USB" });
+  await expect(u.locator("#usb-name")).toHaveCount(0);
+  await u.locator("#usb-prepare").click();
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it gets its settings back as soon as it answers.", { timeout: 20000 });
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
+  await expect(u.locator("#usb-waiting")).toHaveCount(0);
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(posted).toEqual([{ reinstall: true, id: ID2, board: "ws-s3-eth", name: "dns2",
+    node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
+  expect(lookups).toEqual([]);
+  await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// A node of yours on DHCP isn't among the nodes found (it's listed): reinstalled on a board
+// whose chip MAC isn't read (the controller can't tell it), it is waited for at the address
+// it has. Listed isn't back: on USB only, it says to plug its cable in. Its console's "no
+// link" while booting isn't said; past booting it is, at once, and gone again once the link
+// is up ("no address": the cable is in). Its old run answering isn't it; it is back once it
+// answers there, restarted since the install, with nothing to add.
+test("Reinstall over USB on DHCP, its chip MAC not read: waited for at its address until it answers, back on Nodes as before", async ({ page }) => {
   const violations = await watch(page);
   const health = (ms, state, reason) => `\x1b[0;33mW (${ms}) espdns: health: "state":"${state}","answering":false,"reasons":["${reason}"]\x1b[0m`;
-  await page.addInitScript(fakeEsp, { mac: ID2, bootLog: ["ESP-ROM:esp32s3-20210327", "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m",
+  await page.addInitScript(fakeEsp, { mac: "00:00:00:00:00:00", bootLog: ["ESP-ROM:esp32s3-20210327", "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m",
     health(900, "booting", "no link")] });
   await login(page);
   await fake(page);

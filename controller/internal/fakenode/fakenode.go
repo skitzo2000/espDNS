@@ -238,6 +238,18 @@ func (n *Node) NodeKey() string {
 	return base64.StdEncoding.EncodeToString(n.nkey.PublicKey().Bytes())
 }
 
+// Reinstall is the board installed again over USB: on its board's settings (config source
+// "defaults", config seq 0), restarted; erase: its NVS erased too, so it has a new node key.
+func (n *Node) Reinstall(erase bool) {
+	n.Do(func(n *Node) {
+		n.NodeKey()
+		if erase && !n.NoNodeKey {
+			n.nkey, _ = ecdh.P256().GenerateKey(rand.Reader)
+		}
+		n.defaults, n.fromCfg, n.seq["config"], n.cfg, n.boot = true, false, 0, &nodecfg.Config{Name: n.Name}, time.Now()
+	})
+}
+
 // openWifi takes a config's Wi-Fi password as the firmware does (cfg.c): sealed to its
 // node key, never in plain text; kept opened, as the node runs it. Locked.
 func (n *Node) openWifi(c *nodecfg.Config) error {

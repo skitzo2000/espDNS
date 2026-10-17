@@ -31,6 +31,10 @@ import (
 //	                                     then is it counted again
 //	node-remove  {"node": "192.0.2.52"}  out of settings.json: its config file is kept, the node
 //	                                     itself isn't touched (it still answers DNS if it is up)
+//	node-restore {"node": "192.0.2.52"}  one of your nodes installed again over USB (waiting.go): sent
+//	                                     what it missed as node-in sends it, its service state left
+//	                                     as it is (one out of service stays out); failed when it still
+//	                                     runs on its board's settings after
 //
 // node-out and node-remove work while the node is offline: they change settings.json only.
 // Neither is taken for a node in the key rotation under way; node-remove isn't queued while
@@ -46,7 +50,7 @@ type serviceKind struct {
 }
 
 func (k serviceKind) kinds() map[string]jobs.Kind {
-	return map[string]jobs.Kind{"node-out": k.out, "node-in": k.in, "node-remove": k.remove}
+	return map[string]jobs.Kind{"node-out": k.out, "node-in": k.in, "node-remove": k.remove, "node-restore": k.restore}
 }
 
 func (k serviceKind) path() string { return settings.Path(k.apply.dataDir) }
@@ -169,13 +173,31 @@ func (k serviceKind) in(raw json.RawMessage) (jobs.Func, error) {
 	if _, err := k.apply.signer(); err != nil {
 		return nil, err
 	}
-	return func(ctx context.Context, run *jobs.Run) (any, error) { return k.returnNode(ctx, run, node) }, nil
+	return func(ctx context.Context, run *jobs.Run) (any, error) { return k.returnNode(ctx, run, node, false) }, nil
+}
+
+func (k serviceKind) restore(raw json.RawMessage) (jobs.Func, error) {
+	node, err := nodeParam(raw)
+	if err != nil {
+		return nil, err
+	}
+	s, err := settings.Load(k.path())
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(s.Nodes, node) {
+		return nil, fmt.Errorf("%s is not in settings.json", node)
+	}
+	if _, err := k.apply.signer(); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, run *jobs.Run) (any, error) { return k.returnNode(ctx, run, node, true) }, nil
 }
 
 // returnNode brings node up to date, alone, as an apply's last steps do (the progress is an
 // apply's), then counts it in service again. Anything short of every rollout done leaves it
-// out of service.
-func (k serviceKind) returnNode(ctx context.Context, run *jobs.Run, node string) (any, error) {
+// out of service. restore (node-restore): its service state is left as it is.
+func (k serviceKind) returnNode(ctx context.Context, run *jobs.Run, node string, restore bool) (any, error) {
 	res := &applyResult{Changes: []string{}}
 	t := &applyTracker{run: run, p: applyProgress{Changes: []string{}, Rollouts: []*applyRollout{}}}
 	for _, s := range []string{"check", "dry run", "push"} {
@@ -183,14 +205,20 @@ func (k serviceKind) returnNode(ctx context.Context, run *jobs.Run, node string)
 	}
 	run.SetProgress(t.p)
 	step := "check"
-	err := k.catchUp(ctx, run, t, node, res, &step)
+	err := k.catchUp(ctx, run, t, node, res, &step, restore)
+	stays, again := node+" stays out of service", "return it again"
+	if restore {
+		stays, again = node+" doesn't have its settings back", "Retry on Nodes"
+	}
 	t.update(func(pp *applyProgress) {
 		pp.Notes = res.Notes
 		switch {
+		case err == nil && restore:
+			pp.Outcome = fmt.Sprintf("done: %s has its settings back", node)
 		case err == nil:
 			pp.Outcome = fmt.Sprintf("done: %s is up to date and back in service", node)
 		case errors.Is(err, fleet.ErrStopped):
-			pp.Outcome = "stopped on request: " + node + " stays out of service"
+			pp.Outcome = "stopped on request: " + stays
 		default:
 			pp.Outcome = "stopped: " + err.Error()
 		}
@@ -203,10 +231,11 @@ func (k serviceKind) returnNode(ctx context.Context, run *jobs.Run, node string)
 					}
 				}
 			}
-			pp.Hints = append(pp.Hints, node+" stays out of service: fix what stopped it, then return it again.")
+			pp.Hints = append(pp.Hints, stays+": fix what stopped it, then "+again+".")
 		}
 	})
-	if err != nil {
+	if err != nil || restore {
+		res.Applied = err == nil
 		return res, err
 	}
 	if _, err := settings.SetOutOfService(k.path(), node, false); err != nil {
@@ -218,7 +247,7 @@ func (k serviceKind) returnNode(ctx context.Context, run *jobs.Run, node string)
 	return res, nil
 }
 
-func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker, node string, res *applyResult, step *string) error {
+func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker, node string, res *applyResult, step *string, restore bool) error {
 	a := k.apply
 	begin := func(s string) error {
 		select {
@@ -237,8 +266,13 @@ func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker
 	if err != nil {
 		return err
 	}
-	if err := service.CheckIn(s, node); err != nil {
-		return err
+	switch {
+	case !restore:
+		if err := service.CheckIn(s, node); err != nil {
+			return err
+		}
+	case !slices.Contains(s.Nodes, node):
+		return fmt.Errorf("%s is not in settings.json", node)
 	}
 	key, err := a.signer()
 	if err != nil {
@@ -252,8 +286,15 @@ func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	st, err := c.Status(sctx, node)
 	cancel()
-	if err := service.Ready(node, st, err, fp); err != nil {
-		return err
+	switch {
+	case !restore:
+		if err := service.Ready(node, st, err, fp); err != nil {
+			return err
+		}
+	case err != nil:
+		return fmt.Errorf("%s: %w (%v)", node, service.ErrNotAnswering, err)
+	case !c.Pusher.Trusts(st):
+		return fmt.Errorf("%s doesn't trust your release key", node)
 	}
 	steps, notes, err := service.CatchUp(a.dataDir, a.catalog, node, st, a.store.ListSums)
 	if err != nil {
@@ -270,13 +311,34 @@ func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker
 		if err != nil {
 			return fmt.Errorf("%s: %w", sp.What, err)
 		}
+		// A node restored from its board's settings serves clients nothing of theirs yet: it
+		// may be the only node.
+		r.AllowSingle = restore && st.Config != nil && st.Config.Source != "node"
 		reqs = append(reqs, applyReq{what: sp.What, req: r})
 	}
 	t.step("check", "done", fmt.Sprintf("%s answers and trusts the release key; %d to send", node, len(reqs)))
 	if len(reqs) == 0 {
 		t.step("dry run", "skipped", "nothing to send")
 		t.step("push", "skipped", "nothing to send")
+	} else if err := a.roll(ctx, run, t, c, reqs, res, begin); err != nil {
+		return err
+	}
+	if !restore {
 		return nil
 	}
-	return a.roll(ctx, run, t, c, reqs, res, begin)
+	// Still on its board's settings after: said, and not sent again (the waiter fails it).
+	sctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	st, err = c.Status(sctx, node)
+	cancel()
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: %w (%v)", node, service.ErrNotAnswering, err)
+	case st.Config != nil && st.Config.Source != "node":
+		why := ""
+		if len(notes) > 0 {
+			why = ": " + strings.Join(notes, "; ")
+		}
+		return fmt.Errorf("%s still runs on its board's settings after it was sent what it runs%s", node, why)
+	}
+	return nil
 }

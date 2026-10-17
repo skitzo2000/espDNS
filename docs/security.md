@@ -214,7 +214,8 @@ What they can do today:
   network proves a node is the one it claims: its ID and node key in `/status` are public,
   and there is no proof of possession yet. The move happens only when you click **Add
   node**, and only while the node's old address is silent, so check it is your board first.
-  A board erased and installed again makes a new node key, so its move is refused for now.
+  A board erased and installed again makes a new node key, so its move is refused, unless
+  it was installed again from this controller (below).
 - Copy your secondary zones. Your primary allows zone transfers by network, with no
   TSIG, so any device on an allowed network (or one that takes an address there, for
   example with ARP spoofing) can copy those zones.
@@ -385,7 +386,14 @@ Wi-Fi network, and its password then goes over the network, but never in plain t
 - The controller refuses to send a password to a node with no node key pinned (adopt it
   again; firmware from before the node key needs an update first), or to a node that
   reports a different key than the pinned one. A node installed again over USB makes a new
-  key: adopt it again, or pin it with `espdns pin`.
+  key. Installed with the controller's **Install over USB** (its chip MAC one of your
+  nodes), the controller pins the node key the board's console printed over USB, read by
+  you, logged in, during the install. That trusts you and the USB cable: the node isn't
+  asked to prove it holds the key. Its settings, the Wi-Fi password sealed to that key, go
+  only to a node that answers with its ID and that key (without a key read, only at the
+  address your nodes list it at) and trusts your release key. A node back on its board's
+  settings with no such install waiting is sent nothing by itself: anyone can answer as it.
+  Installed any other way: adopt it again, or pin it with `espdns pin`.
 
 The password is still in plain text in the config files on the controller. On the node,
 the private key, and a password set over USB, are in NVS without flash encryption: anyone
