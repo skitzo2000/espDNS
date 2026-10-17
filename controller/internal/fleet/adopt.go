@@ -26,6 +26,9 @@ import (
 type Adopt struct {
 	Host string // the node's address now (discover, or the address it was flashed with)
 	ID   string // the node ID expected at Host; empty: whatever node answers there
+	// NodeKey is the node key expected there (its /status "node_key"), as the board's console
+	// gave it over USB at its install; empty: any.
+	NodeKey string
 	// Address is the node's static address, with the prefix length; zero: the static
 	// address it runs on now (its /status), kept.
 	Address netip.Prefix
@@ -131,6 +134,9 @@ func (c *Client) adopt(ctx context.Context, a Adopt, res *AdoptResult) error {
 	}
 	if a.ID != "" && !strings.EqualFold(st.NodeID, a.ID) {
 		return fmt.Errorf("2. %s is node %s, not %s", a.Host, st.NodeID, a.ID)
+	}
+	if a.NodeKey != "" && st.NodeKey != a.NodeKey {
+		return fmt.Errorf("2. %s answers as node %s with another node key than the board installed", a.Host, st.NodeID)
 	}
 	mac := st.Net.MAC
 	if mac == "" {

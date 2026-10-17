@@ -217,7 +217,8 @@ func TestEveryRouteNeedsLogin(t *testing.T) {
 // source files' (a feed's URL can hold its key), the Push page's, the Adopt page's, the
 // the Backup page's, the query log's (who asked
 // for what), the pending changes' (a config change holds the Wi-Fi password), a node's
-// settings (from its config) and Add node's found nodes (as the Adopt page's), every change
+// settings (from its config) and Add node's found nodes (as the Adopt page's) and the boards
+// waiting to be added, every change
 // refused, saying how to set one.
 func TestNoPasswordReadOnly(t *testing.T) {
 	h, patterns := testServer(t, false)
@@ -226,7 +227,7 @@ func TestNoPasswordReadOnly(t *testing.T) {
 		switch {
 		case strings.HasPrefix(p, "GET /api/configs"), strings.HasPrefix(p, "GET /api/zones"), strings.HasPrefix(p, "GET /api/zone-"), strings.HasPrefix(p, "GET /api/push/"), strings.HasPrefix(p, "GET /api/blocking/"), p == "GET /api/adopt",
 			p == "GET /api/primary", p == "GET /api/primary/certificate", p == "GET /api/backup", strings.HasPrefix(p, "GET /api/querylog"), strings.HasPrefix(p, "GET /api/changes"),
-			p == "GET /api/nodes/{id}/settings", p == "GET /api/search", p == "GET /api/nodes/found":
+			p == "GET /api/nodes/{id}/settings", p == "GET /api/search", p == "GET /api/nodes/found", p == "GET /api/nodes/waiting":
 			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "passwd") {
 				t.Errorf("%s: %d %s", p, w.Code, w.Body)
 			}

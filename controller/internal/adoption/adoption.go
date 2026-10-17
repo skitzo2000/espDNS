@@ -38,6 +38,7 @@ type Request struct {
 	Config        string        // -config: a bare name is the data directory's configs/<name>
 	Name          string        // -name
 	Reserved      bool          // -reserved
+	NodeKey       string        // the node key expected (an install over USB read it); "": any
 	Identify      time.Duration // -identify
 	AddToSettings bool          // -add-to-settings
 	Wait          time.Duration // -wait
@@ -186,7 +187,7 @@ func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 	}
 
 	a := fleet.Adopt{Host: host, ID: r.Node, Address: pfx, Gateway: gwAddr, DHCP: dhcp, Config: cfg, Reserved: r.Reserved,
-		Identify: r.Identify, DryRun: r.DryRun, ConfirmWait: r.Wait, AllowSingle: r.AllowSingle, Force: r.Force,
+		NodeKey: r.NodeKey, Identify: r.Identify, DryRun: r.DryRun, ConfirmWait: r.Wait, AllowSingle: r.AllowSingle, Force: r.Force,
 		Primary: s.ZonePrimary()}
 	if sec := cfg.Secondary; sec != nil && sec.Zones != nil {
 		b.Primary, b.Zones = sec.Primary, slices.Clone(*sec.Zones)

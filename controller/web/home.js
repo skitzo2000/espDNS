@@ -1,18 +1,19 @@
 // Nodes, the home page (index.html): one
 // sentence first (whether DNS is answering, or what needs attention), Copy DNS servers,
-// Install over USB (a new board, usb.js; once it answers, Add it now opens + Add node with it)
-// and + Add node (nodes on the network) at the top right (and Update all while two or more
-// nodes have an update), the
-// fleet's facts, one row per node on one line (nodeRow), the nodes found on the network and
-// not added yet, and the last hour's charts. A node
+// Install over USB (a new board, usb.js; its OK hands it to the controller, which adds it
+// once it answers) and + Add node (nodes on the network) at the top right (and Update all
+// while two or more nodes have an update), the
+// fleet's facts, one row per node on one line (nodeRow), the boards installed and waiting to
+// be added (waitingRow), the nodes found on the network and not added yet, and the last
+// hour's charts. A node
 // opens its page (node.html, node.js); a found node its setup panel (addnode.js: what it
 // needs next, a click away). A node's keys are said in its row when they
 // aren't the controller's: "Needs keys" (setup mode), "Old keys (rotation pending)" (not the
 // release key the controller signs with, or not the new keys of a rotation under way). Read
-// from /api/nodes and /api/nodes/found every 5 s, /api/dashboard every 10 s, /api/updates and
+// from /api/nodes, /api/nodes/found and /api/nodes/waiting every 5 s, /api/dashboard every 10 s, /api/updates and
 // /api/key every 30 s.
 import { shell, h, arr, obj, str, hostOnly, led, addr, copyText, toast, refreshChanges, onChanges,
-  getJSON, session, nodeText, answering, inService } from "./shell.js";
+  getJSON, post, session, nodeText, answering, inService } from "./shell.js";
 import { onNodes, every, releaseKey } from "./common.js";
 import { addNode, blocker, usbButton } from "./addnode.js";
 import { openUSB } from "./usb.js";
@@ -24,7 +25,7 @@ shell("index.html");
 setupCheck(document.querySelector("main > section"));
 
 const $ = id => document.getElementById(id);
-const data = { nodes: null, found: [], updates: null, dash: null, boards: new Map(), sess: {}, key: null };
+const data = { nodes: null, found: [], waiting: [], removing: "", updates: null, dash: null, boards: new Map(), sess: {}, key: null };
 
 // ---- a node in words --------------------------------------------------------------------
 
@@ -92,8 +93,11 @@ $("copy-dns").addEventListener("click", async () => {
     : `Couldn't copy: your DNS servers are ${t}`);
 });
 
+// The nodes found, but not one waiting to be added (not failed): that has its own row.
+const foundNodes = () => arr(data.found).filter(f => !arr(data.waiting).some(w => w.state !== "failed" && str(w.id) === str(f.id).toLowerCase()));
+
 const adder = addNode($("add-node"), {
-  found: () => data.found,
+  found: foundNodes,
   nodes: () => listed(),
   boardName,
   nodeKey,
@@ -101,7 +105,7 @@ const adder = addNode($("add-node"), {
   imageVersion: image => str(obj(obj(data.updates).builds && arr(data.updates.builds).find(b => b.source === `images/${image}` && !b.error)).version),
   done: () => { readFound(); refreshChanges(); },
 });
-$("install-usb").addEventListener("click", () => openUSB({ found: adder.next }));
+$("install-usb").addEventListener("click", () => openUSB({ waiting: readFound, found: adder.next }));
 
 // ---- the update -------------------------------------------------------------------------
 
@@ -188,16 +192,43 @@ function foundRow(f) {
     h("div", {}));
 }
 
+// A board installed over USB, waiting to be added: a light-blue row with what it waits for;
+// on DHCP, once found, the address to reserve for its MAC with Add it; "Adding it…" while
+// the controller adds it, or why that failed with Retry. Remove (asked first) takes it off
+// the list; its config file stays.
+function waitingRow(w) {
+  const failed = w.state === "failed", found = w.state === "found";
+  const text = failed ? `Couldn't add it: ${str(w.error)}` : w.state === "adding" ? "Adding it…"
+    : found ? `Found at ${str(w.found)}. Reserve that address for MAC ${str(w.mac)} in your router, then add it.` : "Waiting for it: plug it into your network";
+  const act = (label, path, cls = "btn small") => h("button", { class: cls, type: "button", onclick: async () => {
+    try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/${path}`); } catch (e) { toast(e.message); }
+    data.removing = "";
+    readFound();
+  } }, label);
+  const btns = data.removing === w.id
+    ? [h("span", { class: "small" }, `Remove ${str(w.name)}? Its config file stays.`), act("Remove", "delete", "btn small primary"),
+      h("button", { class: "btn small link", type: "button", onclick: () => { data.removing = ""; renderRows(); } }, "Cancel")]
+    : [failed ? act("Retry", "retry", "btn small primary") : found ? act("Add it", "add", "btn small primary") : null, w.state === "adding" ? null
+      : h("button", { class: "btn small link", type: "button", onclick: () => { data.removing = w.id; renderRows(); } }, "Remove")];
+  return h("div", { class: `r ${failed ? "r-bad" : "r-new"}`, "data-waiting": str(w.id) },
+    h("div", {}, h("span", { class: "name", title: boardName(w.board) || null }, str(w.name))),
+    h("div", { class: "full-n" }, h("span", { class: "state" }, led(failed ? "fault" : "todo", text), h("span", { class: "flag", title: text }, text), ...btns)),
+    h("div", { class: "full-n" }, w.address === "dhcp" ? "DHCP" : addr(str(w.address).split("/")[0])),
+    h("div", { class: "hide-n" }),
+    h("div", { class: "hide-n" }),
+    h("div", {}));
+}
+
 function renderRows() {
   const box = $("nodes");
   const head = box.firstElementChild;
   const ns = listed();
-  const rows = [...ns.map(nodeRow), ...arr(data.found).map(foundRow)];
+  const rows = [...ns.map(nodeRow), ...arr(data.waiting).map(waitingRow), ...foundNodes().map(foundRow)];
   if (data.nodes === null) rows.push(h("div", { class: "empty" }, h("p", {}, "Reading the nodes…")));
   else if (!rows.length) rows.push(h("div", { class: "empty with-mascot" },
     h("img", { class: "mascot", src: "img/artie.webp", width: 56, height: 96, alt: "", title: "Artie A. Record" }),
-    h("p", {}, "No node yet. Install a new board with Install over USB, then add it with + Add node.")));
-  head.hidden = !ns.length && !arr(data.found).length;
+    h("p", {}, "No node yet. Install a new board with Install over USB: it's added once it's on your network.")));
+  head.hidden = !ns.length && !arr(data.waiting).length && !foundNodes().length;
   box.replaceChildren(head, ...rows);
 }
 
@@ -234,6 +265,7 @@ function render() {
 async function readFound() {
   if (!data.sess.logged_in) return;
   try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); data.foundRead = true; } catch { /* kept */ }
+  try { data.waiting = arr(obj(await getJSON("api/nodes/waiting")).nodes); } catch { /* kept */ }
   render();
   openFound();
 }

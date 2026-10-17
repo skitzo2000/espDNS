@@ -39,7 +39,10 @@ export async function connect(port, log) {
   } catch { /* unknown */ }
   let rev = null;
   try { if (loader.chip.getChipRevision) rev = await loader.chip.getChipRevision(loader); } catch { /* unknown */ }
-  return { loader, transport, chip: loader.chip.CHIP_NAME, description, flashMB, rev };
+  // The chip's MAC (aa:bb:..): the node ID the firmware reports in /status.
+  let mac = "";
+  try { mac = await loader.chip.readMac(loader); } catch { /* unknown */ }
+  return { loader, transport, chip: loader.chip.CHIP_NAME, description, flashMB, rev, mac };
 }
 
 // revisions is the chip revisions a whole-flash image's bootloader runs on, as its header says
