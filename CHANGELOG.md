@@ -11,9 +11,11 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.9] - 2026-10-17
+
 ### Changed
 
-- Controller: a new board installed with **Install over USB** is added to your nodes by
+- A new board installed with **Install over USB** is added to your nodes by
   itself. The panel asks for its name, then, once installed, says to plug it into your
   network, with **OK**. Nodes shows it as waiting at once; when it answers as the board
   installed (its chip MAC, with the node key read from its console over USB, or at its own
@@ -21,9 +23,7 @@ version may change anything. Write each change under Unreleased as it merges;
   DHCP its row says the address it got and its MAC, to reserve in your router, then **Add
   it**. A failure is said in its row, with **Retry**; **Remove** takes it off the list. The
   adoption refuses a node answering with another node key than the one expected.
-- Firmware: a node logs its public node key on its console at start, for Install over USB
-  to read.
-- Controller: a node of yours installed again at a new address is recognised as the same
+- A node of yours installed again at a new address is recognised as the same
   node once its old address is silent. **+ Add node** and the Install over USB panel say it
   moved, and **Add node** moves its entry in your nodes, and its pin, to the new address.
   Nothing proves the node is the one it claims, so the move is only on your click. It needs
@@ -32,7 +32,16 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ### Fixed
 
-- Install over USB no longer says a node of yours is back on your network until the board installed (by its chip MAC) answers there, restarted since the install; a board to be wired is told to plug its network cable in, and a board that reports no network link is said at once.
+- Install over USB no longer says a node of yours is back on your network until the board
+  installed (by its chip MAC) answers there, restarted since the install; a board to be
+  wired is told to plug its network cable in, and a board that reports no network link is
+  said at once.
+
+## [firmware 0.0.6] - 2026-10-17
+
+### Changed
+
+- A node logs its public node key on its console at start, for Install over USB to read.
 
 ## [controller 0.0.8] - 2026-10-16
 
