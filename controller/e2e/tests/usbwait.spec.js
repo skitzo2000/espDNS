@@ -71,7 +71,9 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   expect(state.lookups).toEqual([]); // nothing looked up before the install
 
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.", { timeout: 20000 });
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
+    "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
   await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
   await expect(u.locator("#usb-go")).toHaveText("Install again");
   await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
@@ -86,8 +88,14 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   await expect(hint).toContainText("Its gateway is 192.0.2.1. That has to be your router's address on this network.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
 
-  // It answers: the panel says so, with Add it now.
-  state.lookup = { address: "192.0.2.52", found: true, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
+  // A node answers there that hasn't restarted since the install: not it, the address is taken.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 86400, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:99", next: "adopt" } };
+  await page.clock.fastForward("00:05");
+  await expect(hint).toContainText("Something else answers at 192.0.2.52, so that address is taken.");
+  await expect(u.locator("#usb-arrived")).toHaveCount(0);
+
+  // It answers, restarted since: the panel says so, with Add it now.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 20, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
     board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1", next: "adopt" } };
   await page.clock.fastForward("00:05");
   await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.");
@@ -129,6 +137,7 @@ test("Install over USB: a Wi-Fi board joined over Improv; something else at the 
   await u.locator("#usb-pass").fill("e2e password");
   await u.locator("#usb-join").click();
   await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network. USB can stay in for power.");
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Waiting for it at 192.0.2.52…");
   await expect(u.locator("#usb-wait-hint")).toContainText("Something else answers at 192.0.2.52, so that address is taken.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
   // Closing the panel stops the waiting, and lets go of the port.

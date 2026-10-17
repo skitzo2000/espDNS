@@ -228,15 +228,25 @@ func TestAddNodeLookupNoNode(t *testing.T) {
 	}
 }
 
-// An address in settings.json is one of the nodes already: said so, not read (it is polled
-// already). An address that is no node's (a name, a port, loopback, ...) is refused, and
-// nothing is sent anywhere.
+// An address in settings.json is one of the nodes already: said so, and read there, with
+// its uptime (a node installed over USB again is back only once it answers). One that
+// doesn't answer is listed, not found. An address that is no node's (a name, a port,
+// loopback, ...) is refused, and nothing is sent anywhere.
 func TestAddNodeLookupListedAndRefused(t *testing.T) {
 	e := newAddNodeEnv(t)
 	code, r := e.lookup("203.0.113.51")
-	if code != http.StatusOK || !r.Listed || r.Found || r.Node == nil || r.Node.ID != e.peer.ID() || r.Node.Next != "" {
+	if code != http.StatusOK || !r.Listed || !r.Found || r.Uptime == nil || r.Node == nil || r.Node.ID != e.peer.ID() || r.Node.Next != "" {
 		t.Fatalf("%d %+v", code, r)
 	}
+	if reqs := e.rec.take(); !slices.Equal(reqs, []string{"GET 203.0.113.51/status"}) {
+		t.Fatalf("requests %v", reqs)
+	}
+	e.peer.Do(func(n *fakenode.Node) { n.DownFor = time.Hour })
+	e.peer.Reboot()
+	if code, r = e.lookup("203.0.113.51"); code != http.StatusOK || !r.Listed || r.Found || r.Uptime != nil || r.Node != nil {
+		t.Fatalf("not answering: %d %+v", code, r)
+	}
+	e.rec.take()
 	for _, a := range []string{"", "dns.example.com", "203.0.113.70:80", "0203.0.113.70", "::1", "2001:db8::1", "127.0.0.1", "0.0.0.0",
 		"224.0.0.251", "255.255.255.255", " 203.0.113.70", "169.254.169.254"} {
 		if code, _ := e.lookup(a); code != http.StatusBadRequest {
@@ -250,9 +260,6 @@ func TestAddNodeLookupListedAndRefused(t *testing.T) {
 	}
 	if reqs := e.rec.take(); len(reqs) != 0 {
 		t.Errorf("sent %v", reqs)
-	}
-	if l := e.reg.List(); len(l) != 0 {
-		t.Fatalf("listed %+v", l)
 	}
 }
 

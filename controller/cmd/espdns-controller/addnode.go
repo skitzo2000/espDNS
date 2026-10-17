@@ -26,8 +26,9 @@ import (
 //
 // A lookup reads /status at the address typed, and nowhere else, within a few seconds
 // (nodes.Registry.Lookup): no name is resolved (an IPv4 address only), no other host is
-// asked, and an address in settings.json isn't read at all (it is polled already). A node
-// that answers is listed from then on, as one found over mDNS is (pruned when it is gone),
+// asked. One in settings.json is read too: a node installed over USB again is back once it
+// answers there (its uptime_s shorter than the time since the install began), not when it
+// is merely listed. A node that answers is listed from then on, as one found over mDNS is (pruned when it is gone),
 // so the adoption finds it as it finds those: a node on a network without DHCP, or one mDNS
 // doesn't reach, is added by its address.
 
@@ -119,9 +120,10 @@ func (a addNodeServer) found(w http.ResponseWriter, r *http.Request) {
 // lookupReply is POST /api/nodes/lookup's answer.
 type lookupReply struct {
 	Address  string     `json:"address"`
-	Listed   bool       `json:"listed"`   // in settings.json: one of the nodes already (not read)
-	Found    bool       `json:"found"`    // an espDNS node answered there
-	Answered bool       `json:"answered"` // something answered HTTP there (not found: not a node)
+	Listed   bool       `json:"listed"`             // in settings.json: one of the nodes already
+	Found    bool       `json:"found"`              // an espDNS node answered there, just now
+	Uptime   *float64   `json:"uptime_s,omitempty"` // its /status uptime_s, as it answered: how long since it started
+	Answered bool       `json:"answered"`           // something answered HTTP there (not found: not a node)
 	Error    string     `json:"error,omitempty"`
 	Node     *foundNode `json:"node,omitempty"`
 }
@@ -144,31 +146,29 @@ func (a addNodeServer) lookupNode(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	out := lookupReply{Address: addr}
+	out := lookupReply{Address: addr, Listed: listed(s, addr)}
 	files, _ := configs.List(a.adopt.dataDir)
-	if listed(s, addr) {
-		out.Listed = true
-		all := a.adopt.nodes()
-		if i := slices.IndexFunc(all, func(n nodes.Node) bool { return adoption.HostOnly(n.Addr) == addr }); i >= 0 {
-			f := a.view(all[i], all, s, files)
-			out.Node = &f
-		}
-		writeJSON(w, out)
-		return
-	}
 	if a.lookup == nil {
 		httpErr(w, http.StatusInternalServerError, errors.New("no node lookup here"))
 		return
 	}
+	// A listed node is read at the address settings.json has for it (with its port, if any).
+	at := addr
+	if i := slices.IndexFunc(s.Nodes, func(h string) bool { return adoption.HostOnly(h) == addr }); i >= 0 {
+		at = s.Nodes[i]
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeLookupTimeout)
 	defer cancel()
-	n, err := a.lookup(ctx, addr)
+	n, err := a.lookup(ctx, at)
 	if err != nil {
 		out.Answered, out.Error = errors.Is(err, nodes.ErrNotNode), fmt.Sprintf("%s: %v", addr, err)
 		writeJSON(w, out)
 		return
 	}
 	out.Found = true
+	if up, ok := n.Status["uptime_s"].(float64); ok {
+		out.Uptime = &up
+	}
 	f := a.view(n, a.adopt.nodes(), s, files)
 	out.Node = &f
 	writeJSON(w, out)

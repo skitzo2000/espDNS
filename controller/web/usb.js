@@ -269,9 +269,9 @@ const BUSY = { erase: "Erasing the board: don't close this or unplug it until it
   keys: "Writing the keys: don't close this or unplug it until it's done." };
 const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
 const INSTALLED = {
-  wired: "Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.",
+  wired: "Installed. Plug its network cable in: it's connected to this computer over USB only. It can stay on USB for power, or be unplugged and powered where its cable is.",
   joined: "Installed, and on your Wi-Fi network. USB can stay in for power.",
-  ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on: plug it into your network with a cable.",
+  ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
   elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
 };
 const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
@@ -548,6 +548,9 @@ export async function openUSB(o = {}) {
     const msg = h("div", { class: "stack", id: "usb-after" }, h("p", { class: "hint" }, "Once it's installed, this panel waits for it to show up on your network."));
     const hints = h("div", { class: "stack nogap", id: "usb-hints" });
     let con = null, transport = null, gen = 0, halt = null, timers = [], onFrame = null;
+    // began: when the install began (a node answering with a shorter uptime has restarted
+    // since). noLink: its console's last health line says it has no network link.
+    let began = 0, noLink = false;
     const log = logView(() => `espdns-${str(board.name) || "board"}-log.txt`, () => con && con.restart());
     box.replaceChildren(steps, msg, hints, log.box);
     const say = (...kids) => msg.replaceChildren(...kids.filter(Boolean));
@@ -600,6 +603,8 @@ export async function openUSB(o = {}) {
     go.addEventListener("click", async () => {
       stopRun(); // the port, as the last install left it
       const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
+      began = Date.now();
+      noLink = false;
       lock(true);
       say();
       hints.replaceChildren();
@@ -698,7 +703,11 @@ export async function openUSB(o = {}) {
       if (!own) hint("usb-uart", "Logs and Wi-Fi setup use the board's own USB port; this one only shows the bootloader.");
       let app = false;
       // Stopped while it opens: openConsole lets the port go itself.
-      const c = await hold(openConsole(port, { others, live, line: l => { log.add(l); if (/^[IWE] \(\d+\)/.test(l)) app = true; },
+      const c = await hold(openConsole(port, { others, live, line: l => {
+        log.add(l);
+        if (/^[IWE] \(\d+\)/.test(l)) app = true;
+        if (/"state":"|"reasons":/.test(l)) noLink = /"no link"|"state":"no network"/.test(l);
+      },
         frame: (t, d) => onFrame && onFrame(t, d) }).catch(e => { if (live()) log.add(`(couldn't open the port again: ${str(e && e.message)})`); return null; }));
       if (!live()) return;
       con = c;
@@ -826,7 +835,8 @@ export async function openUSB(o = {}) {
       if (halt) halt();
       const my = gen, started = Date.now();
       const waitHint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
-      step("net", "now", ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…");
+      const cable = how === "wired" || how === "ethernet";
+      step("net", "now", cable ? "Plug its network cable in." : ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…");
       say(h("p", { class: "small", id: "usb-installed" }, INSTALLED[how]),
         h("div", { id: "usb-waiting" }, spinning(ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…")), waitHint);
       halt = every(async () => {
@@ -835,16 +845,18 @@ export async function openUSB(o = {}) {
         try {
           if (ip) {
             const r = await post("api/nodes/lookup", { address: ip });
-            if (r.listed) { listed = true; node = obj(r.node); }
-            else if (r.found && r.node) node = r.node;
-            else other = !!r.answered;
+            // Only a node that answers there now, restarted since the install began, is it:
+            // one listed already is back only then.
+            const fresh = r.found && r.node && typeof r.uptime_s === "number" && r.uptime_s * 1000 < Date.now() - began;
+            if (fresh) { listed = !!r.listed; node = r.node; }
+            else other = !!r.answered || (!!r.found && !r.listed);
           } else {
             node = (await readFound()).find(x => str(x.board) === str(board.name) && !before.has(keyOf(x))) || null;
           }
         } catch { /* not there yet */ }
         if (my !== gen) return; // stopped meanwhile
         if (node) { halt(); halt = null; arrived(node, listed); return; }
-        if (!other && Date.now() - started < HINT_AFTER) return;
+        if (!other && !noLink && Date.now() - started < HINT_AFTER) return;
         waitHint.hidden = false;
         waitHint.replaceChildren(...nothingYet(other, how));
       }, WAIT_POLL);
@@ -854,6 +866,7 @@ export async function openUSB(o = {}) {
       const again = h("p", { class: "hint" }, "To use another address, change it above, press Prepare image and install again.");
       if (other) return [h("p", { class: "small bad" }, `Something else answers at ${ip}, so that address is taken.`), again];
       const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up, or its cable is in" : "Check the cable is in";
+      if (noLink) return [h("p", { class: "small", id: "usb-nolink" }, `The board reports no network link. ${how === "wired" || how === "ethernet" ? "Plug its network cable in" : check}.`)];
       return [h("p", { class: "small" }, ip
         ? `Nothing yet. ${check}, and that ${ip} is free on your network and outside your router's DHCP pool.`
         : `Nothing yet. ${check}, and that your router hands out addresses on that network.`),

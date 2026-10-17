@@ -72,7 +72,8 @@ const step = (u, n) => u.locator(`#usb-step-${n}`);
 test("Install over USB: a wired board written at 0, restarted, its log line by line, then Add it now", async ({ page }) => {
   const { u, state, violations } = await start(page);
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.", { timeout: 20000 });
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
+    "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
   for (const n of ["connect", "chip", "write", "restart"]) await expect(step(u, n)).toHaveClass("done");
   await expect(step(u, "erase")).toHaveCount(0);
   await expect(step(u, "wifi")).toHaveCount(0);
@@ -80,6 +81,7 @@ test("Install over USB: a wired board written at 0, restarted, its log line by l
   await expect(step(u, "chip")).toContainText("ESP32-S3");
   await expect(step(u, "write")).toContainText("100%");
   await expect(step(u, "net")).toHaveClass("now");
+  await expect(step(u, "net")).toContainText("Plug its network cable in.");
   await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
   await expect(u.locator("#usb-go")).toHaveText("Install again");
   await expect(u.locator("#usb-go")).not.toHaveClass(/primary/);
@@ -116,8 +118,8 @@ test("Install over USB: a wired board written at 0, restarted, its log line by l
   await u.locator("#usb-log-reset").click();
   await expect(rows.filter({ hasText: "I (311) espdns: espDNS 0.0.5 starting" })).toHaveCount(2);
 
-  // It answers: Add it now.
-  state.lookup = { address: "192.0.2.52", found: true, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
+  // It answers, restarted since the install: Add it now.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 0, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
     board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1", next: "adopt" } };
   await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.", { timeout: 10000 });
   await expect(step(u, "net")).toHaveClass("done");
@@ -305,6 +307,8 @@ test("Install over USB: a Wi-Fi board asks for its network, joins it, and is wai
   expect((await esp(page)).join).toBe("\x0bexample-net\x0ce2e password");
   await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network. USB can stay in for power.");
   await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
+  await expect(u.locator("#usb-after")).not.toContainText("cable");
+  await expect(step(u, "net")).not.toContainText("cable");
   await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
   expect(state.lookups[0]).toBe("192.0.2.52");
   // No Improv frame in the log, only the console's lines.
@@ -351,6 +355,7 @@ test("Install over USB: a Wi-Fi board that never answers Improv nor logs: it use
   await expect(step(u, "wifi")).toHaveClass("now", { timeout: 20000 });
   await expect(u.locator("#usb-nolog")).toHaveText("If it shows nothing, press RESET or unplug it and plug it in again.", { timeout: 15000 });
   await expect(step(u, "wifi")).toContainText("It didn't ask for Wi-Fi: it uses its Ethernet add-on.", { timeout: 20000 });
-  await expect(u.locator("#usb-installed")).toContainText("it uses its Ethernet add-on");
+  await expect(u.locator("#usb-installed")).toContainText("it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.");
+  await expect(step(u, "net")).toContainText("Plug its network cable in.");
   expect(await violations()).toEqual([]);
 });

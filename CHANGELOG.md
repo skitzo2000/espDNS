@@ -11,6 +11,10 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Fixed
+
+- Install over USB no longer says a node of yours is back on your network until it answers there, restarted since the install; a board to be wired is told to plug its network cable in, and a board that reports no network link is said at once.
+
 ## [controller 0.0.8] - 2026-10-16
 
 ### Fixed
