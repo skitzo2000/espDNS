@@ -28,9 +28,9 @@ import (
 // (nodes.Registry.Lookup): no name is resolved (an IPv4 address only), no other host is
 // asked. One in settings.json is read too: a node installed over USB again is back once it
 // answers there (its uptime_s shorter than the time since the install began), not when it
-// is merely listed. A node that answers is listed from then on, as one found over mDNS is (pruned when it is gone),
-// so the adoption finds it as it finds those: a node on a network without DHCP, or one mDNS
-// doesn't reach, is added by its address.
+// is merely listed. A node that answers is listed from then on, as one found over mDNS is
+// (pruned when it is gone), so the adoption finds it as it finds those: a node on a network
+// without DHCP, or one mDNS doesn't reach, is added by its address.
 
 // nodeLookupTimeout bounds a lookup's request: the registry's own wait is the shorter.
 const nodeLookupTimeout = 5 * time.Second
@@ -122,7 +122,7 @@ type lookupReply struct {
 	Address  string     `json:"address"`
 	Listed   bool       `json:"listed"`             // in settings.json: one of the nodes already
 	Found    bool       `json:"found"`              // an espDNS node answered there, just now
-	Uptime   *float64   `json:"uptime_s,omitempty"` // its /status uptime_s, as it answered: how long since it started
+	Uptime   *float64   `json:"uptime_s,omitempty"` // its /status uptime_s as it answered: seconds since it started
 	Answered bool       `json:"answered"`           // something answered HTTP there (not found: not a node)
 	Error    string     `json:"error,omitempty"`
 	Node     *foundNode `json:"node,omitempty"`

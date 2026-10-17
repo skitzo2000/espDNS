@@ -238,6 +238,9 @@ func TestAddNodeLookupListedAndRefused(t *testing.T) {
 	if code != http.StatusOK || !r.Listed || !r.Found || r.Uptime == nil || r.Node == nil || r.Node.ID != e.peer.ID() || r.Node.Next != "" {
 		t.Fatalf("%d %+v", code, r)
 	}
+	if *r.Uptime < 3600 || *r.Uptime > 3660 {
+		t.Fatalf("uptime_s %v: the fake node started an hour ago", *r.Uptime)
+	}
 	if reqs := e.rec.take(); !slices.Equal(reqs, []string{"GET 203.0.113.51/status"}) {
 		t.Fatalf("requests %v", reqs)
 	}

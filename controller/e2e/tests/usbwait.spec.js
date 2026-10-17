@@ -88,8 +88,9 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   await expect(hint).toContainText("Its gateway is 192.0.2.1. That has to be your router's address on this network.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
 
-  // A node answers there that hasn't restarted since the install: not it, the address is taken.
-  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 86400, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:99", next: "adopt" } };
+  // Another node answers there (not the chip installed, by its MAC), restarted lately too:
+  // the address is taken.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 5, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:99", next: "adopt" } };
   await page.clock.fastForward("00:05");
   await expect(hint).toContainText("Something else answers at 192.0.2.52, so that address is taken.");
   await expect(u.locator("#usb-arrived")).toHaveCount(0);

@@ -384,12 +384,14 @@ test("Reinstall over USB opens Install over USB on the node's board and address"
 
 // A node of yours on DHCP isn't among the nodes found (it's listed): once reinstalled, it is
 // waited for at the address it has. Listed isn't back: on USB only, it says to plug its cable
-// in, and its console's "no link" is said at once; it is back once it answers there,
-// restarted since the install, with nothing to add.
+// in. Its console's "no link" while booting isn't said; past booting it is, at once, and gone
+// again once the link is up ("no address": the cable is in). Its old run answering isn't it;
+// it is back once it answers there, restarted since the install, with nothing to add.
 test("Reinstall over USB on DHCP: waited for at its address until it answers, back on Nodes as before", async ({ page }) => {
   const violations = await watch(page);
-  await page.addInitScript(fakeEsp, { bootLog: ["ESP-ROM:esp32s3-20210327", "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m",
-    '\x1b[0;33mW (5342) espdns: health: "state":"no network","answering":false,"reasons":["no link"]\x1b[0m'] });
+  const health = (ms, state, reason) => `\x1b[0;33mW (${ms}) espdns: health: "state":"${state}","answering":false,"reasons":["${reason}"]\x1b[0m`;
+  await page.addInitScript(fakeEsp, { mac: ID2, bootLog: ["ESP-ROM:esp32s3-20210327", "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m",
+    health(900, "booting", "no link")] });
   await login(page);
   await fake(page);
   const lookups = [];
@@ -418,11 +420,25 @@ test("Reinstall over USB on DHCP: waited for at its address until it answers, ba
   await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
     "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
   await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
-  await expect(u.locator("#usb-nolink")).toHaveText("The board reports no network link. Plug its network cable in.");
-  await expect.poll(() => lookups.length, { timeout: 10000 }).toBeGreaterThan(1);
+  const polls = async n => { const at = lookups.length; await expect.poll(() => lookups.length, { timeout: 15000 }).toBeGreaterThanOrEqual(at + n); };
+  // Booting with no link yet: nothing said.
+  await polls(2);
+  await expect(u.locator("#usb-wait-hint")).toBeHidden();
   await expect(u.locator("#usb-waiting")).toHaveText(`Waiting for it at ${DNS2}…`);
   await expect(u.locator("#usb-arrived")).toHaveCount(0);
   await expect(u.locator("#usb-step-net")).not.toHaveClass("done");
+  // Past booting, no link: said at once.
+  await page.evaluate(l => window.__esp.print([l]), health(5342, "no network", "no link"));
+  await expect(u.locator("#usb-nolink")).toHaveText("The board reports no network link. Plug its network cable in.", { timeout: 10000 });
+  // Its old run answering there (it hasn't restarted since): not back, and not something else.
+  lookup = { address: DNS2, listed: true, found: true, uptime_s: 99999, node: { host: DNS2, id: ID2, board: "ws-s3-eth", listed: true, next: "" } };
+  await polls(2);
+  await expect(u.locator("#usb-arrived")).toHaveCount(0);
+  await expect(u.locator("#usb-wait-hint")).not.toContainText("Something else answers");
+  // The link up, no address yet: the no-link hint goes, no cable hint.
+  await page.evaluate(l => window.__esp.print([l]), health(9000, "no network", "no address"));
+  await expect(u.locator("#usb-wait-hint")).toBeHidden({ timeout: 10000 });
+  await expect(u.locator("#usb-nolink")).toHaveCount(0);
   // It answers there, restarted since the install: back.
   lookup = { address: DNS2, listed: true, found: true, uptime_s: 0, node: { host: DNS2, id: ID2, board: "ws-s3-eth", listed: true, next: "" } };
   await expect(u.locator("#usb-arrived")).toHaveText(`It's back on your network at ${DNS2}, and on Nodes as before.`, { timeout: 10000 });

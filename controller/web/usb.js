@@ -274,6 +274,7 @@ const INSTALLED = {
   ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
   elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
 };
+const macOf = s => str(s).toLowerCase().replace(/[^0-9a-f]/g, "");
 const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
 
 export async function openUSB(o = {}) {
@@ -548,9 +549,10 @@ export async function openUSB(o = {}) {
     const msg = h("div", { class: "stack", id: "usb-after" }, h("p", { class: "hint" }, "Once it's installed, this panel waits for it to show up on your network."));
     const hints = h("div", { class: "stack nogap", id: "usb-hints" });
     let con = null, transport = null, gen = 0, halt = null, timers = [], onFrame = null;
-    // began: when the install began (a node answering with a shorter uptime has restarted
-    // since). noLink: its console's last health line says it has no network link.
-    let began = 0, noLink = false;
+    // began: when the install began (performance.now(); a node answering with a shorter
+    // uptime has restarted since). mac: the chip's, as the install read it (the node ID it
+    // will report). noLink: its console's last health line, past booting, says no link.
+    let began = 0, mac = "", noLink = false;
     const log = logView(() => `espdns-${str(board.name) || "board"}-log.txt`, () => con && con.restart());
     box.replaceChildren(steps, msg, hints, log.box);
     const say = (...kids) => msg.replaceChildren(...kids.filter(Boolean));
@@ -603,7 +605,8 @@ export async function openUSB(o = {}) {
     go.addEventListener("click", async () => {
       stopRun(); // the port, as the last install left it
       const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
-      began = Date.now();
+      began = performance.now();
+      mac = "";
       noLink = false;
       lock(true);
       say();
@@ -643,6 +646,7 @@ export async function openUSB(o = {}) {
           .then(async x => { if (!live()) { await flash.close(x.transport); throw new Error("stopped"); } return x; }));
         transport = c.transport;
         step("connect", "done", `Over ${kind}: ${c.description}`);
+        mac = /^0*$/.test(macOf(c.mac)) ? "" : macOf(c.mac);
         n = "chip";
         step("chip", "now", "");
         // The image's chip (image.json's chip_family, else its chip: esp32s3 is ESP32-S3), and the
@@ -706,7 +710,7 @@ export async function openUSB(o = {}) {
       const c = await hold(openConsole(port, { others, live, line: l => {
         log.add(l);
         if (/^[IWE] \(\d+\)/.test(l)) app = true;
-        if (/"state":"|"reasons":/.test(l)) noLink = /"no link"|"state":"no network"/.test(l);
+        if (/"reasons":/.test(l)) noLink = !/"state":"booting"/.test(l) && /"reasons":\[[^\]]*"no link"/.test(l);
       },
         frame: (t, d) => onFrame && onFrame(t, d) }).catch(e => { if (live()) log.add(`(couldn't open the port again: ${str(e && e.message)})`); return null; }));
       if (!live()) return;
@@ -833,7 +837,7 @@ export async function openUSB(o = {}) {
 
     function wait(how) {
       if (halt) halt();
-      const my = gen, started = Date.now();
+      const my = gen, started = performance.now();
       const waitHint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
       const cable = how === "wired" || how === "ethernet";
       step("net", "now", cable ? "Plug its network cable in." : ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…");
@@ -845,18 +849,20 @@ export async function openUSB(o = {}) {
         try {
           if (ip) {
             const r = await post("api/nodes/lookup", { address: ip });
-            // Only a node that answers there now, restarted since the install began, is it:
-            // one listed already is back only then.
-            const fresh = r.found && r.node && typeof r.uptime_s === "number" && r.uptime_s * 1000 < Date.now() - began;
-            if (fresh) { listed = !!r.listed; node = r.node; }
-            else other = !!r.answered || (!!r.found && !r.listed);
+            // Only the board installed (its ID the chip's MAC), answering there now and
+            // restarted since the install began, is it: one listed already is back only then.
+            // Another node there has the address.
+            const same = !mac || macOf(obj(r.node).id) === mac;
+            if (r.found && r.node && same && typeof r.uptime_s === "number" && r.uptime_s * 1000 < performance.now() - began) {
+              listed = !!r.listed; node = r.node;
+            } else other = !!r.answered || (!!r.found && (mac ? !same : !r.listed));
           } else {
-            node = (await readFound()).find(x => str(x.board) === str(board.name) && !before.has(keyOf(x))) || null;
+            node = (await readFound()).find(x => str(x.board) === str(board.name) && !before.has(keyOf(x)) && (!mac || macOf(x.id) === mac)) || null;
           }
         } catch { /* not there yet */ }
         if (my !== gen) return; // stopped meanwhile
         if (node) { halt(); halt = null; arrived(node, listed); return; }
-        if (!other && !noLink && Date.now() - started < HINT_AFTER) return;
+        if (!other && !noLink && performance.now() - started < HINT_AFTER) { waitHint.hidden = true; waitHint.replaceChildren(); return; }
         waitHint.hidden = false;
         waitHint.replaceChildren(...nothingYet(other, how));
       }, WAIT_POLL);
