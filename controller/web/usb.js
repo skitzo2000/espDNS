@@ -581,8 +581,9 @@ export async function openUSB(o = {}) {
     // uptime has restarted since). mac: the chip's, as the install read it (the node ID it
     // will report). noLink: its console's last health line, past booting, says no link.
     // nodeKey: the node key its console said (the public half), for a new board's OK.
-    // chip: the chip on the port, as the install read it.
-    let began = 0, mac = "", noLink = false, nodeKey = "", chip = "";
+    // chip: the chip on the port, as the install read it. booted: when the panel last
+    // restarted it (its uptime at OK, for one of your nodes installed again).
+    let began = 0, mac = "", noLink = false, nodeKey = "", chip = "", booted = 0;
     const log = logView(() => `espdns-${str(board.name) || "board"}-log.txt`, () => con && con.restart());
     box.replaceChildren(steps, msg, hints, log.box);
     const say = (...kids) => msg.replaceChildren(...kids.filter(Boolean));
@@ -717,6 +718,7 @@ export async function openUSB(o = {}) {
         n = "reset";
         step("restart", "now", "");
         await flash.reset(transport, c.loader);
+        booted = performance.now();
         await flash.close(transport);
         transport = null;
         step("restart", "done", "Restarted into espDNS");
@@ -776,7 +778,7 @@ export async function openUSB(o = {}) {
             await keyLine(live);
             if (!nodeKey && live() && con) {
               log.add("--- restarting the board to read its node key ---");
-              try { await con.restart(); } catch { /* the port went */ }
+              try { await con.restart(); booted = performance.now(); } catch { /* the port went */ }
               await keyLine(live);
             }
           }
@@ -806,17 +808,27 @@ export async function openUSB(o = {}) {
       const dhcp = net.address === "dhcp";
       step("net", "next", how === "wired" || how === "ethernet" ? "Plug its network cable in." : mine ? "It gets its settings back once it answers."
         : dhcp ? "Shown on Nodes once it answers." : "It's added once it answers.");
-      const key = nodeKey ? { node_key: nodeKey } : {};
-      const body = () => mine
-        ? { reinstall: true, id: colons(mac), board: str(board.name), name: str(o.name) || str(obj(obj(mine.status).config).name) || str(mine.hostname), ...key }
-        : { name: nameIn.value.trim(), board: str(board.name), id: colons(mac), address: net.address, ...(dhcp ? {} : { gateway: str(net.gateway) }), ...key };
+      // Its address as installed in its image: where it comes up. One of yours listed at
+      // another moves there once that one is silent.
+      const at = { address: net.address, ...(dhcp ? {} : { gateway: str(net.gateway) }), ...(nodeKey ? { node_key: nodeKey } : {}) };
+      const was = mine ? hostOnly(mine.addr) : "", now = dhcp ? "" : str(net.address).split("/")[0];
+      const fresh = () => ({ name: nameIn.value.trim(), board: str(board.name), id: colons(mac), ...at });
+      const back = () => ({ reinstall: true, id: colons(mac), board: str(board.name),
+        name: str(o.name) || str(obj(obj(mine.status).config).name) || str(mine.hostname), ...at, uptime_s: Math.round((performance.now() - booted) / 1000) });
       const said = h("p", { class: "small bad", id: "usb-ok-error", role: "status", hidden: true });
       const ok = h("button", { class: "btn primary", type: "button", id: "usb-ok" }, "OK");
       ok.addEventListener("click", async () => {
         ok.disabled = true;
         said.hidden = true;
         try {
-          await post("api/nodes/waiting", body());
+          if (!mine) await post("api/nodes/waiting", fresh());
+          else {
+            // Not one of your nodes after all (removed meanwhile): a new board, by the name typed.
+            try { await post("api/nodes/waiting", back()); } catch (e) {
+              if (!adds || !/not one of your nodes/.test(e.message)) throw e;
+              await post("api/nodes/waiting", fresh());
+            }
+          }
         } catch (e) {
           said.textContent = e.message;
           said.hidden = false;
@@ -827,6 +839,7 @@ export async function openUSB(o = {}) {
         if (o.waiting) o.waiting();
       });
       say(h("p", { class: "small", id: "usb-installed" }, ADDS[how](mine ? THEN.back : dhcp ? THEN.dhcp : THEN.fixed)),
+        was && now && was !== now ? h("p", { class: "small", id: "usb-moves" }, `It was at ${was}; it comes up at ${now} and moves there once ${was} is silent.`) : null,
         h("div", { class: "actions" }, ok), said);
     }
 

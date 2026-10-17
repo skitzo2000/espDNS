@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
 	"github.com/skitzo2000/espdns/controller/internal/keys"
+	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/service"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
@@ -296,7 +298,17 @@ func (k serviceKind) catchUp(ctx context.Context, run *jobs.Run, t *applyTracker
 	case !c.Pusher.Trusts(st):
 		return fmt.Errorf("%s doesn't trust your release key", node)
 	}
-	steps, notes, err := service.CatchUp(a.dataDir, a.catalog, node, st, a.store.ListSums)
+	// Back on its board's settings, a node says no name: its config is the one last pushed to
+	// the node pinned here.
+	cfg := ""
+	if restore {
+		if id, err := pins.Open(a.dataDir).Pinned(node); err == nil {
+			if p, _ := configs.LoadPushed(a.dataDir, id); p != nil {
+				cfg = p.File
+			}
+		}
+	}
+	steps, notes, err := service.CatchUp(a.dataDir, a.catalog, node, cfg, st, a.store.ListSums)
 	if err != nil {
 		return err
 	}

@@ -415,10 +415,13 @@ test("Reinstall over USB: OK hands it to the controller, which gives it its sett
   await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it gets its settings back as soon as it answers.", { timeout: 20000 });
   await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
   await expect(u.locator("#usb-waiting")).toHaveCount(0);
+  await expect(u.locator("#usb-moves")).toHaveCount(0); // installed at the address it is listed at
   await u.getByRole("button", { name: "OK" }).click();
   await expect(u).toBeHidden();
-  expect(posted).toEqual([{ reinstall: true, id: ID2, board: "ws-s3-eth", name: "dns2",
+  expect(posted.map(({ uptime_s, ...b }) => b)).toEqual([{ reinstall: true, id: ID2, board: "ws-s3-eth", name: "dns2", address: `${DNS2}/24`, gateway: "192.0.2.1",
     node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
+  expect(posted[0].uptime_s).toBeGreaterThanOrEqual(0);
+  expect(posted[0].uptime_s).toBeLessThan(60);
   expect(lookups).toEqual([]);
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);

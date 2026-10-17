@@ -154,23 +154,46 @@ test("Install over USB: a wired board written at 0, restarted, its log line by l
 });
 
 // A board that is one of your nodes (its chip MAC a listed node's ID), installed from Nodes:
-// OK hands it to the controller as a reinstall, by its ID, board, name and node key (the name
-// typed is not its: it keeps its own), and Nodes has it waiting to get its settings back.
+// OK hands it to the controller as a reinstall, by its ID, board, name, node key and the
+// address in its image (the name typed is not its: it keeps its own); listed at another
+// address, the panel says it moves there. Nodes has it waiting to get its settings back.
 test("Install over USB: one of your nodes installed again, OK hands it over as a reinstall, waiting on Nodes", async ({ page }) => {
-  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [{ id: "aa:bb:cc:00:00:52", addr: "192.0.2.52", hostname: "espdns-000052.local", source: "settings",
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [{ id: "aa:bb:cc:00:00:52", addr: "192.0.2.51", hostname: "espdns-000052.local", source: "settings",
     online: false, status: { node_id: "aa:bb:cc:00:00:52", board: "ws-s3-eth", config: { name: "dns2", source: "node", seq: 7 } } }] }));
   const { u, state, violations } = await start(page);
   await u.locator("#usb-go").click();
   await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it gets its settings back as soon as it answers.", { timeout: 20000 });
+  await expect(u.locator("#usb-moves")).toHaveText("It was at 192.0.2.51; it comes up at 192.0.2.52 and moves there once 192.0.2.51 is silent.");
   await u.getByRole("button", { name: "OK" }).click();
   await expect(u).toBeHidden();
-  expect(state.waiting.map(({ since, state: st, ...w }) => w)).toEqual([{ reinstall: true, id: "aa:bb:cc:00:00:52", board: "ws-s3-eth", name: "dns2",
-    node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
+  expect(state.waiting.map(({ since, state: st, uptime_s, ...w }) => w)).toEqual([{ reinstall: true, id: "aa:bb:cc:00:00:52", board: "ws-s3-eth", name: "dns2",
+    address: "192.0.2.52/24", gateway: "192.0.2.1", node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
   expect(state.lookups).toEqual([]);
   const row = page.locator('#nodes [data-waiting="aa:bb:cc:00:00:52"]');
   await expect(row.locator(".flag")).toHaveText("Waiting for it: plug it into your network");
   await expect(row).toContainText("dns2");
   await page.waitForLoadState("networkidle");
+  expect(await violations()).toEqual([]);
+});
+
+// Listed here but no longer one of your nodes to the controller (409): OK hands it over as a
+// new board, by the name typed.
+test("Install over USB: a reinstall refused as not one of your nodes is handed over as a new board", async ({ page }) => {
+  await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [{ id: "aa:bb:cc:00:00:52", addr: "192.0.2.52", source: "settings", online: false,
+    status: { node_id: "aa:bb:cc:00:00:52", config: { name: "dns2", source: "node", seq: 7 } } }] }));
+  const { u, state, violations } = await start(page);
+  await page.route(/\/api\/nodes\/waiting$/, r => {
+    if (r.request().method() === "GET") return r.fulfill({ json: { nodes: state.waiting } });
+    const b = r.request().postDataJSON();
+    if (b.reinstall) return r.fulfill({ status: 409, json: { error: "node aa:bb:cc:00:00:52 is not one of your nodes: add it as a new board" } });
+    state.waiting.push(b);
+    return r.fulfill({ json: b });
+  });
+  await u.locator("#usb-go").click();
+  await u.getByRole("button", { name: "OK" }).click({ timeout: 20000 });
+  await expect(u).toBeHidden();
+  expect(state.waiting).toEqual([{ name: "dns3", board: "ws-s3-eth", id: "aa:bb:cc:00:00:52", address: "192.0.2.52/24", gateway: "192.0.2.1",
+    node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
   expect(await violations()).toEqual([]);
 });
 

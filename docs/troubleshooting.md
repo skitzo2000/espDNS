@@ -282,7 +282,8 @@ networks only.
 controller, it gets its settings back by itself once it answers: wait for its row on Nodes.
 If the row says **Couldn't restore its settings**, it says why: fix that and press
 **Retry**. Without a node key read over USB (a wired-only P4 board, or the line missed),
-the node is found only at the address your nodes list it at. Installed some other way, take
+the node is found only at the address installed in its image. **Not seen within an hour of
+the install** means it never answered: install it again. Installed some other way, take
 it out of service and return it to service.
 
 **`It didn't ask for Wi-Fi`.** The board didn't answer the Wi-Fi setup: it has its Ethernet

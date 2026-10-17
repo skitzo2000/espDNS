@@ -239,14 +239,15 @@ func (n *Node) NodeKey() string {
 }
 
 // Reinstall is the board installed again over USB: on its board's settings (config source
-// "defaults", config seq 0), restarted; erase: its NVS erased too, so it has a new node key.
+// "defaults", config seq 0, no name, as firmware/main/cfg.c defaults()), restarted; erase:
+// its NVS erased too, so it has a new node key.
 func (n *Node) Reinstall(erase bool) {
 	n.Do(func(n *Node) {
 		n.NodeKey()
 		if erase && !n.NoNodeKey {
 			n.nkey, _ = ecdh.P256().GenerateKey(rand.Reader)
 		}
-		n.defaults, n.fromCfg, n.seq["config"], n.cfg, n.boot = true, false, 0, &nodecfg.Config{Name: n.Name}, time.Now()
+		n.defaults, n.fromCfg, n.seq["config"], n.cfg, n.boot = true, false, 0, &nodecfg.Config{}, time.Now()
 	})
 }
 

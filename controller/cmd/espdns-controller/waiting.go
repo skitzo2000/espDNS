@@ -15,8 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/filestore"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
+	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
@@ -41,15 +43,22 @@ import (
 // with its error, until it is tried again or removed.
 //
 // One of your nodes installed again over USB from here (its chip MAC a node pinned at an
-// address settings.json lists) waits as a reinstall: no name or address of its own, it
-// keeps them. It is matched by a /status read now, at its listed address, or, with the node
-// key read over USB, wherever the controller finds it with that key. Then, as the user who
-// installed it: its pinned node key set to the one read over USB (its Wi-Fi password is
-// sealed to it), its settings entry moved when it answers at a new address (settings-move,
-// with its rules: the old address silent), and node-restore sends it what it runs (service.go).
-// Done, it leaves the list; a failure, or a node still on its board's settings after, stays
-// failed with why, until Retry: never sent again by itself. Nothing is sent to a node on its
-// board's settings with no entry here: /status is anyone's to answer.
+// address settings.json lists) waits as a reinstall: no name of its own, it keeps its own.
+// Its address is the one installed in its image, where it comes up. It is matched by a
+// /status read now, there (on DHCP, at the address it is listed at), or, with the node key
+// read over USB, wherever the controller finds it with that key. A node key other than the
+// one pinned is taken only from a node on its board's settings (config source "defaults",
+// seq 0) that restarted since the install. Then, as the user who installed it: its settings
+// entry moved when it answers at another address (settings-move, with its rules: the old
+// address silent), its config made to keep the address it was installed with, the node key
+// read over USB pinned (its Wi-Fi password is sealed to it), and node-restore sends it what
+// it runs (service.go); a restore that fails puts the old node key back. Done, it leaves the
+// list; a failure, or a node still on its board's settings after, stays failed with why,
+// until Retry: never sent again by itself. Nothing is sent to a node on its board's settings
+// with no entry here: /status is anyone's to answer.
+//
+// A board not matched within waitingFor of its install (or of its Retry) fails: installed
+// again, it is posted again.
 
 // waitingNode is one board waiting.
 type waitingNode struct {
@@ -67,9 +76,12 @@ type waitingNode struct {
 	// to reserve that address for in the router.
 	Found string `json:"found,omitempty"`
 	MAC   string `json:"mac,omitempty"`
-	// Reinstall: one of your nodes installed again, sent its settings back (not added);
-	// Address is the one settings.json lists it at.
-	Reinstall bool `json:"reinstall,omitempty"`
+	// Reinstall: one of your nodes installed again, sent its settings back (not added).
+	// Boot is when the panel restarted the board at the install (posted as UptimeS, its
+	// uptime then): a node up for longer hasn't restarted since. Not changed by Retry.
+	Reinstall bool      `json:"reinstall,omitempty"`
+	UptimeS   int64     `json:"uptime_s,omitempty"`
+	Boot      time.Time `json:"boot,omitempty"`
 }
 
 const (
@@ -78,6 +90,7 @@ const (
 	waitingAdding = "adding"
 	waitingFailed = "failed"
 	waitingEvery  = 10 * time.Second
+	waitingFor    = time.Hour
 )
 
 func waitingPath(dataDir string) string { return filepath.Join(dataDir, "waiting.json") }
@@ -194,6 +207,10 @@ func (w waiter) once(ctx context.Context) {
 			})
 			continue
 		}
+		if e.State == waitingWait && time.Since(e.Since) > waitingFor {
+			failWaiting(dir, e.ID, "Not seen within an hour of the install: install it again.")
+			continue
+		}
 		if e.State != waitingWait && e.State != waitingFound {
 			continue
 		}
@@ -211,7 +228,7 @@ func (w waiter) once(ctx context.Context) {
 		}
 		switch {
 		case e.Reinstall:
-			w.restore(ctx, e, n.Addr)
+			w.restore(ctx, e, n.Addr, st)
 		case e.Address == "dhcp":
 			setWaiting(dir, e.ID, func(x *waitingNode) { x.State, x.Found, x.MAC = waitingFound, n.Addr, release.MAC(st.Net.MAC) })
 		default:
@@ -310,10 +327,13 @@ func (w waiter) add(ctx context.Context, e waitingNode, addr string) {
 		delete(p, "dry_run")
 		_, err = run(map[string]any{"after": dry.ID, "add_to_settings": true})
 	}
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		return // waited for again at the next start
-	}
-	if err != nil {
+	case errors.Is(err, jobs.ErrQueueFull):
+		setWaiting(dir, e.ID, func(x *waitingNode) { x.State = waitingWait })
+		return
+	case err != nil:
 		failWaiting(dir, e.ID, err.Error())
 		return
 	}
@@ -344,13 +364,30 @@ func (w waiter) run(ctx context.Context, user, kind string, params map[string]an
 	return j, nil
 }
 
-// reinstalled is the node answering as reinstall e, read now: at its listed address, or,
-// with its node key, wherever the controller found its ID.
+// pinOf is node id's pin, if it is pinned to an address.
+func pinOf(dataDir, id string) (pins.Record, bool) {
+	rs, _ := pins.Open(dataDir).List()
+	i := slices.IndexFunc(rs, func(p pins.Record) bool { return p.ID == id && p.Addr != "" })
+	if i < 0 {
+		return pins.Record{}, false
+	}
+	return rs[i], true
+}
+
+// reinstalled is the node answering as reinstall e, read now: at the address installed in
+// its image (on DHCP, the one it is listed at), or, with its node key, wherever the
+// controller found its ID. A node key other than the one pinned only from a node on its
+// board's settings, restarted since the install.
 func (w waiter) reinstalled(ctx context.Context, e waitingNode) (nodes.Node, bool) {
-	if w.lookup == nil {
+	pin, ok := pinOf(w.adopt.dataDir, e.ID)
+	if w.lookup == nil || !ok {
 		return nodes.Node{}, false
 	}
-	addrs := []string{e.Address}
+	at := strings.Split(e.Address, "/")[0]
+	if e.Address == "dhcp" {
+		at = pin.Addr
+	}
+	addrs := []string{at}
 	for _, n := range w.adopt.nodes() {
 		if e.NodeKey != "" && strings.EqualFold(n.ID, e.ID) && !slices.Contains(addrs, n.Addr) {
 			addrs = append(addrs, n.Addr)
@@ -360,41 +397,104 @@ func (w waiter) reinstalled(ctx context.Context, e waitingNode) (nodes.Node, boo
 		lctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
 		n, err := w.lookup(lctx, a)
 		cancel()
-		if st, ok := status(n); err == nil && ok && strings.EqualFold(n.ID, e.ID) && (e.NodeKey == "" || st.NodeKey == e.NodeKey) {
+		st, ok := status(n)
+		if err != nil || !ok || !strings.EqualFold(n.ID, e.ID) || e.NodeKey != "" && st.NodeKey != e.NodeKey {
+			continue
+		}
+		up := time.Duration(st.UptimeS) * time.Second
+		fresh := st.Config != nil && st.Config.Source == "defaults" && st.Config.Seq == 0 &&
+			up <= time.Since(e.Boot)+15*time.Second
+		if e.NodeKey == "" || e.NodeKey == pin.NodeKey || fresh {
 			return n, true
 		}
 	}
 	return nodes.Node{}, false
 }
 
-// restore sends reinstall e, answering at addr, its settings back, as its user: its node key
-// pinned anew (the one read over USB), its entry moved to addr if it answers there
-// (settings-move), then node-restore. Done, it leaves the list; else it fails, with why.
-func (w waiter) restore(ctx context.Context, e waitingNode, addr string) {
+// restore sends reinstall e, answering at addr (st), its settings back, as its user: its
+// entry moved to addr if it answers there (settings-move, the node key read over USB passed
+// on), its config made to keep the address it was installed with, the node key read over
+// USB pinned, then node-restore; a restore that fails puts the old node key back. Done, it
+// leaves the list; a full job queue waits for the next check; else it fails, with why.
+func (w waiter) restore(ctx context.Context, e waitingNode, addr string, st release.NodeStatus) {
 	dir := w.adopt.dataDir
 	setWaiting(dir, e.ID, func(x *waitingNode) { x.State, x.Error = waitingAdding, "" })
+	l := pins.Open(dir)
 	err := func() error {
-		if e.NodeKey != "" {
-			if err := pins.Open(dir).SetNodeKey(e.ID, e.NodeKey); err != nil {
+		pin, ok := pinOf(dir, e.ID)
+		if !ok {
+			return fmt.Errorf("node %s is no longer one of your nodes", e.ID)
+		}
+		if addr != pin.Addr {
+			move := map[string]any{"node": addr, "from": pin.Addr}
+			if e.NodeKey != "" {
+				move["node_key"] = e.NodeKey
+			}
+			if _, err := w.run(ctx, e.User, "settings-move", move); err != nil {
 				return err
 			}
 		}
-		if addr != e.Address {
-			if _, err := w.run(ctx, e.User, "settings-move", map[string]any{"node": addr, "from": e.Address}); err != nil {
-				return err
-			}
+		if err := keepAddress(dir, e); err != nil {
+			return err
+		}
+		if e.NodeKey == "" || e.NodeKey == pin.NodeKey {
+			_, err := w.run(ctx, e.User, "node-restore", map[string]any{"node": addr})
+			return err
+		}
+		if err := l.SetNodeKey(e.ID, e.NodeKey); err != nil {
+			return err
 		}
 		_, err := w.run(ctx, e.User, "node-restore", map[string]any{"node": addr})
+		if err != nil {
+			if berr := l.SetNodeKey(e.ID, pin.NodeKey); berr != nil {
+				return fmt.Errorf("%w (and its old node key not put back: %v)", err, berr)
+			}
+		}
 		return err
 	}()
-	if ctx.Err() != nil {
-		return // waited for again at the next start
-	}
-	if err != nil {
+	switch {
+	case ctx.Err() != nil:
+		// waited for again at the next start
+	case errors.Is(err, jobs.ErrQueueFull):
+		setWaiting(dir, e.ID, func(x *waitingNode) { x.State = waitingWait })
+	case err != nil:
 		failWaiting(dir, e.ID, err.Error())
-		return
+	default:
+		changeWaiting(dir, func(ws []waitingNode) ([]waitingNode, error) {
+			return slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), nil
+		})
 	}
-	changeWaiting(dir, func(ws []waitingNode) ([]waitingNode, error) {
-		return slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), nil
-	})
+}
+
+// keepAddress makes the config last pushed to e's node say the address its image was
+// installed with, when it says another (pushed as it was, it would move the node back): only
+// its network changes, saved as the node page's move saves it. A config with no network, or
+// with that address, is kept as it is.
+func keepAddress(dataDir string, e waitingNode) error {
+	p, err := configs.LoadPushed(dataDir, e.ID)
+	if err != nil || p == nil {
+		return err
+	}
+	f, err := configs.Read(dataDir, p.File)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil || f.Config == nil || f.Config.Network == nil {
+		return err
+	}
+	want := nodecfg.Network{Address: e.Address, Gateway: e.Gateway}
+	if a, ok := f.Config.StaticAddr(); *f.Config.Network == want || ok && a.String() == strings.Split(e.Address, "/")[0] {
+		return nil
+	}
+	c := *f.Config
+	c.Network = &want
+	text, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	if _, err := configs.Save(dataDir, f.Name, append(text, '\n'), f.Hash); err != nil {
+		return err
+	}
+	logSave(dataDir, cmp.Or(e.User, "install"), f.Name, "keeps "+e.Address+", the address it was installed with over USB")
+	return nil
 }

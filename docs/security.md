@@ -389,9 +389,12 @@ Wi-Fi network, and its password then goes over the network, but never in plain t
   key. Installed with the controller's **Install over USB** (its chip MAC one of your
   nodes), the controller pins the node key the board's console printed over USB, read by
   you, logged in, during the install. That trusts you and the USB cable: the node isn't
-  asked to prove it holds the key. Its settings, the Wi-Fi password sealed to that key, go
-  only to a node that answers with its ID and that key (without a key read, only at the
-  address your nodes list it at) and trusts your release key. A node back on its board's
+  asked to prove it holds the key. A new key is taken only from a node that answers with
+  its ID and that key, trusts your release key, runs on its board's settings and restarted
+  since the install, within an hour of it; without a key read, only at the address in its
+  image. The key is pinned only once any move of its entry is done, right before its
+  settings (the Wi-Fi password sealed to that key) are sent, and the old key is put back if
+  that fails. A node back on its board's
   settings with no such install waiting is sent nothing by itself: anyone can answer as it.
   Installed any other way: adopt it again, or pin it with `espdns pin`.
 

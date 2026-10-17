@@ -16,6 +16,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/jobs"
+	"github.com/skitzo2000/espdns/controller/internal/nodes"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
@@ -301,28 +302,43 @@ func TestAdoptNodeKeyExpected(t *testing.T) {
 	}
 }
 
-// reinstalled pins dns1 (the node in service at .51) with its node key, its config with a
-// Wi-Fi password, then installs it again over USB: on its board's settings, a new node key
-// if erase.
-func (e *addNodeEnv) reinstalled(erase bool) {
+// reinstalled pins dns1 (the node in service at .51) with its node key, its config (n1.json,
+// with a Wi-Fi password and network, if any) recorded as pushed to it, then installs it
+// again over USB: on its board's settings with no name, a new node key if erase. It returns
+// the node key pinned before.
+func (e *addNodeEnv) reinstalled(erase bool, network string) string {
 	e.t.Helper()
 	l := pins.Open(e.dir)
 	if _, err := l.Pin(e.peer.ID(), "203.0.113.51"); err != nil {
 		e.t.Fatal(err)
 	}
-	if err := l.SetNodeKey(e.peer.ID(), e.peer.NodeKey()); err != nil {
+	old := e.peer.NodeKey()
+	if err := l.SetNodeKey(e.peer.ID(), old); err != nil {
 		e.t.Fatal(err)
 	}
+	if network != "" {
+		network = `, "network": ` + network
+	}
 	writeFile(e.t, filepath.Join(configs.Path(e.dir), "n1.json"),
-		[]byte(`{"name": "dns1", "secondary": {"zones": ["home.example"]}, "wifi": {"ssid": "home", "password": "wifi-secret-pass-123"}}`))
+		[]byte(`{"name": "dns1", "secondary": {"zones": ["home.example"]}, "wifi": {"ssid": "home", "password": "wifi-secret-pass-123"}`+network+`}`))
+	if err := configs.RecordPushed(e.dir, configs.Pushed{NodeID: e.peer.ID(), Host: "203.0.113.51", File: "n1.json", Seq: 1, By: "controller"}); err != nil {
+		e.t.Fatal(err)
+	}
 	e.peer.Reinstall(erase)
+	return old
 }
 
-func (e *addNodeEnv) postReinstall(key string) (int, string) {
-	return e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.peer.ID(), "node_key": key, "name": "dns1"})
+// postReinstall posts dns1 installed again with key, its image's address at.
+func (e *addNodeEnv) postReinstall(key, at string) {
+	e.t.Helper()
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.peer.ID(), "node_key": key, "name": "dns1",
+		"address": at, "gateway": "203.0.113.1", "uptime_s": 5}); code != 200 {
+		e.t.Fatal(code, body)
+	}
 }
 
 func (e *addNodeEnv) source(n *fakenode.Node) string {
+	e.t.Helper()
 	st, err := (&fleet.Client{HTTP: e.lan.HTTP()}).Status(context.Background(), n.Addr)
 	if err != nil || st.Config == nil {
 		e.t.Fatal(err)
@@ -330,42 +346,53 @@ func (e *addNodeEnv) source(n *fakenode.Node) string {
 	return st.Config.Source
 }
 
-// One of your nodes installed again over USB, its NVS erased (a new node key): waited for as
-// a reinstall at its listed address; another node key there is not it, and nothing is sent.
-// With the key read over USB: that key pinned, its config sent with its Wi-Fi password
-// sealed to it (the node opens it), and no longer waiting. A board that isn't one of your
-// nodes is refused as a reinstall; a node on its board's settings with no entry is sent
-// nothing.
+func (e *addNodeEnv) pinnedKey() string {
+	k, _ := pins.Open(e.dir).NodeKey(e.peer.ID())
+	return k
+}
+
+func (e *addNodeEnv) restores() int {
+	n := 0
+	for _, j := range e.runner.List() {
+		if j.Kind == "node-restore" {
+			n++
+		}
+	}
+	return n
+}
+
+// One of your nodes installed again over USB at its address, its NVS erased (a new node
+// key), back on its board's settings with no name, its config with no network: another node
+// key there is not it, and nothing is sent. With the key read over USB: its config (found as
+// the one last pushed to it) sent with its Wi-Fi password sealed to the new key (the node
+// opens it), that key pinned, and no longer waiting. A board that isn't one of your nodes is
+// refused as a reinstall; a node on its board's settings with no entry is sent nothing.
 func TestWaitingReinstall(t *testing.T) {
 	e := newAddNodeEnv(t)
-	e.reinstalled(true)
+	e.reinstalled(true, "")
 	e.waiter().once(context.Background())
 	if slices.Contains(e.peer.Events(), "push config") {
 		t.Fatal("a node on its board's settings with no entry was sent its config")
 	}
-	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.node.ID()}); code != 409 ||
-		!strings.Contains(body, "not one of your nodes") {
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"reinstall": true, "id": e.node.ID(), "address": "203.0.113.52/24",
+		"gateway": "203.0.113.1"}); code != 409 || !strings.Contains(body, "not one of your nodes") {
 		t.Fatal(code, body)
 	}
-	if code, body := e.postReinstall(e.node.NodeKey()); code != 200 {
-		t.Fatal(code, body)
-	}
-	if ws := e.waitingList(); len(ws) != 1 || !ws[0].Reinstall || ws[0].Address != "203.0.113.51" || ws[0].State != waitingWait {
+	e.postReinstall(e.node.NodeKey(), "203.0.113.51/24")
+	if ws := e.waitingList(); len(ws) != 1 || !ws[0].Reinstall || ws[0].Address != "203.0.113.51/24" || ws[0].State != waitingWait || ws[0].Boot.IsZero() {
 		t.Fatalf("%+v", ws)
 	}
 	e.waiter().once(context.Background())
 	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingWait || slices.Contains(e.peer.Events(), "push config") {
 		t.Fatalf("another node key: %+v %v", ws, e.peer.Events())
 	}
-	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
-		t.Fatal(code, body)
-	}
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.51/24")
 	setWaiting(e.dir, e.peer.ID(), func(x *waitingNode) { x.User = "alice" })
 	e.waiter().once(context.Background())
 	if ws := e.waitingList(); len(ws) != 0 {
 		t.Fatalf("%+v", ws)
 	}
-	if k, _ := pins.Open(e.dir).NodeKey(e.peer.ID()); k != e.peer.NodeKey() {
+	if e.pinnedKey() != e.peer.NodeKey() {
 		t.Fatal("the node key read over USB isn't pinned")
 	}
 	if !slices.Contains(e.peer.Events(), "push config") || e.source(e.peer) != "node" {
@@ -381,24 +408,21 @@ func TestWaitingReinstall(t *testing.T) {
 	}
 }
 
-// Without a node key, a reinstall is matched only at its listed address: found elsewhere
-// over mDNS, it isn't it. With its node key (kept: NVS not erased), it is, and its entry is
-// moved there (its old address silent) before its settings are sent.
+// Installed at a new address (in its image), with a new node key. Without a key it is
+// matched only at the image's address: elsewhere it isn't it. With it: its entry moved there
+// (its old address silent), its config made to keep the new address (pushed as it was, it
+// would move the node back), the new key pinned, its settings sent.
 func TestWaitingReinstallElsewhere(t *testing.T) {
 	e := newAddNodeEnv(t)
-	e.reinstalled(false)
+	e.reinstalled(true, `{"address": "203.0.113.51/24", "gateway": "203.0.113.1"}`)
 	e.silent()
 	e.seen = append(e.seen, "203.0.113.200")
-	if code, body := e.postReinstall(""); code != 200 {
-		t.Fatal(code, body)
-	}
+	e.postReinstall("", "203.0.113.51/24")
 	e.waiter().once(context.Background())
 	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingWait || slices.Contains(e.peer.Events(), "push config") {
 		t.Fatalf("no key, elsewhere: %+v", ws)
 	}
-	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
-		t.Fatal(code, body)
-	}
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.200/24")
 	e.waiter().once(context.Background())
 	if ws := e.waitingList(); len(ws) != 0 {
 		t.Fatalf("%+v", ws)
@@ -406,36 +430,113 @@ func TestWaitingReinstallElsewhere(t *testing.T) {
 	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Equal(s.Nodes, []string{"203.0.113.200"}) {
 		t.Fatal(s.Nodes)
 	}
-	if e.source(e.peer) != "node" {
+	if f, err := configs.Read(e.dir, "n1.json"); err != nil || f.Config.Network.Address != "203.0.113.200/24" {
+		t.Fatalf("%v %s", err, f.Text)
+	}
+	if e.source(e.peer) != "node" || e.pinnedKey() != e.peer.NodeKey() {
 		t.Fatal(e.peer.Events())
 	}
 }
 
+// The move refused (its old address still answers): failed, and the node key pinned is
+// still the old one.
+func TestWaitingReinstallMoveRefused(t *testing.T) {
+	e := newAddNodeEnv(t)
+	old := e.reinstalled(true, "")
+	e.silent()
+	e.seen = append(e.seen, "203.0.113.200")
+	all := e.adopt.nodes
+	answers := func() []nodes.Node {
+		ns := all()
+		for i := range ns {
+			if ns[i].Addr == "203.0.113.51" {
+				ns[i].Online = true
+			}
+		}
+		return ns
+	}
+	e.adopt.nodes, e.add.adopt.nodes = answers, answers
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.200/24")
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingFailed || !strings.Contains(ws[0].Error, "still answers") {
+		t.Fatalf("%+v", ws)
+	}
+	if e.pinnedKey() != old || e.restores() != 0 {
+		t.Fatal("re-pinned, or restored, though not moved")
+	}
+}
+
 // Still on its board's settings after its catch-up (no config of its here): failed, with
-// why, and not sent again by the next check.
+// why, its old node key pinned again, and not sent again by the next check.
 func TestWaitingReinstallStillDefaults(t *testing.T) {
 	e := newAddNodeEnv(t)
-	e.reinstalled(false)
+	old := e.reinstalled(true, "")
 	if err := os.Remove(filepath.Join(configs.Path(e.dir), "n1.json")); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := e.postReinstall(e.peer.NodeKey()); code != 200 {
-		t.Fatal(code, body)
-	}
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.51/24")
 	w := e.waiter()
 	w.once(context.Background())
 	ws := e.waitingList()
 	if len(ws) != 1 || ws[0].State != waitingFailed || !strings.Contains(ws[0].Error, "board's settings") || !strings.Contains(ws[0].Error, "no config file") {
 		t.Fatalf("%+v", ws)
 	}
-	w.once(context.Background())
-	n := 0
-	for _, j := range e.runner.List() {
-		if j.Kind == "node-restore" {
-			n++
-		}
+	if e.pinnedKey() != old {
+		t.Fatal("the old node key isn't put back")
 	}
-	if n != 1 {
+	w.once(context.Background())
+	if n := e.restores(); n != 1 {
 		t.Fatalf("%d node-restore jobs", n)
+	}
+}
+
+// A new node key from a node that hasn't restarted since the install isn't taken: nothing
+// pinned or sent.
+func TestWaitingReinstallNotRestarted(t *testing.T) {
+	e := newAddNodeEnv(t)
+	old := e.reinstalled(true, "")
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.51/24")
+	// The panel restarted the board a minute after it last booted: not this boot.
+	setWaiting(e.dir, e.peer.ID(), func(x *waitingNode) { x.Boot = time.Now().Add(time.Minute) })
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 1 || ws[0].State != waitingWait || e.pinnedKey() != old || slices.Contains(e.peer.Events(), "push config") {
+		t.Fatalf("%+v", ws)
+	}
+}
+
+// One out of service gets its settings back and stays out of service.
+func TestWaitingReinstallOutOfService(t *testing.T) {
+	e := newAddNodeEnv(t)
+	e.reinstalled(false, "")
+	s, _ := settings.Load(settings.Path(e.dir))
+	s.OutOfService = []string{"203.0.113.51"}
+	if err := settings.Save(settings.Path(e.dir), s); err != nil {
+		t.Fatal(err)
+	}
+	e.postReinstall(e.peer.NodeKey(), "203.0.113.51/24")
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !s.IsOutOfService("203.0.113.51") || e.source(e.peer) != "node" {
+		t.Fatalf("%+v %v", s, e.peer.Events())
+	}
+}
+
+// Not seen within an hour of the install: failed, to install again; Retry waits an hour more.
+func TestWaitingExpires(t *testing.T) {
+	e := newAddNodeEnv(t)
+	changeWaiting(e.dir, func(ws []waitingNode) ([]waitingNode, error) {
+		return append(ws, waitingNode{ID: "02:00:00:00:00:99", Name: "gone", Address: "203.0.113.99/24", Gateway: "203.0.113.1",
+			State: waitingWait, Since: time.Now().Add(-61 * time.Minute)}), nil
+	})
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); ws[0].State != waitingFailed || ws[0].Error != "Not seen within an hour of the install: install it again." {
+		t.Fatalf("%+v", ws)
+	}
+	e.postWaiting("/api/nodes/waiting/02:00:00:00:00:99/retry", nil)
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); ws[0].State != waitingWait || time.Since(ws[0].Since) > time.Minute {
+		t.Fatalf("%+v", ws)
 	}
 }
