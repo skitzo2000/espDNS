@@ -383,13 +383,19 @@ test("Reinstall over USB opens Install over USB on the node's board and address"
 });
 
 // A node of yours on DHCP isn't among the nodes found (it's listed): once reinstalled, it is
-// waited for at the address it has, and said to be back, with nothing to add.
-test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as before", async ({ page }) => {
+// waited for at the address it has. Listed isn't back: on USB only, it says to plug its cable
+// in. Its console's "no link" while booting isn't said; past booting it is, at once, and gone
+// again once the link is up ("no address": the cable is in). Its old run answering isn't it;
+// it is back once it answers there, restarted since the install, with nothing to add.
+test("Reinstall over USB on DHCP: waited for at its address until it answers, back on Nodes as before", async ({ page }) => {
   const violations = await watch(page);
-  await page.addInitScript(fakeEsp);
+  const health = (ms, state, reason) => `\x1b[0;33mW (${ms}) espdns: health: "state":"${state}","answering":false,"reasons":["${reason}"]\x1b[0m`;
+  await page.addInitScript(fakeEsp, { mac: ID2, bootLog: ["ESP-ROM:esp32s3-20210327", "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m",
+    health(900, "booting", "no link")] });
   await login(page);
   await fake(page);
   const lookups = [];
+  let lookup = { address: DNS2, listed: true, found: false, answered: false, error: `${DNS2}: no answer` };
   await page.route(/\/api\/nodes$/, r => r.fulfill({ json: [node(DNS2, ID2, "dns2", "ws-s3-eth", { state: "healthy", answering: true, reasons: [] }, { mac: MAC2 },
     { config: { name: "dns2", source: "node", seq: 7, address: "dhcp" } })] }));
   await page.route(/\/api\/key$/, r => r.fulfill({ json: { present: true, fingerprint: "a1b2c3d4e5f60718", recovery: { present: true, fingerprint: "0f1e2d3c4b5a6978" } } }));
@@ -403,7 +409,7 @@ test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as be
       keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
   });
   await page.route(/\/build\/e2e-ws-s3-eth\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x4000, 0x5a) }));
-  await page.route(/\/api\/nodes\/lookup$/, r => { lookups.push(r.request().postDataJSON().address); return r.fulfill({ json: { address: DNS2, listed: true } }); });
+  await page.route(/\/api\/nodes\/lookup$/, r => { lookups.push(r.request().postDataJSON().address); return r.fulfill({ json: lookup }); });
   await open(page, ID2);
   await page.locator("#acts").getByRole("button", { name: "Reinstall over USB" }).click();
   const u = page.getByRole("dialog", { name: "Reinstall dns2 over USB" });
@@ -411,7 +417,32 @@ test("Reinstall over USB on DHCP: waited for at its address, back on Nodes as be
   await u.locator("#usb-prepare").click();
   await expect(u.locator("#usb-go")).toBeVisible();
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-arrived")).toHaveText(`It's back on your network at ${DNS2}, and on Nodes as before.`, { timeout: 20000 });
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
+    "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
+  const polls = async n => { const at = lookups.length; await expect.poll(() => lookups.length, { timeout: 15000 }).toBeGreaterThanOrEqual(at + n); };
+  // Booting with no link yet: nothing said.
+  await polls(2);
+  await expect(u.locator("#usb-wait-hint")).toBeHidden();
+  await expect(u.locator("#usb-waiting")).toHaveText(`Waiting for it at ${DNS2}…`);
+  await expect(u.locator("#usb-arrived")).toHaveCount(0);
+  await expect(u.locator("#usb-step-net")).not.toHaveClass("done");
+  // Past booting, no link: said at once.
+  await page.evaluate(l => window.__esp.print([l]), health(5342, "no network", "no link"));
+  await expect(u.locator("#usb-nolink")).toHaveText("The board reports no network link. Plug its network cable in.", { timeout: 10000 });
+  // Its old run answering there (it hasn't restarted since): not back, and not something else.
+  lookup = { address: DNS2, listed: true, found: true, uptime_s: 99999, node: { host: DNS2, id: ID2, board: "ws-s3-eth", listed: true, next: "" } };
+  await polls(2);
+  await expect(u.locator("#usb-arrived")).toHaveCount(0);
+  await expect(u.locator("#usb-wait-hint")).not.toContainText("Something else answers");
+  // The link up, no address yet: the no-link hint goes, no cable hint.
+  await page.evaluate(l => window.__esp.print([l]), health(9000, "no network", "no address"));
+  await expect(u.locator("#usb-wait-hint")).toBeHidden({ timeout: 10000 });
+  await expect(u.locator("#usb-nolink")).toHaveCount(0);
+  // It answers there, restarted since the install: back.
+  lookup = { address: DNS2, listed: true, found: true, uptime_s: 0, node: { host: DNS2, id: ID2, board: "ws-s3-eth", listed: true, next: "" } };
+  await expect(u.locator("#usb-arrived")).toHaveText(`It's back on your network at ${DNS2}, and on Nodes as before.`, { timeout: 10000 });
+  await expect(u.locator("#usb-step-net .hint")).toHaveText(`At ${DNS2}`);
   await expect(u.locator("#usb-add")).toHaveCount(0);
   expect(lookups[0]).toBe(DNS2);
   await page.waitForLoadState("networkidle");

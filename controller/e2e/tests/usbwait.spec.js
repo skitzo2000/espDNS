@@ -1,5 +1,5 @@
-// Install over USB, after the install (usb.js installer): installed on a fake board
-// (fakeboard.js), the panel waits for the node on the network: POST /api/nodes/lookup at its
+// Install over USB from + Add node, after the install (usb.js installer): installed on a fake
+// board (fakeboard.js), the panel waits for the node on the network: POST /api/nodes/lookup at its
 // address, answered here. Nothing for a minute (the page's clock moved on): what to check. It
 // answers: the panel says so, and Add it now closes it and opens + Add node with it chosen,
 // its address and gateway as given at the install.
@@ -49,7 +49,8 @@ async function routes(page, state) {
 
 async function prepare(page, board) {
   await page.goto("./");
-  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  await page.locator("#nqres").getByRole("button", { name: "Install over USB" }).click();
   const u = page.getByRole("dialog", { name: "Install a board over USB" });
   await u.locator("#usb-board").selectOption(board);
   await u.locator("#usb-addr").fill("192.0.2.52/24");
@@ -71,7 +72,9 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   expect(state.lookups).toEqual([]); // nothing looked up before the install
 
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network with an Ethernet cable; USB can stay in for power.", { timeout: 20000 });
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
+    "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Plug its network cable in.");
   await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
   await expect(u.locator("#usb-go")).toHaveText("Install again");
   await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
@@ -86,8 +89,15 @@ test("Install over USB: installed, it waits at its address, says what to check, 
   await expect(hint).toContainText("Its gateway is 192.0.2.1. That has to be your router's address on this network.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
 
-  // It answers: the panel says so, with Add it now.
-  state.lookup = { address: "192.0.2.52", found: true, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
+  // Another node answers there (not the chip installed, by its MAC), restarted lately too:
+  // the address is taken.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 5, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:99", next: "adopt" } };
+  await page.clock.fastForward("00:05");
+  await expect(hint).toContainText("Something else answers at 192.0.2.52, so that address is taken.");
+  await expect(u.locator("#usb-arrived")).toHaveCount(0);
+
+  // It answers, restarted since: the panel says so, with Add it now.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 20, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
     board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1", next: "adopt" } };
   await page.clock.fastForward("00:05");
   await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.");
@@ -129,6 +139,7 @@ test("Install over USB: a Wi-Fi board joined over Improv; something else at the 
   await u.locator("#usb-pass").fill("e2e password");
   await u.locator("#usb-join").click();
   await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network. USB can stay in for power.");
+  await expect(u.locator("#usb-step-net .hint")).toHaveText("Waiting for it at 192.0.2.52…");
   await expect(u.locator("#usb-wait-hint")).toContainText("Something else answers at 192.0.2.52, so that address is taken.");
   await expect(u.locator("#usb-waiting")).toBeVisible();
   // Closing the panel stops the waiting, and lets go of the port.
@@ -138,5 +149,48 @@ test("Install over USB: a Wi-Fi board joined over Improv; something else at the 
   await page.waitForTimeout(4000);
   expect(state.lookups.length).toBe(n);
   expect(await page.evaluate(() => navigator.serial.getPorts().then(ps => ps[0].readable))).toBeNull();
+  expect(await violations()).toEqual([]);
+});
+
+// A node of yours reinstalled over USB at a new address: the lookup says it is the same node
+// moved (found, move from its old address, next settings-move), and the panel says so -- not
+// "Add it from + Add node on Nodes". Add it now opens + Add node at the move step, whose
+// button runs the settings-move job.
+test("Install over USB: a node of yours reinstalled at a new address is said as the same node, and Add it now moves its entry", async ({ page }) => {
+  const violations = await watch(page);
+  const state = { lookup: { address: "192.0.2.52", found: false, answered: false }, lookups: [], jobs: [] };
+  await page.addInitScript(fakeEsp);
+  await page.clock.install();
+  await routes(page, state);
+  await page.route(/\/api\/jobs$/, r => {
+    const b = r.request().postDataJSON();
+    state.jobs.push(b);
+    return r.fulfill({ status: 201, json: { id: "j1", kind: b.kind, who: "admin", state: "running", created: new Date().toISOString() } });
+  });
+  await page.route(/\/api\/jobs\/j1\/events/, r => r.fulfill({ status: 200, contentType: "text/event-stream",
+    body: "id: 1\nevent: end\ndata: " + JSON.stringify({ id: "j1", kind: "settings-move", state: "done" }) + "\n\n" }));
+  await login(page);
+  const u = await prepare(page, "ws-s3-eth");
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…", { timeout: 20000 });
+  await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
+
+  // It answers, restarted since the install (the chip installed, by its MAC): the same node, moved from its old address.
+  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 2, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
+    board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1",
+    move: "192.0.2.51", next: "settings-move" } };
+  await page.clock.fastForward("00:05");
+  await expect(u.locator("#usb-arrived")).toHaveText("It's espdns-000052 at 192.0.2.52 — the same node, moved from 192.0.2.51. Add it there to move its entry.");
+  await expect(u.locator("#usb-arrived")).not.toContainText("Add it from + Add node on Nodes");
+  await u.getByRole("button", { name: "Add it now" }).click();
+  await expect(u).toBeHidden();
+
+  // + Add node, at the move step, with the button that runs the settings-move job.
+  const list = page.locator("#nqres");
+  await expect(list).toContainText("which settings.json lists at 192.0.2.51: add it to move its entry there");
+  await list.getByRole("button", { name: "Add node" }).click();
+  await expect.poll(() => state.jobs.length).toBeGreaterThan(0);
+  expect(state.jobs[0]).toEqual({ kind: "settings-move", params: { node: "192.0.2.52", from: "192.0.2.51" } });
+  await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });

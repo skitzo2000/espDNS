@@ -73,8 +73,9 @@ func newAdoptEnv(t *testing.T) *adoptEnv {
 			a.ConfirmWait = 5 * time.Second
 		}}
 	e.runner = jobs.New(e.dir, map[string]jobs.Kind{
-		"adopt":        func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.kind(raw) },
-		"settings-add": func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsAdd(raw) }})
+		"adopt":         func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.kind(raw) },
+		"settings-add":  func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsAdd(raw) },
+		"settings-move": func(raw json.RawMessage) (jobs.Func, error) { return e.adopt.settingsMove(raw) }})
 	e.runner.Logf = t.Logf
 	runJobs(t, e.runner)
 	return e

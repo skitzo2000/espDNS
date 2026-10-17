@@ -310,6 +310,7 @@ test("Install over USB: a Wi-Fi board's install says it asks for the Wi-Fi netwo
   const u = page.getByRole("dialog", { name: "Install a board over USB" });
   for (const [board, wifi] of [["xiao-s3-sense", true], ["ws-s3-eth", false]]) {
     await u.locator("#usb-board").selectOption(board);
+    await u.locator("#usb-name").fill("dns3");
     await u.locator("#usb-addr").fill("192.0.2.52/24");
     await u.locator("#usb-gw").fill("192.0.2.1");
     await u.locator("#usb-prepare").click();

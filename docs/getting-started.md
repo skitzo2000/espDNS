@@ -67,11 +67,11 @@ through it:
 2. **Make your keys.** Two clicks. Your nodes only take changes signed with your keys, so
    nobody else can touch them. Your browser downloads `recovery.pem`: save it somewhere
    safe, off this computer.
-3. **Add your first node.** Two steps. First install it: press **Install over USB**, pick
-   your board, give it its address and gateway, press **Prepare image**, plug it in over USB
-   and press **Install on the board over USB** ([installing over USB](#installing-over-usb)).
-   The controller fetches the firmware for you and checks its signature. Once the board
-   answers on your network, press **Add it now**, give it a name, and press **Add node**.
+3. **Add your first node.** Press **Install over USB**, pick your board, give it a name, its
+   address and gateway, press **Prepare image**, plug it in over USB and press **Install on
+   the board over USB** ([installing over USB](#installing-over-usb)). The controller
+   fetches the firmware for you and checks its signature. Once it's installed, plug the
+   board into your network and press **OK**: it's added to your nodes as soon as it answers.
    A node already on your network skips the install: press **+ Add node** and pick it.
    Installing erases the board's flash, not its microSD card. Installing a
    board again with new keys? At its first boot it deletes the old blocklist, allowed and
@@ -109,7 +109,12 @@ board. The panel then goes through the steps, one under the other:
 - **Wi-Fi**, on a board that runs on Wi-Fi: pick your network from the list, or pick
   **Another network…** and type its name, give the password and press **Join**. The network and password go to the board over
   USB, not through the controller. A board with its Ethernet add-on fitted doesn't ask.
-- **On your network.** The panel waits for the board at its address.
+- **On your network.** Plug the board into your network and press **OK**. Nodes shows it as
+  waiting until it answers, then the controller adds it by itself. On DHCP, its row says
+  the address it got and its MAC once it answers: reserve that address for that MAC in your
+  router, then press **Add it**. If adding it fails, its row says why, with **Retry**;
+  **Remove** takes it off the list. A node of yours installed again is waited for in the
+  panel instead, until it's back.
 
 **Board log**, under the steps, shows what the board prints. **Download log** saves it,
 and **Restart the board** restarts it.

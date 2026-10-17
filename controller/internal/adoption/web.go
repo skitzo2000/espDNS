@@ -25,6 +25,8 @@ type Web struct {
 	Address  string `json:"address,omitempty"`
 	Gateway  string `json:"gateway,omitempty"`
 	Reserved bool   `json:"reserved,omitempty"`
+	// NodeKey: the node key expected (a board waiting after its install over USB); "": any.
+	NodeKey string `json:"node_key,omitempty"`
 	// Static: the address as + Add node asks for it, never none (the config's): a fixed one
 	// (a.b.c.d/nn) with its gateway, always given (never the config's, which may be another
 	// network's), or dhcp only with Reserved (the router reserves its address for its MAC).
@@ -104,7 +106,7 @@ func (w Web) Request(dataDir, catalog string) (Request, error) {
 	if _, err := settings.Load(settings.Path(dataDir)); err != nil {
 		return r, err
 	}
-	r.Host, r.Node, r.Address, r.Gateway, r.Reserved = w.Node, w.NodeID, w.Address, w.Gateway, w.Reserved
+	r.Host, r.Node, r.Address, r.Gateway, r.Reserved, r.NodeKey = w.Node, w.NodeID, w.Address, w.Gateway, w.Reserved, w.NodeKey
 	r.Config = filepath.Join(configs.Path(dataDir), w.Config)
 	r.AddToSettings = w.AddToSettings
 	return r, nil

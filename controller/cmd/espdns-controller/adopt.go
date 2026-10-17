@@ -24,6 +24,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
+	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
@@ -568,6 +569,12 @@ func (p adoptKind) describe(n nodes.Node, all []nodes.Node, s settings.Settings,
 	}
 	for _, o := range all {
 		if o.Addr != n.Addr && o.ID != "" && strings.EqualFold(o.ID, n.ID) {
+			// The same node at a new address: the entry settings.json lists it at (n not listed
+			// itself, the old address silent) is a move, not a dead end -- view() marks it (Move/Next), so nothing
+			// refuses here. Any other same-ID node keeps the plain refusal.
+			if !an.Listed && !o.Online && slices.Contains(s.Nodes, o.Addr) {
+				continue
+			}
 			an.Refusals = append(an.Refusals, "another node the controller knows ("+o.Addr+") has the same ID")
 		}
 	}
@@ -782,6 +789,137 @@ func (p adoptKind) settingsAdd(raw json.RawMessage) (jobs.Func, error) {
 		run.Logf("added %s to settings.json: it counts as a peer in rollouts, and the controller's actions take it", np.Node)
 		return map[string]any{"node": np.Node, "added": added}, nil
 	}, nil
+}
+
+// settingsMove is the job kind "settings-move": a node of yours reinstalled at a new address,
+// its settings.json entry and its pin moved from the address it was listed at to the one it
+// answers on now. Nothing over the network proves a node is the one it says (its node key in
+// /status is public), so this is the logged-in user's click, and only while the old address
+// is silent, as a reinstall leaves it. The facts are re-checked at the click and again when
+// it runs: it answers at `node` as the ID the entry's node has, trusting this controller's
+// release key and reporting the node key recorded for that ID (catching an honest
+// mismatch); `from` is listed and silent; `node` is neither listed nor pinned to another
+// node. The entry moves in place (settings.MoveNode: the canary and out_of_service with it),
+// then the pin; a pin that fails puts the entry back.
+func (p adoptKind) settingsMove(raw json.RawMessage) (jobs.Func, error) {
+	var np struct {
+		Node string `json:"node"`
+		From string `json:"from"`
+	}
+	if err := decodeStrict(raw, &np); err != nil {
+		return nil, err
+	}
+	if np.Node == np.From {
+		return nil, fmt.Errorf("the address it moved to and from are the same (%s)", np.Node)
+	}
+	id, name := "", "" // the node's ID and name, as the last check found them
+	check := func() error {
+		s, err := settings.Load(settings.Path(p.dataDir))
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(s.Nodes, np.From) {
+			return fmt.Errorf("%s is not in settings.json (it moved already, or the entry is not there): nothing to move", np.From)
+		}
+		if slices.Contains(s.Nodes, np.Node) {
+			return fmt.Errorf("%s is in settings.json already: not moved", np.Node)
+		}
+		all := p.nodes()
+		i := slices.IndexFunc(all, func(n nodes.Node) bool { return n.Addr == np.Node })
+		if i < 0 {
+			return fmt.Errorf("%s is not a node the controller has found", np.Node)
+		}
+		st, ok := status(all[i])
+		if !ok {
+			return fmt.Errorf("%s: no /status read yet", np.Node)
+		}
+		// The entry's own node: it has to have the same ID (the ID the settings entry is a
+		// node of), or this would move one node's entry onto another.
+		j := slices.IndexFunc(all, func(n nodes.Node) bool { return n.Addr == np.From })
+		if j < 0 || all[j].ID == "" || !strings.EqualFold(all[j].ID, st.NodeID) {
+			return fmt.Errorf("%s says it is node %s, which is not the node settings.json lists at %s (same ID): not moved",
+				np.Node, st.NodeID, np.From)
+		}
+		name = st.NodeID
+		if st.Config != nil && st.Config.Name != "" {
+			name = st.Config.Name
+		}
+		if all[j].Online {
+			return fmt.Errorf("%s still answers at %s, so this isn't it moved", name, np.From)
+		}
+		k, err := p.signer()
+		if err != nil {
+			return err
+		}
+		if len(st.Keys) == 0 || !p.pusher(k, nil).Trusts(st) {
+			return fmt.Errorf("%s doesn't trust your release key: not moved", np.Node)
+		}
+		if pid, err := pins.Open(p.dataDir).Pinned(np.Node); err == nil && !strings.EqualFold(pid, st.NodeID) {
+			return fmt.Errorf("%s is pinned to node %s: not moved", np.Node, pid)
+		} else if err != nil && !errors.Is(err, pins.ErrNotPinned) {
+			return err
+		}
+		if why := p.nodeKeyRefusal(st); why != "" {
+			return fmt.Errorf("%s: %s", np.Node, why)
+		}
+		id = st.NodeID
+		return nil
+	}
+	if err := check(); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, run *jobs.Run) (any, error) {
+		if err := check(); err != nil {
+			return nil, err
+		}
+		// The old address read now, not only as the registry last saw it.
+		rctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+		_, err := p.client().Status(rctx, np.From)
+		cancel()
+		if err == nil {
+			return nil, fmt.Errorf("%s still answers at %s, so this isn't it moved", name, np.From)
+		}
+		path := settings.Path(p.dataDir)
+		moved, err := settings.MoveNode(path, np.From, np.Node)
+		if err != nil {
+			return nil, err
+		}
+		if !moved {
+			return nil, fmt.Errorf("%s is not in settings.json (it moved already): nothing to move", np.From)
+		}
+		replaced, err := pins.Open(p.dataDir).Pin(id, np.Node)
+		if err != nil {
+			if _, berr := settings.MoveNode(path, np.Node, np.From); berr != nil {
+				return nil, fmt.Errorf("node %s not pinned to %s (%v), and its entry not put back at %s: %w", id, np.Node, err, np.From, berr)
+			}
+			return nil, fmt.Errorf("node %s not pinned to %s, so not moved: %w", id, np.Node, err)
+		}
+		run.Logf("moved %s to %s in settings.json: the node keeps its name and config, and the controller's actions take it there", np.From, np.Node)
+		run.Logf("node %s pinned to %s now", id, np.Node)
+		if replaced != "" {
+			run.Logf("(node %s, pinned there before, is pinned to no address now)", replaced)
+		}
+		return map[string]any{"node": np.Node, "from": np.From, "moved": moved}, nil
+	}, nil
+}
+
+// nodeKeyRefusal is why the node whose /status is st reports another node key than the one
+// recorded (pinned) for its ID: "" when it reports that key, or when none is recorded
+// (firmware from before the node key). /status is public, so a match proves nothing: it
+// only catches an honest mismatch, such as a board erased and installed again, which makes
+// a new node key.
+func (p adoptKind) nodeKeyRefusal(st release.NodeStatus) string {
+	key, err := pins.Open(p.dataDir).NodeKey(st.NodeID)
+	switch {
+	case errors.Is(err, pins.ErrNotPinned):
+		return ""
+	case err != nil:
+		return err.Error()
+	case key != "" && st.NodeKey != key:
+		return "it reports a different node key than the one this controller recorded for node " + st.NodeID +
+			", so it isn't moved. To bring it back, install it with Reinstall over USB from its node page"
+	}
+	return ""
 }
 
 // decodeStrict reads a job's params, unknown fields refused.

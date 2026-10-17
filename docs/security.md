@@ -209,6 +209,12 @@ What they can do today:
   ([The Wi-Fi password](#the-wi-fi-password)), so it can't be read.
 - Change forwarded answers on the path. Queries to your forwarders are plain DNS (no DNS
   over TLS), and the node doesn't validate DNSSEC itself.
+- Claim to be a node of yours that moved. **+ Add node** offers to move a node's entry and
+  pin to a new address when a device there answers with that node's ID. Nothing over the
+  network proves a node is the one it claims: its ID and node key in `/status` are public,
+  and there is no proof of possession yet. The move happens only when you click **Add
+  node**, and only while the node's old address is silent, so check it is your board first.
+  A board erased and installed again makes a new node key, so its move is refused for now.
 - Copy your secondary zones. Your primary allows zone transfers by network, with no
   TSIG, so any device on an allowed network (or one that takes an address there, for
   example with ARP spoofing) can copy those zones.

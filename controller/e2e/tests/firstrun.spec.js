@@ -119,6 +119,7 @@ async function fake(page, done = []) {
   });
   await page.route(/\/api\/nodes$/, r => json(r, state.nodes));
   await page.route(/\/api\/nodes\/found$/, r => json(r, { nodes: state.found }));
+  await page.route(/\/api\/nodes\/waiting$/, r => json(r, { nodes: [] }));
   await page.route(/\/api\/boards$/, r => json(r, [{ board: { name: "p4-ip101", title: "ESP32-P4 with Ethernet" } }]));
   // Add your zone: the APIs + Add zone uses (addzone.js), as zones.spec.js's fake answers
   // them: the lookup (no primary set up, so nothing is asked), a hosted zone's template, the
