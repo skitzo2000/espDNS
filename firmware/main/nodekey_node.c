@@ -75,5 +75,7 @@ void nodekey_node_load(void)
         ESP_LOGE(TAG, "no node key: a config with a Wi-Fi password is refused");
         return;
     }
+    /* The public half only: Install over USB reads it here, from the console. */
+    ESP_LOGI(TAG, "node key %s", s_pub);
     cfg_set_unseal(unseal);
 }
