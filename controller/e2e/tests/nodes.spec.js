@@ -57,11 +57,11 @@ async function fake(page) {
   // The boards installed over USB and waiting (state.waiting); Retry and Remove in state.posts.
   state.waiting = [];
   await page.route(/\/api\/nodes\/waiting$/, r => json(r, { nodes: state.waiting }));
-  await page.route(/\/api\/nodes\/waiting\/[^/]+\/(retry|delete)$/, r => {
+  await page.route(/\/api\/nodes\/waiting\/[^/]+\/(retry|delete|add)$/, r => {
     const parts = new URL(r.request().url()).pathname.split("/"), id = decodeURIComponent(parts.at(-2));
     state.posts.push([parts.at(-1), id]);
     if (parts.at(-1) === "delete") state.waiting = state.waiting.filter(w => w.id !== id);
-    else state.waiting = state.waiting.map(w => (w.id === id ? { ...w, state: "waiting", error: "" } : w));
+    else state.waiting = state.waiting.map(w => (w.id === id ? { ...w, state: parts.at(-1) === "add" ? "adding" : "waiting", error: "" } : w));
     return json(r, { ok: true });
   });
   await page.route(/\/api\/nodes\/lookup$/, r => {
@@ -222,6 +222,14 @@ test("Nodes: a board waiting to be added, adding, failed with Retry, and Remove"
   await expect(dns6.locator(".flag")).toHaveText("Waiting for it: plug it into your network");
   expect(state.posts).toContainEqual(["retry", "aa:bb:cc:00:00:60"]);
 
+  // On DHCP, found: the address to reserve for its interface's MAC, then Add it.
+  state.waiting[1] = { ...state.waiting[1], address: "dhcp", state: "found", found: "192.0.2.61", mac: "aa:bb:cc:00:00:61" };
+  await page.reload();
+  await expect(dns6.locator(".flag")).toHaveText("Found at 192.0.2.61. Reserve that address for MAC aa:bb:cc:00:00:61 in your router, then add it.");
+  await dns6.getByRole("button", { name: "Add it" }).click();
+  await expect(dns6.locator(".flag")).toHaveText("Adding it…");
+  expect(state.posts).toContainEqual(["add", "aa:bb:cc:00:00:60"]);
+
   // Remove asks first; Cancel keeps it.
   await dns5.getByRole("button", { name: "Remove" }).click();
   await expect(dns5).toContainText("Remove dns5? Its config file stays.");
@@ -232,7 +240,11 @@ test("Nodes: a board waiting to be added, adding, failed with Retry, and Remove"
   await dns5.getByRole("button", { name: "Remove" }).click();
   await expect(dns5).toHaveCount(0);
   expect(state.posts).toContainEqual(["delete", "aa:bb:cc:00:00:37"]);
-  // No longer waiting: the found node shows again.
+  // No longer waiting: the found node shows again; as it does beside a failed one.
+  await expect(page.locator("#nodes")).toContainText("New device found");
+  state.waiting = [{ id: "aa:bb:cc:00:00:37", name: "dns5", address: "dhcp", state: "failed", error: "no" }];
+  await page.reload();
+  await expect(page.locator('#nodes [data-waiting="aa:bb:cc:00:00:37"]')).toContainText("Couldn't add it: no");
   await expect(page.locator("#nodes")).toContainText("New device found");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);

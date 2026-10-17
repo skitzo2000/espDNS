@@ -109,11 +109,12 @@ board. The panel then goes through the steps, one under the other:
 - **Wi-Fi**, on a board that runs on Wi-Fi: pick your network from the list, or pick
   **Another network…** and type its name, give the password and press **Join**. The network and password go to the board over
   USB, not through the controller. A board with its Ethernet add-on fitted doesn't ask.
-- **On your network.** Plug the board into your network and press **OK**. On DHCP, reserve
-  an address for the MAC it shows in your router first. Nodes shows it as waiting until it
-  answers, then the controller adds it by itself. If adding it fails, its row says why, with
-  **Retry**; **Remove** takes it off the list. A node of yours installed again is waited
-  for in the panel instead, until it's back.
+- **On your network.** Plug the board into your network and press **OK**. Nodes shows it as
+  waiting until it answers, then the controller adds it by itself. On DHCP, its row says
+  the address it got and its MAC once it answers: reserve that address for that MAC in your
+  router, then press **Add it**. If adding it fails, its row says why, with **Retry**;
+  **Remove** takes it off the list. A node of yours installed again is waited for in the
+  panel instead, until it's back.
 
 **Board log**, under the steps, shows what the board prints. **Download log** saves it,
 and **Restart the board** restarts it.

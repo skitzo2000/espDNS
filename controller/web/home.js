@@ -93,8 +93,8 @@ $("copy-dns").addEventListener("click", async () => {
     : `Couldn't copy: your DNS servers are ${t}`);
 });
 
-// The nodes found, but not one waiting to be added: that has its own row.
-const foundNodes = () => arr(data.found).filter(f => !arr(data.waiting).some(w => str(w.id) === str(f.id).toLowerCase()));
+// The nodes found, but not one waiting to be added (not failed): that has its own row.
+const foundNodes = () => arr(data.found).filter(f => !arr(data.waiting).some(w => w.state !== "failed" && str(w.id) === str(f.id).toLowerCase()));
 
 const adder = addNode($("add-node"), {
   found: foundNodes,
@@ -105,7 +105,7 @@ const adder = addNode($("add-node"), {
   imageVersion: image => str(obj(obj(data.updates).builds && arr(data.updates.builds).find(b => b.source === `images/${image}` && !b.error)).version),
   done: () => { readFound(); refreshChanges(); },
 });
-$("install-usb").addEventListener("click", () => openUSB({ waiting: readFound }));
+$("install-usb").addEventListener("click", () => openUSB({ waiting: readFound, found: adder.next }));
 
 // ---- the update -------------------------------------------------------------------------
 
@@ -192,12 +192,14 @@ function foundRow(f) {
     h("div", {}));
 }
 
-// A board installed over USB, waiting to be added: a light-blue row with what it waits for,
-// "Adding it…" while the controller adds it, or why that failed with Retry. Remove (asked
-// first) takes it off the list; its config file stays.
+// A board installed over USB, waiting to be added: a light-blue row with what it waits for;
+// on DHCP, once found, the address to reserve for its MAC with Add it; "Adding it…" while
+// the controller adds it, or why that failed with Retry. Remove (asked first) takes it off
+// the list; its config file stays.
 function waitingRow(w) {
-  const failed = w.state === "failed";
-  const text = failed ? `Couldn't add it: ${str(w.error)}` : w.state === "adding" ? "Adding it…" : "Waiting for it: plug it into your network";
+  const failed = w.state === "failed", found = w.state === "found";
+  const text = failed ? `Couldn't add it: ${str(w.error)}` : w.state === "adding" ? "Adding it…"
+    : found ? `Found at ${str(w.found)}. Reserve that address for MAC ${str(w.mac)} in your router, then add it.` : "Waiting for it: plug it into your network";
   const act = (label, path, cls = "btn small") => h("button", { class: cls, type: "button", onclick: async () => {
     try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/${path}`); } catch (e) { toast(e.message); }
     data.removing = "";
@@ -206,7 +208,7 @@ function waitingRow(w) {
   const btns = data.removing === w.id
     ? [h("span", { class: "small" }, `Remove ${str(w.name)}? Its config file stays.`), act("Remove", "delete", "btn small primary"),
       h("button", { class: "btn small link", type: "button", onclick: () => { data.removing = ""; renderRows(); } }, "Cancel")]
-    : [failed ? act("Retry", "retry", "btn small primary") : null, w.state === "adding" ? null
+    : [failed ? act("Retry", "retry", "btn small primary") : found ? act("Add it", "add", "btn small primary") : null, w.state === "adding" ? null
       : h("button", { class: "btn small link", type: "button", onclick: () => { data.removing = w.id; renderRows(); } }, "Remove")];
   return h("div", { class: `r ${failed ? "r-bad" : "r-new"}`, "data-waiting": str(w.id) },
     h("div", {}, h("span", { class: "name", title: boardName(w.board) || null }, str(w.name))),

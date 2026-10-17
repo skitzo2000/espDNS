@@ -15,10 +15,12 @@ version may change anything. Write each change under Unreleased as it merges;
 
 - Controller: a new board installed with **Install over USB** is added to your nodes by
   itself. The panel asks for its name, then, once installed, says to plug it into your
-  network (on DHCP, to reserve its address for the MAC shown), with **OK**. Nodes shows it
-  as waiting at once; when it answers as the board installed (its chip MAC, your release
-  key, its node key), the controller adopts it and adds it, with no **+ Add node** step. A
-  failure is said in its row, with **Retry**; **Remove** takes it off the list.
+  network, with **OK**. Nodes shows it as waiting at once; when it answers as the board
+  installed (its chip MAC, with the node key read from its console over USB, or at its own
+  address), the controller adopts it and adds it, as you, with no **+ Add node** step. On
+  DHCP its row says the address it got and its MAC, to reserve in your router, then **Add
+  it**. A failure is said in its row, with **Retry**; **Remove** takes it off the list. The
+  adoption refuses a node answering with another node key than the one expected.
 - Firmware: a node logs its public node key on its console at start, for Install over USB
   to read.
 

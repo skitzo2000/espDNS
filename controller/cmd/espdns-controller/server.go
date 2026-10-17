@@ -134,7 +134,7 @@ func (s *server) handler() (http.Handler, []string) {
 	setupServer{dataDir: s.dataDir, auth: s.auth, key: s.key, changes: s.changes, listed: s.listed, saveIf: s.saveSettings}.routes(mux)
 	s.push.routes(mux)
 	s.adopt.routes(mux)
-	addNodeServer{adopt: s.adopt, lookup: s.lookup}.routes(mux)
+	addNodeServer{adopt: s.adopt, lookup: s.lookup, wait: waiter{adopt: s.adopt, runner: s.runner, lookup: s.lookup}}.routes(mux)
 	backupServer{dataDir: s.dataDir, auth: s.auth}.routes(mux)
 	if s.observe == nil {
 		s.observe = observe.New(&fleet.Client{})

@@ -412,7 +412,7 @@ function keyBody() {
 
 // One Install over USB and one + Add node for both steps, moved into the step open.
 const nodeBox = h("div", { class: "setup-box" });
-const usbBtn = h("button", { class: "btn", type: "button", id: "setup-usb", onclick: () => openUSB({ waiting: readFound }) }, "Install over USB");
+const usbBtn = h("button", { class: "btn", type: "button", id: "setup-usb", onclick: () => openUSB({ waiting: readFound, found: adder && adder.next }) }, "Install over USB");
 let adder = null;
 function nodeBody(step) {
   const ns = listed();
@@ -429,15 +429,18 @@ function nodeBody(step) {
   if (step === "second_node") {
     out.push(h("p", { class: "small" }, `${ns[0] ? `${nodeText(ns[0])} is your first node. ` : ""}Add the second the same way; wired is best.`));
   }
-  // The boards installed and waiting: what each waits for, or why adding it failed.
+  // The boards installed and waiting: what each waits for (on DHCP, once found, the address
+  // to reserve, with Add it), or why adding it failed, with Retry; Remove takes it off.
+  const act = (w, label, path) => h("button", { class: "btn small", type: "button", onclick: async () => {
+    try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/${path}`); } catch (e) { toast(e.message); }
+    readFound();
+  } }, label);
   for (const w of data.waiting) {
-    const failed = w.state === "failed";
-    out.push(h("p", { class: failed ? "small bad" : "small", "data-waiting": str(w.id) }, failed ? `Couldn't add ${str(w.name)}: ${str(w.error)} `
-      : w.state === "adding" ? `Adding ${str(w.name)}…` : `${str(w.name)} is installed: it's added as soon as it answers on your network.`,
-    failed ? h("button", { class: "btn small", type: "button", onclick: async () => {
-      try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/retry`); } catch (e) { toast(e.message); }
-      readFound();
-    } }, "Retry") : null));
+    const failed = w.state === "failed", found = w.state === "found", name = str(w.name);
+    out.push(h("p", { class: failed ? "small bad" : "small", "data-waiting": str(w.id) }, failed ? `Couldn't add ${name}: ${str(w.error)} `
+      : w.state === "adding" ? `Adding ${name}…` : found ? `${name} is at ${str(w.found)}. Reserve that address for MAC ${str(w.mac)} in your router, then add it. `
+        : `${name} is installed: it's added as soon as it answers on your network. `,
+    failed ? act(w, "Retry", "retry") : found ? act(w, "Add it", "add") : null, w.state === "adding" ? null : act(w, "Remove", "delete")));
   }
   if (arr(data.found).length) out.push(h("p", { class: "hint" }, `${arr(data.found).length === 1 ? "One node is" : `${arr(data.found).length} nodes are`} on your network and not added yet.`));
   out.push(h("div", { class: "row" }, usbBtn), nodeBox);
@@ -544,8 +547,12 @@ async function readFound() {
   try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); } catch { /* kept */ }
   const had = data.waiting.length;
   try { data.waiting = arr(obj(await getJSON("api/nodes/waiting")).nodes); } catch { /* kept */ }
-  // One waiting is added: on to the next step.
-  if (data.waiting.length < had) { await readSetup(); openNext(); return; }
+  // One waiting gone: on to the next step if it was added (the step done), not removed.
+  if (data.waiting.length < had) {
+    const was = current();
+    await readSetup();
+    if (current() !== was) { openNext(); return; }
+  }
   render();
 }
 

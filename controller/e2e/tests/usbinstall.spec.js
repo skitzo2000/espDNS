@@ -301,7 +301,7 @@ test("Install over USB: while it writes, the panel won't close, and says why in 
   expect(await violations()).toEqual([]);
 });
 
-test("Install over USB: a Wi-Fi board asks for its network, joins it; on DHCP, OK says to reserve its address", async ({ page }) => {
+test("Install over USB: a Wi-Fi board asks for its network, joins it; on DHCP, OK says Nodes shows it to reserve its address", async ({ page }) => {
   const { u, state, violations } = await start(page, { board: "xiao-s3-sense", address: "dhcp", fake: { wifi: true } });
   await expect(u.locator("#usb-wifi")).toBeVisible();
   await u.locator("#usb-go").click();
@@ -328,8 +328,7 @@ test("Install over USB: a Wi-Fi board asks for its network, joins it; on DHCP, O
   await expect(u.locator("#usb-wifi-at")).toHaveText("On your Wi-Fi at 192.0.2.52");
   // The network and the password, as the firmware's RPC reads them.
   expect((await esp(page)).join).toBe("\x0bexample-net\x0ce2e password");
-  await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network: it's added to your nodes as soon as it answers.");
-  await expect(u.locator("#usb-reserve")).toHaveText("Reserve an address for MAC aa:bb:cc:00:00:52 in your router.");
+  await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network: Nodes shows it once it answers, to reserve its address and add it.");
   await expect(u.locator("#usb-after")).not.toContainText("cable");
   await expect(step(u, "net")).not.toContainText("cable");
   await u.getByRole("button", { name: "OK" }).click();
@@ -381,7 +380,35 @@ test("Install over USB: a Wi-Fi board that never answers Improv nor logs: it use
   await expect(step(u, "wifi")).toHaveClass("now", { timeout: 20000 });
   await expect(u.locator("#usb-nolog")).toHaveText("If it shows nothing, press RESET or unplug it and plug it in again.", { timeout: 15000 });
   await expect(step(u, "wifi")).toContainText("It didn't ask for Wi-Fi: it uses its Ethernet add-on.", { timeout: 20000 });
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.");
+  // No node key line either: restarted once to read it, then OK all the same.
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
   await expect(step(u, "net")).toContainText("Plug its network cable in.");
+  expect(await violations()).toEqual([]);
+});
+
+// The node key line missed at the first boot (said before the console was open again): the
+// board is restarted once through its console, and the key it says then goes with OK.
+test("Install over USB: a node key line missed is read after one restart", async ({ page }) => {
+  const { u, state, violations } = await start(page, { fake: { keyLate: true } });
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-ok")).toBeVisible({ timeout: 25000 });
+  const rows = await u.locator("#usb-log-rows > div").allTextContents();
+  expect(rows).toContain("--- restarting the board to read its node key ---");
+  expect(rows.filter(t => t.includes("espDNS 0.0.5 starting"))).toHaveLength(2);
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(state.waiting[0].node_key).toBe("BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=");
+  expect(await violations()).toEqual([]);
+});
+
+// A chip MAC not read: no OK (the controller couldn't tell the board), the panel waits for it
+// as + Add node's does.
+test("Install over USB: a board whose chip MAC isn't read is waited for in the panel", async ({ page }) => {
+  const { u, state, violations } = await start(page, { fake: { mac: "00:00:00:00:00:00" } });
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…", { timeout: 20000 });
+  await expect(u.locator("#usb-ok")).toHaveCount(0);
+  await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
+  expect(state.waiting).toEqual([]);
   expect(await violations()).toEqual([]);
 });

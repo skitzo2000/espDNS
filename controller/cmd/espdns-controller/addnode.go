@@ -33,6 +33,7 @@ import (
 //	POST /api/nodes/lookup  {"address": "192.0.2.10"}: the node at that address, read there only
 //	GET  /api/nodes/waiting the boards installed over USB, waiting to be added (waiting.go)
 //	POST /api/nodes/waiting {"name", "board", "id", "address", "gateway", "node_key"}: one more
+//	POST /api/nodes/waiting/{id}/add     one on DHCP found, its address reserved: added
 //	POST /api/nodes/waiting/{id}/retry   a failed one waited for again
 //	POST /api/nodes/waiting/{id}/delete  one removed (its config file stays)
 //
@@ -53,6 +54,7 @@ type nodeLookup func(ctx context.Context, addr string) (nodes.Node, error)
 type addNodeServer struct {
 	adopt  adoptKind
 	lookup nodeLookup
+	wait   waiter // Add it, for a board waiting on DHCP
 }
 
 // Next says what adds a found node.
@@ -89,6 +91,7 @@ func (a addNodeServer) routes(mux *routes) {
 	mux.HandleFunc("POST /api/nodes/lookup", needLogin("adding a node needs", a.lookupNode))
 	mux.HandleFunc("GET /api/nodes/waiting", needLogin("adding a node needs", a.waiting))
 	mux.HandleFunc("POST /api/nodes/waiting", needLogin("adding a node needs", a.addWaiting))
+	mux.HandleFunc("POST /api/nodes/waiting/{id}/add", needLogin("adding a node needs", a.addFound))
 	mux.HandleFunc("POST /api/nodes/waiting/{id}/retry", needLogin("adding a node needs", a.retryWaiting))
 	mux.HandleFunc("POST /api/nodes/waiting/{id}/delete", needLogin("adding a node needs", a.deleteWaiting))
 }
@@ -278,17 +281,30 @@ func (a addNodeServer) addWaiting(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusConflict, fmt.Errorf("node %s was added before: add it from + Add node", e.ID))
 		return
 	}
+	host := strings.Split(e.Address, "/")[0]
+	if e.Address != "dhcp" && listed(s, host) {
+		httpErr(w, http.StatusConflict, fmt.Errorf("%s is one of your nodes' addresses: give this board another", host))
+		return
+	}
 	if err := a.waitingConfig(e, net, s, auth.User(r.Context())); err != nil {
 		httpErr(w, http.StatusConflict, err)
 		return
 	}
+	e.User, e.Found, e.MAC = auth.User(r.Context()), "", ""
 	e.Since, e.State, e.Error = time.Now().UTC(), waitingWait, ""
 	err = changeWaiting(a.adopt.dataDir, func(ws []waitingNode) ([]waitingNode, error) {
 		if slices.ContainsFunc(ws, func(x waitingNode) bool { return x.Name == e.Name && x.ID != e.ID }) {
 			return nil, errNameInUse
 		}
+		if slices.ContainsFunc(ws, func(x waitingNode) bool { return x.Address != "dhcp" && x.Address == e.Address && x.ID != e.ID }) {
+			return nil, errAddressInUse
+		}
 		return append(slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), e), nil
 	})
+	if errors.Is(err, errAddressInUse) {
+		httpErr(w, http.StatusConflict, fmt.Errorf("%s is another board's, waiting to be added: give this board another", host))
+		return
+	}
 	if errors.Is(err, errNameInUse) {
 		httpErr(w, http.StatusConflict, fmt.Errorf("%w by another board waiting: choose another name", err))
 		return
@@ -300,7 +316,10 @@ func (a addNodeServer) addWaiting(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, e)
 }
 
-var errNameInUse = errors.New("That name is in use")
+var (
+	errNameInUse    = errors.New("That name is in use")
+	errAddressInUse = errors.New("address in use")
+)
 
 // waitingConfig writes configs/<name>.json for e, unless it is there with that network.
 func (a addNodeServer) waitingConfig(e waitingNode, net nodecfg.Network, s settings.Settings, user string) error {
@@ -328,9 +347,21 @@ func (a addNodeServer) waitingConfig(e waitingNode, net nodecfg.Network, s setti
 	return nil
 }
 
+func (a addNodeServer) addFound(w http.ResponseWriter, r *http.Request) {
+	err := a.wait.addFound(r.PathValue("id"), auth.User(r.Context()))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		httpErr(w, http.StatusNotFound, fmt.Errorf("no board %s is waiting", r.PathValue("id")))
+	case err != nil:
+		httpErr(w, http.StatusConflict, err)
+	default:
+		writeJSON(w, map[string]any{"ok": true})
+	}
+}
+
 func (a addNodeServer) retryWaiting(w http.ResponseWriter, r *http.Request) {
 	a.changeOne(w, r, func(ws []waitingNode, i int) []waitingNode {
-		ws[i].State, ws[i].Error = waitingWait, ""
+		ws[i].State, ws[i].Error, ws[i].Found, ws[i].MAC = waitingWait, "", "", ""
 		return ws
 	})
 }

@@ -21,9 +21,10 @@
 // the flash written in .flash (offset -> byte), each setSignals call in .signals with .after,
 // the number of commands before it, and the Wi-Fi join's data (as the firmware's RPC reads
 // it) in .join; options.app starts it in the app; options.mac is its chip MAC (an ESP32-S3's
-// eFuse words); window.__esp.print(lines) prints more console lines in the app. As a real port, it refuses to open while
+// eFuse words); options.keyLate leaves the node key line out of its first boot's log;
+// window.__esp.print(lines) prints more console lines in the app. As a real port, it refuses to open while
 // open (InvalidStateError) and to close while a stream is locked.
-function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false,
+function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false, keyLate = false,
   bootLog = ["ESP-ROM:esp32s3-20210327", "rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)",
     "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m", "\x1b[0;33mW (342) net: no link yet\x1b[0m",
     "\x1b[0;32mI (345) nodekey: node key BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\x1b[0m", "\x1b[0;32mI (350) improv: listening on USB serial\x1b[0m"] } = {}) {
@@ -122,7 +123,14 @@ function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = In
       rpc(d[0], d.slice(2, 2 + d[1]));
     }
   };
-  const boot = () => { if (!port.readable || esp.mode !== "app") return; booted = true; out(enc.encode(bootLog.map(l => `${l}\r\n`).join(""))); };
+  // keyLate: its first boot's node key line is missed (said before the console was read).
+  let boots = 0;
+  const boot = () => {
+    if (!port.readable || esp.mode !== "app") return;
+    booted = true;
+    const lines = keyLate && !boots++ ? bootLog.filter(l => !l.includes("node key")) : bootLog;
+    out(enc.encode(lines.map(l => `${l}\r\n`).join("")));
+  };
   esp.print = lines => { if (port.readable && esp.mode === "app") out(enc.encode(lines.map(l => `${l}\r\n`).join(""))); };
 
   // The host's bytes: in the bootloader, SLIP frames, one command at a time; in the app,

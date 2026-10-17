@@ -8,9 +8,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/configs"
 	"github.com/skitzo2000/espdns/controller/internal/fakenode"
+	"github.com/skitzo2000/espdns/controller/internal/jobs"
+	"github.com/skitzo2000/espdns/controller/internal/pins"
 	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
@@ -101,11 +104,19 @@ func TestWaitingAPI(t *testing.T) {
 	if code, body := e.postWaiting("/api/nodes/waiting", with("id", "02:00:00:00:00:ab")); code != 409 || !strings.Contains(body, "That name is in use") {
 		t.Fatal(code, body)
 	}
+	// An address one of your nodes has, or another board waiting: refused.
+	if code, body := e.postWaiting("/api/nodes/waiting", with("address", "203.0.113.51/24")); code != 409 || !strings.Contains(body, "one of your nodes' addresses") {
+		t.Fatal(code, body)
+	}
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"name": "dns7", "id": "02:00:00:00:00:cc", "address": "203.0.113.80/24",
+		"gateway": "203.0.113.1"}); code != 409 || !strings.Contains(body, "another board's, waiting") {
+		t.Fatal(code, body)
+	}
 	// DHCP: no gateway.
 	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"name": "dns4", "id": "02:00:00:00:00:bb", "address": "dhcp"}); code != 200 {
 		t.Fatal(code, body)
 	}
-	setWaiting(e.dir, "02:00:00:00:00:aa", waitingFailed, "it broke")
+	failWaiting(e.dir, "02:00:00:00:00:aa", "it broke")
 	if code, body := e.postWaiting("/api/nodes/waiting/02:00:00:00:00:aa/retry", nil); code != 200 {
 		t.Fatal(code, body)
 	}
@@ -126,9 +137,11 @@ func TestWaitingAPI(t *testing.T) {
 	}
 }
 
-// The watcher: a board waiting is added once a node answers as it (its ID, your release key,
-// its node key), by the adopt jobs, into settings.json, and leaves the list. Another ID at
-// the address is not it; another release key or node key is refused, and stays failed.
+// The watcher: a board on a fixed address is added once a node answers as it, by the adopt
+// jobs, as the user who installed it, into settings.json, and leaves the list. With its node
+// key it is matched wherever it is found, only with that key; without one, only at its own
+// address (an mDNS answer elsewhere is anyone's). Another release key fails it; a failed
+// adoption stays.
 func TestWaitingAdds(t *testing.T) {
 	e := newAddNodeEnv(t)
 	other := fakenode.New("other", [6]byte{2, 0, 0, 0, 0, 0x73}, "esp32p4-rev1", "p4-ip101", release.PublicRaw(newTestKey(t)))
@@ -143,7 +156,8 @@ func TestWaitingAdds(t *testing.T) {
 	}
 	add("wrong-id", "02:00:00:00:00:99", "203.0.113.70/24", "")       // e.typed is there, as another ID
 	add("other-key", other.ID(), "203.0.113.73/24", "")               // trusts another release key
-	add("bad-key", e.typed.ID(), "203.0.113.70/24", e.node.NodeKey()) // another node key
+	add("bad-key", e.typed.ID(), "203.0.113.71/24", e.node.NodeKey()) // its ID, another node key
+	add("no-key-elsewhere", e.node.ID(), "203.0.113.61/24", "")       // found over mDNS at .52, no key: not it
 	e.waiter().once(context.Background())
 	byName := func() map[string]waitingNode {
 		m := map[string]waitingNode{}
@@ -154,24 +168,31 @@ func TestWaitingAdds(t *testing.T) {
 	}
 	m := byName()
 	if m["wrong-id"].State != waitingWait || m["other-key"].State != waitingFailed || !strings.Contains(m["other-key"].Error, "release key") ||
-		m["bad-key"].State != waitingFailed || !strings.Contains(m["bad-key"].Error, "node key") {
+		m["bad-key"].State != waitingWait || m["no-key-elsewhere"].State != waitingWait {
 		t.Fatalf("%+v", m)
 	}
-	for _, n := range []*fakenode.Node{e.typed, other} {
+	for _, n := range []*fakenode.Node{e.typed, other, e.node} {
 		if slices.Contains(n.Events(), "push config") {
 			t.Fatal(n.ID(), "was changed")
 		}
 	}
 	// A failed adoption stays, with its error: the address is the node in service's.
-	e.postWaiting("/api/nodes/waiting/"+e.typed.ID()+"/delete", nil)
-	add("taken", e.node.ID(), "203.0.113.51/24", e.node.NodeKey())
+	for _, id := range []string{e.typed.ID(), e.node.ID()} {
+		e.postWaiting("/api/nodes/waiting/"+id+"/delete", nil)
+	}
+	changeWaiting(e.dir, func(ws []waitingNode) ([]waitingNode, error) {
+		return append(ws, waitingNode{ID: e.node.ID(), Name: "n2", Address: "203.0.113.51/24", Gateway: "203.0.113.1", NodeKey: e.node.NodeKey(),
+			State: waitingWait}), nil
+	})
 	e.waiter().once(context.Background())
-	if w := byName()["taken"]; w.State != waitingFailed || w.Error == "" {
+	if w := byName()["n2"]; w.State != waitingFailed || w.Error == "" {
 		t.Fatalf("%+v", w)
 	}
-	// The board installed: added, in settings.json, and no longer waiting.
+	// The board installed, with its node key, found where mDNS has it: added, as its user, in
+	// settings.json, and no longer waiting.
 	e.postWaiting("/api/nodes/waiting/"+e.node.ID()+"/delete", nil)
 	add("dns2b", e.node.ID(), "203.0.113.60/24", e.node.NodeKey())
+	setWaiting(e.dir, e.node.ID(), func(x *waitingNode) { x.User = "alice" })
 	e.waiter().once(context.Background())
 	if w, ok := byName()["dns2b"]; ok {
 		t.Fatalf("still waiting: %+v", w)
@@ -182,5 +203,97 @@ func TestWaitingAdds(t *testing.T) {
 	}
 	if pr, _ := configs.LoadPushed(e.dir, e.node.ID()); pr == nil || pr.File != "dns2b.json" {
 		t.Fatalf("%+v", pr)
+	}
+	for _, j := range e.runner.List() {
+		if j.Kind == "adopt" && j.State == jobs.Done && j.Who != "alice" {
+			t.Fatalf("%+v", j)
+		}
+	}
+}
+
+// Without a node key, a board on a fixed address is added once it answers there, as itself.
+func TestWaitingNoKeyAtItsAddress(t *testing.T) {
+	e := newAddNodeEnv(t)
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"name": "typed", "id": e.typed.ID(), "address": "203.0.113.70/24",
+		"gateway": "203.0.113.1"}); code != 200 {
+		t.Fatal(code, body)
+	}
+	e.waiter().once(context.Background())
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Contains(s.Nodes, "203.0.113.70") {
+		t.Fatal(s.Nodes)
+	}
+}
+
+// On DHCP a board is only said found (its address, its interface's MAC); Add it adopts it,
+// reserved. Without a node key, as mDNS names it; never automatically.
+func TestWaitingDHCP(t *testing.T) {
+	e := newAddNodeEnv(t)
+	if code, body := e.postWaiting("/api/nodes/waiting", map[string]any{"name": "dns2c", "id": e.node.ID(), "address": "dhcp", "node_key": e.node.NodeKey()}); code != 200 {
+		t.Fatal(code, body)
+	}
+	w := e.waiter()
+	if err := w.addFound(e.node.ID(), "admin"); err == nil || !strings.Contains(err.Error(), "isn't found") {
+		t.Fatal(err)
+	}
+	w.once(context.Background())
+	ws := e.waitingList()
+	if len(ws) != 1 || ws[0].State != waitingFound || ws[0].Found != "203.0.113.52" || ws[0].MAC == "" || slices.Contains(e.node.Events(), "push config") {
+		t.Fatalf("%+v", ws)
+	}
+	if err := w.addFound(e.node.ID(), "admin"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2000 {
+		if len(e.waitingList()) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if s, _ := settings.Load(settings.Path(e.dir)); !slices.Contains(s.Nodes, "203.0.113.52") {
+		t.Fatal(s.Nodes)
+	}
+}
+
+// One in settings.json or adopted meanwhile leaves the list, even one being added when the
+// controller stopped: not adopted again, no failed row left.
+func TestWaitingAddedMeanwhile(t *testing.T) {
+	e := newAddNodeEnv(t)
+	changeWaiting(e.dir, func(ws []waitingNode) ([]waitingNode, error) {
+		return append(ws, waitingNode{ID: e.peer.ID(), Name: "dns1", Address: "203.0.113.51/24", Gateway: "203.0.113.1", State: waitingAdding},
+			waitingNode{ID: "02:00:00:00:00:44", Name: "pinned", Address: "203.0.113.44/24", Gateway: "203.0.113.1", State: waitingFailed, Error: "x"}), nil
+	})
+	if _, err := pins.Open(e.dir).Pin("02:00:00:00:00:44", "203.0.113.44"); err != nil {
+		t.Fatal(err)
+	}
+	w := e.waiter()
+	w.restart()
+	if ws := e.waitingList(); ws[0].State != waitingWait {
+		t.Fatalf("%+v", ws)
+	}
+	w.once(context.Background())
+	if ws := e.waitingList(); len(ws) != 0 {
+		t.Fatalf("%+v", ws)
+	}
+	if slices.Contains(e.peer.Events(), "push config") {
+		t.Fatal("adopted again")
+	}
+}
+
+// The adoption checks the node key expected on the node as it reads it: another is refused,
+// before anything is pinned or pushed.
+func TestAdoptNodeKeyExpected(t *testing.T) {
+	e := newAdoptEnv(t)
+	j := e.run("adopt", e.web(map[string]any{"address": "203.0.113.60/24", "dry_run": true, "node_key": e.peer.NodeKey()}))
+	if j.State != jobs.Failed || !strings.Contains(j.Error, "another node key") {
+		t.Fatal(j.State, j.Error)
+	}
+	if j := e.run("adopt", e.web(map[string]any{"address": "203.0.113.60/24", "dry_run": true, "node_key": e.node.NodeKey()})); j.State != jobs.Done {
+		t.Fatal(j.State, j.Error)
 	}
 }
