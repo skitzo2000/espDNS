@@ -59,8 +59,9 @@ type addNodeServer struct {
 
 // Next says what adds a found node.
 const (
-	nextAdopt       = "adopt"        // POST /api/adopt/preview with {"node": host, "node_id": id, ...}, then the adopt jobs
-	nextSettingsAdd = "settings-add" // adopted already: the settings-add job with {"node": host}
+	nextAdopt        = "adopt"         // POST /api/adopt/preview with {"node": host, "node_id": id, ...}, then the adopt jobs
+	nextSettingsAdd  = "settings-add"  // adopted already: the settings-add job with {"node": host}
+	nextSettingsMove = "settings-move" // a node of yours at a new address: the settings-move job with {"node": host, "from": old}
 )
 
 // foundNode is a node as Add node shows it: as the Adopt page describes it, and what adds
@@ -68,6 +69,10 @@ const (
 type foundNode struct {
 	adoptNode
 	Next string `json:"next"`
+	// Move is the address settings.json lists this node at when this is the node itself,
+	// reinstalled at another address (its ID matches that entry): Add node (and the USB panel)
+	// says so, and settings-move moves that entry here. "" otherwise.
+	Move string `json:"move,omitempty"`
 	// Install says how to move it on when its firmware is the reason nothing adds it:
 	// "usb", firmware from before node configs (before 0.0.1), which only a USB install
 	// moves on (an update over the network goes to the nodes in settings.json only); "keys",
@@ -99,7 +104,12 @@ func (a addNodeServer) routes(mux *routes) {
 // view is n described for Add node.
 func (a addNodeServer) view(n nodes.Node, all []nodes.Node, s settings.Settings, files []configs.File) foundNode {
 	an := a.adopt.describe(n, all, s, files)
-	f := foundNode{adoptNode: an}
+	f := foundNode{adoptNode: an, Move: movedFrom(n, all, s)}
+	if st, ok := status(n); ok && f.Move != "" {
+		if why := a.adopt.nodeKeyRefusal(st); why != "" {
+			f.Refusals = append(f.Refusals, why)
+		}
+	}
 	switch {
 	case an.Read && !an.Listed && (an.KeysSource == "none" || an.KeysSource == "corrupt"):
 		f.Install = installKeys
@@ -109,13 +119,31 @@ func (a addNodeServer) view(n nodes.Node, all []nodes.Node, s settings.Settings,
 		f.Install = installReinstall
 	}
 	switch {
-	case len(an.Refusals) > 0 || an.Listed:
+	case f.Move != "" && len(f.Refusals) == 0:
+		f.Next = nextSettingsMove
+	case len(f.Refusals) > 0 || an.Listed:
 	case !an.Adopted:
 		f.Next = nextAdopt
 	default:
 		f.Next = nextSettingsAdd
 	}
 	return f
+}
+
+// movedFrom is the address settings.json lists this node at when n is not listed and another
+// node the controller knows, listed and silent now (as a reinstall leaves it), has the same
+// ID (case-insensitively, as byID and describe compare): the address a reinstall moved it
+// from. "" otherwise: while the old address answers, it is not a move.
+func movedFrom(n nodes.Node, all []nodes.Node, s settings.Settings) string {
+	if n.ID == "" || listed(s, n.Addr) {
+		return ""
+	}
+	for _, o := range all {
+		if o.Addr != n.Addr && !o.Online && strings.EqualFold(o.ID, n.ID) && slices.Contains(s.Nodes, o.Addr) {
+			return o.Addr
+		}
+	}
+	return ""
 }
 
 func (a addNodeServer) found(w http.ResponseWriter, r *http.Request) {

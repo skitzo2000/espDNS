@@ -346,6 +346,11 @@ export function addNode(box, opts) {
       return [intro(f), h("p", { class: "small bad" }, `Can't be added yet: ${refusals.join("; ") || "it's one of your nodes already"}.`),
         h("div", { class: "actions" }, back())];
     }
+    if (f.next === "settings-move") {
+      const go = h("button", { class: "btn primary", type: "button", onclick: () => settingsMove(f) }, "Add node");
+      return [intro(f), h("p", { class: "small" }, `It's ${str(f.name) || str(f.hostname) || "that node"}, which settings.json lists at ${f.move}: add it to move its entry there.`),
+        h("div", { class: "actions" }, go, back())];
+    }
     if (f.next === "settings-add") {
       const go = h("button", { class: "btn primary", type: "button", onclick: () => settingsAdd(f) }, "Add node");
       return [intro(f), h("p", { class: "small" }, `It already runs its own config${f.name ? `, as ${f.name}` : ""}. Add it and it gets your changes and updates too.`),
@@ -584,6 +589,27 @@ export function addNode(box, opts) {
       if (j.state !== "done") throw new Error(str(j.error) || `It ${j.state}.`);
       flow.busy = false;
       toast(`${f.name || hostOnly(f.host)} is added`);
+      st.flow = null;
+      close();
+      opts.done();
+    } catch (e) {
+      flow.busy = false;
+      flow.error = e.message;
+      render();
+    }
+  }
+
+  // settingsMove moves a node of yours, reinstalled at a new address, into settings.json at
+  // that address: the settings-move job (the entry it is listed at moves to where it now is).
+  async function settingsMove(f) {
+    const flow = st.flow = { busy: true, what: "Moving it to its new address…", progress: null, error: "", hints: [] };
+    render();
+    try {
+      let j = await post("api/jobs", { kind: "settings-move", params: { node: f.host, from: f.move } });
+      j = await follow(j, () => {});
+      if (j.state !== "done") throw new Error(str(j.error) || `It ${j.state}.`);
+      flow.busy = false;
+      toast(`${f.name || hostOnly(f.host)} moved to ${hostOnly(f.host)}`);
       st.flow = null;
       close();
       opts.done();

@@ -23,6 +23,12 @@ version may change anything. Write each change under Unreleased as it merges;
   adoption refuses a node answering with another node key than the one expected.
 - Firmware: a node logs its public node key on its console at start, for Install over USB
   to read.
+- Controller: a node of yours installed again at a new address is recognised as the same
+  node once its old address is silent. **+ Add node** and the Install over USB panel say it
+  moved, and **Add node** moves its entry in your nodes, and its pin, to the new address.
+  Nothing proves the node is the one it claims, so the move is only on your click. It needs
+  the node to trust your release key and to report the node key recorded for it: a board
+  erased and installed again makes a new node key, so its move is refused for now.
 
 ### Fixed
 

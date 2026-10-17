@@ -218,6 +218,7 @@ func main() {
 		job: func(id string) (jobs.Job, bool) { return runner.Get(id) }}
 	kinds["adopt"] = adopt.kind
 	kinds["settings-add"] = adopt.settingsAdd
+	kinds["settings-move"] = adopt.settingsMove
 	// The pending changes and the apply (changes.go, apply.go): every change sent as one
 	// rolling change.
 	pending := changes.New(*dataDir)
