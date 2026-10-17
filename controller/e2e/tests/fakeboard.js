@@ -12,7 +12,8 @@
 // is called); READ_FLASH answered from it. options.syncs is how many SYNCs it
 // answers (by default all; 0 is a board not in its bootloader). A reset (RTS raised, then
 // dropped) with DTR raised in it goes back to the bootloader; one without (a hard reset)
-// starts the app: it prints options.bootLog (ESP-IDF's coloured lines, \r\n) to the port,
+// starts the app: it prints options.bootLog (ESP-IDF's coloured lines, \r\n; its public node key
+// among them, as firmware/main/nodekey_node.c logs it) to the port,
 // then, on a Wi-Fi board (options.wifi), speaks Improv Wi-Fi serial as firmware/main/improv.c
 // does: ready, its info, two networks scanned, a join that works (options.join false: one
 // refused, ERROR 3). options.vid is the port's USB vendor ID (0x303a: the chip's own USB).
@@ -24,7 +25,8 @@
 // open (InvalidStateError) and to close while a stream is locked.
 function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false,
   bootLog = ["ESP-ROM:esp32s3-20210327", "rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)",
-    "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m", "\x1b[0;33mW (342) net: no link yet\x1b[0m", "\x1b[0;32mI (350) improv: listening on USB serial\x1b[0m"] } = {}) {
+    "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m", "\x1b[0;33mW (342) net: no link yet\x1b[0m",
+    "\x1b[0;32mI (345) nodekey: node key BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\x1b[0m", "\x1b[0;32mI (350) improv: listening on USB serial\x1b[0m"] } = {}) {
   const esp = { ops: [], begins: [], flash: {}, opened: 0, signals: [], join: null, mode: app ? "app" : "rom" };
   const m = mac.split(":").map(x => parseInt(x, 16));
   regs = { [0x60007044]: (m[2] << 24 | m[3] << 16 | m[4] << 8 | m[5]) >>> 0, [0x60007048]: m[0] << 8 | m[1], ...regs };

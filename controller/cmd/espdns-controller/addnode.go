@@ -2,16 +2,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/skitzo2000/espdns/controller/internal/adoption"
+	"github.com/skitzo2000/espdns/controller/internal/auth"
 	"github.com/skitzo2000/espdns/controller/internal/configs"
+	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
+	"github.com/skitzo2000/espdns/controller/internal/pins"
+	"github.com/skitzo2000/espdns/controller/internal/release"
 	"github.com/skitzo2000/espdns/controller/internal/settings"
 )
 
@@ -23,6 +31,10 @@ import (
 //
 //	GET  /api/nodes/found   the nodes found over mDNS or looked up, not in settings.json
 //	POST /api/nodes/lookup  {"address": "192.0.2.10"}: the node at that address, read there only
+//	GET  /api/nodes/waiting the boards installed over USB, waiting to be added (waiting.go)
+//	POST /api/nodes/waiting {"name", "board", "id", "address", "gateway", "node_key"}: one more
+//	POST /api/nodes/waiting/{id}/retry   a failed one waited for again
+//	POST /api/nodes/waiting/{id}/delete  one removed (its config file stays)
 //
 // A lookup reads /status at the address typed, and nowhere else, within a few seconds
 // (nodes.Registry.Lookup): no name is resolved (an IPv4 address only), no other host is
@@ -75,6 +87,10 @@ const (
 func (a addNodeServer) routes(mux *routes) {
 	mux.HandleFunc("GET /api/nodes/found", needLogin("adding a node needs", a.found))
 	mux.HandleFunc("POST /api/nodes/lookup", needLogin("adding a node needs", a.lookupNode))
+	mux.HandleFunc("GET /api/nodes/waiting", needLogin("adding a node needs", a.waiting))
+	mux.HandleFunc("POST /api/nodes/waiting", needLogin("adding a node needs", a.addWaiting))
+	mux.HandleFunc("POST /api/nodes/waiting/{id}/retry", needLogin("adding a node needs", a.retryWaiting))
+	mux.HandleFunc("POST /api/nodes/waiting/{id}/delete", needLogin("adding a node needs", a.deleteWaiting))
 }
 
 // view is n described for Add node.
@@ -201,4 +217,144 @@ func lookupAddress(s string) (string, error) {
 		return "", fmt.Errorf("address: %s is no node's address", s)
 	}
 	return a.String(), nil
+}
+
+func (a addNodeServer) waiting(w http.ResponseWriter, r *http.Request) {
+	ws, err := loadWaiting(a.adopt.dataDir)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"nodes": ws})
+}
+
+// A node's name, as + Add node takes it (addnode.js NAME), and a chip MAC, as node IDs are.
+var (
+	nodeName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$`)
+	macID    = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
+)
+
+// addWaiting takes a board just installed over USB: its name (a config of that name is
+// written with its network and the zone primary's zones, as + Add node writes a new name's;
+// one there already only when it says the same network), its chip MAC, its address.
+func (a addNodeServer) addWaiting(w http.ResponseWriter, r *http.Request) {
+	var e waitingNode
+	if err := body(w, r, &e); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	e.ID = strings.ToLower(strings.ReplaceAll(e.ID, "-", ":"))
+	net := nodecfg.Network{Address: e.Address, Gateway: e.Gateway}
+	switch {
+	case !nodeName.MatchString(e.Name):
+		httpErr(w, http.StatusBadRequest, errors.New("name: lowercase letters, digits and dashes, up to 32"))
+		return
+	case !macID.MatchString(e.ID):
+		httpErr(w, http.StatusBadRequest, fmt.Errorf("id: %q is not a chip MAC (aa:bb:cc:dd:ee:ff)", e.ID))
+		return
+	}
+	if err := net.Check(); err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if e.NodeKey != "" {
+		if _, err := release.ParseNodeKey(e.NodeKey); err != nil {
+			httpErr(w, http.StatusBadRequest, fmt.Errorf("node_key: %v", err))
+			return
+		}
+	}
+	s, err := settings.Load(settings.Path(a.adopt.dataDir))
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, n := range a.adopt.nodes() {
+		if strings.EqualFold(n.ID, e.ID) && listed(s, n.Addr) {
+			httpErr(w, http.StatusConflict, fmt.Errorf("node %s is one of your nodes already, at %s", e.ID, n.Addr))
+			return
+		}
+	}
+	if rs, _ := pins.Open(a.adopt.dataDir).List(); slices.ContainsFunc(rs, func(p pins.Record) bool { return p.ID == e.ID }) {
+		httpErr(w, http.StatusConflict, fmt.Errorf("node %s was added before: add it from + Add node", e.ID))
+		return
+	}
+	if err := a.waitingConfig(e, net, s, auth.User(r.Context())); err != nil {
+		httpErr(w, http.StatusConflict, err)
+		return
+	}
+	e.Since, e.State, e.Error = time.Now().UTC(), waitingWait, ""
+	err = changeWaiting(a.adopt.dataDir, func(ws []waitingNode) ([]waitingNode, error) {
+		if slices.ContainsFunc(ws, func(x waitingNode) bool { return x.Name == e.Name && x.ID != e.ID }) {
+			return nil, errNameInUse
+		}
+		return append(slices.DeleteFunc(ws, func(x waitingNode) bool { return x.ID == e.ID }), e), nil
+	})
+	if errors.Is(err, errNameInUse) {
+		httpErr(w, http.StatusConflict, fmt.Errorf("%w by another board waiting: choose another name", err))
+		return
+	}
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, e)
+}
+
+var errNameInUse = errors.New("That name is in use")
+
+// waitingConfig writes configs/<name>.json for e, unless it is there with that network.
+func (a addNodeServer) waitingConfig(e waitingNode, net nodecfg.Network, s settings.Settings, user string) error {
+	file := e.Name + ".json"
+	f, err := configs.Read(a.adopt.dataDir, file)
+	if err == nil {
+		if f.Config == nil || f.Config.Network == nil || *f.Config.Network != net {
+			return fmt.Errorf("%w (%s says another network): choose another name", errNameInUse, file)
+		}
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	c := nodecfg.Config{Name: e.Name, Network: &net}
+	if zp := s.ZonePrimary(); zp.Address != "" && len(zp.Zones) > 0 {
+		zones := slices.Clone(zp.Zones)
+		c.Secondary = &nodecfg.Secondary{Primary: zp.Address, Zones: &zones}
+	}
+	b, _ := json.MarshalIndent(c, "", "  ")
+	if _, err := configs.Save(a.adopt.dataDir, file, append(b, '\n'), ""); err != nil {
+		return err
+	}
+	logSave(a.adopt.dataDir, user, file, "new")
+	return nil
+}
+
+func (a addNodeServer) retryWaiting(w http.ResponseWriter, r *http.Request) {
+	a.changeOne(w, r, func(ws []waitingNode, i int) []waitingNode {
+		ws[i].State, ws[i].Error = waitingWait, ""
+		return ws
+	})
+}
+
+func (a addNodeServer) deleteWaiting(w http.ResponseWriter, r *http.Request) {
+	a.changeOne(w, r, func(ws []waitingNode, i int) []waitingNode { return slices.Delete(ws, i, i+1) })
+}
+
+// changeOne changes the entry the path names.
+func (a addNodeServer) changeOne(w http.ResponseWriter, r *http.Request, f func(ws []waitingNode, i int) []waitingNode) {
+	id := r.PathValue("id")
+	err := changeWaiting(a.adopt.dataDir, func(ws []waitingNode) ([]waitingNode, error) {
+		i := slices.IndexFunc(ws, func(x waitingNode) bool { return strings.EqualFold(x.ID, id) })
+		if i < 0 {
+			return nil, fs.ErrNotExist
+		}
+		return f(ws, i), nil
+	})
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		httpErr(w, http.StatusNotFound, fmt.Errorf("no board %s is waiting", id))
+	case err != nil:
+		httpErr(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, map[string]any{"ok": true})
+	}
 }

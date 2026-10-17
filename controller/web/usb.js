@@ -21,7 +21,11 @@
 // "your build"). Once installed, the panel waits for the node on the network (POST
 // /api/nodes/lookup at its address, or /api/nodes/found for one on DHCP) and, when it
 // answers, says so with Add it now, which hands it to o.found (+ Add node, with it chosen and
-// its address filled in). Installing and adding are two steps.
+// its address filled in). A new board installed from Nodes (no o.found) isn't waited for
+// here: once installed, the panel says to plug it into the network, and its OK hands it to
+// the controller by its name, chip MAC, address and node key (POST /api/nodes/waiting),
+// which adds it once it answers; o.waiting() is called then. One of your nodes installed
+// again is waited for as before.
 import { h, arr, obj, str, panel, api, hostOnly, getJSON, post } from "./shell.js";
 import { every } from "./common.js";
 import { firmwareBox, readFirmware, labelOf } from "./firmware.js";
@@ -255,8 +259,9 @@ function keysOnly(o, keysReady, p, stopRuns, lock) {
 // the list opens the custom form on it), address and gateway (prefilled), update (a found
 // node's firmware updated: the title says so), reinstall (one of your nodes installed again,
 // from its page: the title says so), at (the address it has: on DHCP, waited for there),
-// name (what the board is called in the title), found(node) (the node installed, once it
-// answers on the network: Add it now closes the panel and calls it).
+// name (what the board is called in the title, and the new node's name), found(node) (the
+// node installed, once it answers on the network: Add it now closes the panel and calls
+// it), waiting() (a new board handed to the controller with OK: the panel is closed).
 
 // The install's steps; how long things are given; what the panel says while closing it
 // would break the board; what each way of being on the network means once installed.
@@ -274,7 +279,16 @@ const INSTALLED = {
   ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
   elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
 };
+// A new board's: what each way of being on the network means, once OK adds it to your nodes.
+const ADDS = {
+  wired: "Installed. Plug it into your network: it's added to your nodes as soon as it answers.",
+  joined: "Installed, and on your Wi-Fi network: it's added to your nodes as soon as it answers.",
+  elsewhere: `${INSTALLED.elsewhere} It's added to your nodes as soon as it answers.`,
+};
+ADDS.ethernet = ADDS.wired;
+const NAME = /^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$/; // as + Add node's (addnode.js)
 const macOf = s => str(s).toLowerCase().replace(/[^0-9a-f]/g, "");
+const colons = m => m.replace(/(..)(?!$)/g, "$1:");
 const spinning = text => h("div", { class: "row small" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
 
 export async function openUSB(o = {}) {
@@ -367,12 +381,16 @@ export async function openUSB(o = {}) {
   const addrIn = h("input", { class: "t mono", id: "usb-addr", type: "text", value: str(o.address), placeholder: "192.0.2.52/24, or dhcp", spellcheck: "false", autocomplete: "off" });
   const gwIn = h("input", { class: "t mono", id: "usb-gw", type: "text", value: str(o.gateway), placeholder: "192.0.2.1", spellcheck: "false", autocomplete: "off" });
   const txIn = h("input", { class: "t", id: "usb-tx", type: "number", min: 2, max: 20, placeholder: "board default" });
+  // A new board (from Nodes, not + Add node, nor one of yours again) is added by its name.
+  const adds = !o.found && !o.update && !o.reinstall;
+  const nameIn = h("input", { class: "t mono", id: "usb-name", type: "text", value: str(o.name), placeholder: "dns3", maxlength: 32, spellcheck: "false", autocomplete: "off" });
   const network = () => {
     const a = addrIn.value.trim();
     if (!a) throw new Error("Give the node an address, like 192.0.2.52/24.");
     return a === "dhcp" ? { address: a } : { address: a, gateway: gwIn.value.trim() };
   };
   const addrBox = h("div", { class: "stack" },
+    ...(adds ? [h("label", { class: "f" }, h("span", {}, "Name"), nameIn, h("span", { class: "hint" }, "Lowercase letters, digits and dashes, like dns3."))] : []),
     h("div", { class: "grid2" },
       h("label", { class: "f" }, h("span", {}, "Address"), addrIn, h("span", { class: "hint" }, "With its prefix length, like 192.0.2.52/24; dhcp only where a DHCP server answers.")),
       h("label", { class: "f" }, h("span", {}, "Gateway"), gwIn)),
@@ -486,6 +504,7 @@ export async function openUSB(o = {}) {
   prep.addEventListener("click", async () => {
     let body;
     try {
+      if (adds && !NAME.test(nameIn.value.trim())) throw new Error("Give the node a name: lowercase letters, digits and dashes, like dns3.");
       const net = network();
       if (form) body = { board: formToBoard(form), network: net };
       else if (cur) {
@@ -552,7 +571,8 @@ export async function openUSB(o = {}) {
     // began: when the install began (performance.now(); a node answering with a shorter
     // uptime has restarted since). mac: the chip's, as the install read it (the node ID it
     // will report). noLink: its console's last health line, past booting, says no link.
-    let began = 0, mac = "", noLink = false;
+    // nodeKey: the node key its console said (the public half), for a new board's OK.
+    let began = 0, mac = "", noLink = false, nodeKey = "";
     const log = logView(() => `espdns-${str(board.name) || "board"}-log.txt`, () => con && con.restart());
     box.replaceChildren(steps, msg, hints, log.box);
     const say = (...kids) => msg.replaceChildren(...kids.filter(Boolean));
@@ -608,6 +628,7 @@ export async function openUSB(o = {}) {
       began = performance.now();
       mac = "";
       noLink = false;
+      nodeKey = "";
       lock(true);
       say();
       hints.replaceChildren();
@@ -710,6 +731,8 @@ export async function openUSB(o = {}) {
       const c = await hold(openConsole(port, { others, live, line: l => {
         log.add(l);
         if (/^[IWE] \(\d+\)/.test(l)) app = true;
+        const k = /nodekey: node key ([A-Za-z0-9+/=]+)/.exec(l);
+        if (k) nodeKey = k[1];
         if (/"reasons":/.test(l)) noLink = !/"state":"booting"/.test(l) && /"reasons":\[[^\]]*"no link"/.test(l);
       },
         frame: (t, d) => onFrame && onFrame(t, d) }).catch(e => { if (live()) log.add(`(couldn't open the port again: ${str(e && e.message)})`); return null; }));
@@ -728,7 +751,41 @@ export async function openUSB(o = {}) {
         if (!live()) return;
         if (got) { ip = got; how = "joined"; }
       }
+      // A new board, not one of your nodes installed again: OK adds it.
+      if (adds) {
+        let mine = false;
+        try { mine = arr(await getJSON("api/nodes")).some(n => n.source === "settings" && mac && macOf(n.id) === mac); } catch { /* not known */ }
+        if (!live()) return;
+        if (!mine) { ready(how); return; }
+      }
       wait(how);
+    }
+
+    // ready says a new board is installed and what's next; its OK hands it to the controller
+    // (POST /api/nodes/waiting), which adds it once it answers. An error stays here.
+    function ready(how) {
+      const dhcp = net.address === "dhcp";
+      step("net", "next", how === "wired" || how === "ethernet" ? "Plug its network cable in." : "It's added once it answers.");
+      const said = h("p", { class: "small bad", id: "usb-ok-error", role: "status", hidden: true });
+      const ok = h("button", { class: "btn primary", type: "button", id: "usb-ok" }, "OK");
+      ok.addEventListener("click", async () => {
+        ok.disabled = true;
+        said.hidden = true;
+        try {
+          await post("api/nodes/waiting", { name: nameIn.value.trim(), board: str(board.name), id: colons(mac), address: net.address,
+            ...(dhcp ? {} : { gateway: str(net.gateway) }), ...(nodeKey ? { node_key: nodeKey } : {}) });
+        } catch (e) {
+          said.textContent = e.message;
+          said.hidden = false;
+          ok.disabled = false;
+          return;
+        }
+        p.close();
+        if (o.waiting) o.waiting();
+      });
+      say(h("p", { class: "small", id: "usb-installed" }, ADDS[how]),
+        dhcp && mac ? h("p", { class: "small", id: "usb-reserve" }, `Reserve an address for MAC ${colons(mac)} in your router.`) : null,
+        h("div", { class: "actions" }, ok), said);
     }
 
     // askWiFi asks the board for its Wi-Fi network over Improv: its state every second, up to

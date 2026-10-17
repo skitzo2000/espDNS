@@ -1,5 +1,5 @@
-// Install over USB, after the install (usb.js installer): installed on a fake board
-// (fakeboard.js), the panel waits for the node on the network: POST /api/nodes/lookup at its
+// Install over USB from + Add node, after the install (usb.js installer): installed on a fake
+// board (fakeboard.js), the panel waits for the node on the network: POST /api/nodes/lookup at its
 // address, answered here. Nothing for a minute (the page's clock moved on): what to check. It
 // answers: the panel says so, and Add it now closes it and opens + Add node with it chosen,
 // its address and gateway as given at the install.
@@ -49,7 +49,8 @@ async function routes(page, state) {
 
 async function prepare(page, board) {
   await page.goto("./");
-  await page.getByRole("button", { name: "Install over USB", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add node" }).click();
+  await page.locator("#nqres").getByRole("button", { name: "Install over USB" }).click();
   const u = page.getByRole("dialog", { name: "Install a board over USB" });
   await u.locator("#usb-board").selectOption(board);
   await u.locator("#usb-addr").fill("192.0.2.52/24");

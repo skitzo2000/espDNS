@@ -2,8 +2,9 @@
 // fake board behind a stubbed Web Serial port (fakeboard.js): the port asked for first, the
 // chip checked against the image's, one write of the image at 0, the board restarted, its
 // console in the Board log, the Wi-Fi network asked for over Improv on a Wi-Fi board, then
-// the wait for it on the network. The keys, the boards (their chip images in), the build,
-// its image and the lookup are answered here (page.route).
+// OK, which hands it to the controller to add once it answers (a waiting row on Nodes). The
+// keys, the boards (their chip images in), the build, its image, the lookup and the boards
+// waiting are answered here (page.route).
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
@@ -46,19 +47,30 @@ async function routes(page, state) {
     return r.fulfill({ json: state.lookup });
   });
   await page.route(/\/api\/adopt$/, r => r.fulfill({ json: { configs: [], key: true, no_dhcp: [] } }));
+  await page.route(/\/api\/nodes\/waiting$/, r => {
+    if (r.request().method() === "GET") return r.fulfill({ json: { nodes: state.waiting } });
+    if (state.refuse) return r.fulfill({ status: 409, json: { error: state.refuse } });
+    state.waiting.push({ ...r.request().postDataJSON(), since: "2026-10-17T12:00:00Z", state: "waiting" });
+    return r.fulfill({ json: state.waiting.at(-1) });
+  });
 }
 
 async function start(page, { board = "ws-s3-eth", address = "192.0.2.52/24", fake = {}, lookup = { address: "192.0.2.52", found: false } } = {}) {
   const violations = await watch(page);
   await page.addInitScript(fakeEsp, fake);
-  const state = { lookup, lookups: [], images: 0 };
+  const state = { lookup, lookups: [], images: 0, waiting: [] };
   await routes(page, state);
   await login(page);
   await page.goto("./");
   await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   const u = page.getByRole("dialog", { name: "Install a board over USB" });
   await u.locator("#usb-board").selectOption(board);
+  // A new board gets a name first.
   await u.locator("#usb-addr").fill(address);
+  await u.locator("#usb-gw").fill("192.0.2.1");
+  await u.locator("#usb-prepare").click();
+  await expect(u.locator("#usb-install")).toHaveText("Give the node a name: lowercase letters, digits and dashes, like dns3.");
+  await u.locator("#usb-name").fill("dns3");
   await u.locator("#usb-gw").fill("192.0.2.1");
   await u.locator("#usb-prepare").click();
   await expect(u.locator("#usb-go")).toHaveText("Install on the board over USB");
@@ -69,20 +81,21 @@ async function start(page, { board = "ws-s3-eth", address = "192.0.2.52/24", fak
 const esp = page => page.evaluate(() => ({ ops: window.__esp.ops, begins: window.__esp.begins, flash: window.__esp.flash, join: window.__esp.join }));
 const step = (u, n) => u.locator(`#usb-step-${n}`);
 
-test("Install over USB: a wired board written at 0, restarted, its log line by line, then Add it now", async ({ page }) => {
+test("Install over USB: a wired board written at 0, restarted, its log line by line, then OK adds it to Nodes", async ({ page }) => {
   const { u, state, violations } = await start(page);
   await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug its network cable in: it's connected to this computer over USB only. " +
-    "It can stay on USB for power, or be unplugged and powered where its cable is.", { timeout: 20000 });
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
   for (const n of ["connect", "chip", "write", "restart"]) await expect(step(u, n)).toHaveClass("done");
   await expect(step(u, "erase")).toHaveCount(0);
   await expect(step(u, "wifi")).toHaveCount(0);
   await expect(step(u, "connect")).toContainText("Over the board's own USB: ESP32-S3");
   await expect(step(u, "chip")).toContainText("ESP32-S3");
   await expect(step(u, "write")).toContainText("100%");
-  await expect(step(u, "net")).toHaveClass("now");
+  await expect(step(u, "net")).toHaveClass("next");
   await expect(step(u, "net")).toContainText("Plug its network cable in.");
-  await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
+  await expect(u.locator("#usb-waiting")).toHaveCount(0);
+  await expect(u.locator("#usb-reserve")).toHaveCount(0);
+  await expect(u.locator("#usb-ok")).toHaveClass(/primary/);
   await expect(u.locator("#usb-go")).toHaveText("Install again");
   await expect(u.locator("#usb-go")).not.toHaveClass(/primary/);
   await expect(u.locator("#usb-hints")).toBeEmpty();
@@ -118,14 +131,24 @@ test("Install over USB: a wired board written at 0, restarted, its log line by l
   await u.locator("#usb-log-reset").click();
   await expect(rows.filter({ hasText: "I (311) espdns: espDNS 0.0.5 starting" })).toHaveCount(2);
 
-  // It answers, restarted since the install: Add it now.
-  state.lookup = { address: "192.0.2.52", found: true, uptime_s: 0, node: { host: "192.0.2.52", id: "aa:bb:cc:00:00:52", mac: "aa:bb:cc:00:00:52",
-    board: "ws-s3-eth", hostname: "espdns-000052", version: "0.0.5", net: "ethernet", address: "192.0.2.52/24", gateway: "192.0.2.1", next: "adopt" } };
-  await expect(u.locator("#usb-arrived")).toHaveText("It's on your network at 192.0.2.52. Next, add it to your nodes.", { timeout: 10000 });
-  await expect(step(u, "net")).toHaveClass("done");
-  await u.getByRole("button", { name: "Add it now" }).click();
+  // Not waited for here: OK hands it to the controller, by its name, chip MAC, address and
+  // the node key its console said; the panel closes, and Nodes has it waiting.
+  expect(state.lookups).toEqual([]);
+  // Refused (the name taken): said in the panel, which stays; another name is taken.
+  state.refuse = "That name is in use (dns3.json says another network): choose another name";
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u.locator("#usb-ok-error")).toHaveText(state.refuse);
+  await expect(u).toBeVisible();
+  state.refuse = "";
+  await u.locator("#usb-name").fill("dns4");
+  await u.getByRole("button", { name: "OK" }).click();
   await expect(u).toBeHidden();
-  await expect(page.locator("#nqres")).toContainText("Found at 192.0.2.52 over Wired, firmware 0.0.5.");
+  expect(state.waiting.map(({ since, state: st, ...w }) => w)).toEqual([{ name: "dns4", board: "ws-s3-eth", id: "aa:bb:cc:00:00:52", address: "192.0.2.52/24",
+    gateway: "192.0.2.1", node_key: "BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=" }]);
+  const row = page.locator('#nodes [data-waiting="aa:bb:cc:00:00:52"]');
+  await expect(row).toContainText("dns4");
+  await expect(row).toContainText("Waiting for it: plug it into your network");
+  await expect(row).toContainText("192.0.2.52");
   await page.waitForLoadState("networkidle");
   expect(await violations()).toEqual([]);
 });
@@ -278,7 +301,7 @@ test("Install over USB: while it writes, the panel won't close, and says why in 
   expect(await violations()).toEqual([]);
 });
 
-test("Install over USB: a Wi-Fi board asks for its network, joins it, and is waited for at the address it got", async ({ page }) => {
+test("Install over USB: a Wi-Fi board asks for its network, joins it; on DHCP, OK says to reserve its address", async ({ page }) => {
   const { u, state, violations } = await start(page, { board: "xiao-s3-sense", address: "dhcp", fake: { wifi: true } });
   await expect(u.locator("#usb-wifi")).toBeVisible();
   await u.locator("#usb-go").click();
@@ -305,12 +328,15 @@ test("Install over USB: a Wi-Fi board asks for its network, joins it, and is wai
   await expect(u.locator("#usb-wifi-at")).toHaveText("On your Wi-Fi at 192.0.2.52");
   // The network and the password, as the firmware's RPC reads them.
   expect((await esp(page)).join).toBe("\x0bexample-net\x0ce2e password");
-  await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network. USB can stay in for power.");
-  await expect(u.locator("#usb-waiting")).toHaveText("Waiting for it at 192.0.2.52…");
+  await expect(u.locator("#usb-installed")).toHaveText("Installed, and on your Wi-Fi network: it's added to your nodes as soon as it answers.");
+  await expect(u.locator("#usb-reserve")).toHaveText("Reserve an address for MAC aa:bb:cc:00:00:52 in your router.");
   await expect(u.locator("#usb-after")).not.toContainText("cable");
   await expect(step(u, "net")).not.toContainText("cable");
-  await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
-  expect(state.lookups[0]).toBe("192.0.2.52");
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(state.waiting.map(w => [w.name, w.address, w.gateway])).toEqual([["dns3", "dhcp", undefined]]);
+  await expect(page.locator('#nodes [data-waiting="aa:bb:cc:00:00:52"]')).toContainText("DHCP");
+  expect(state.lookups).toEqual([]);
   // No Improv frame in the log, only the console's lines.
   expect((await u.locator("#usb-log-rows > div").allTextContents()).some(t => t.includes("IMPROV"))).toBe(false);
   expect(await violations()).toEqual([]);
@@ -355,7 +381,7 @@ test("Install over USB: a Wi-Fi board that never answers Improv nor logs: it use
   await expect(step(u, "wifi")).toHaveClass("now", { timeout: 20000 });
   await expect(u.locator("#usb-nolog")).toHaveText("If it shows nothing, press RESET or unplug it and plug it in again.", { timeout: 15000 });
   await expect(step(u, "wifi")).toContainText("It didn't ask for Wi-Fi: it uses its Ethernet add-on.", { timeout: 20000 });
-  await expect(u.locator("#usb-installed")).toContainText("it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.");
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.");
   await expect(step(u, "net")).toContainText("Plug its network cable in.");
   expect(await violations()).toEqual([]);
 });

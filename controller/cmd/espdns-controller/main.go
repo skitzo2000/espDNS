@@ -20,6 +20,7 @@
 //	boards/                  your own board definitions (the shipped catalog is -catalog)
 //	keys/release.pem         the release signing key, mode 0600 (internal/keys; espdns key import)
 //	configs/<name>.json      node configs (internal/configs): the editor's and the CLI's config rollouts
+//	waiting.json             the boards installed over USB, waiting to be added once they answer (waiting.go)
 //	changes/                 the pending changes (internal/changes): edits waiting for one apply
 //	auth.json                the login: the user and an argon2id hash, mode 0600 (espdns passwd)
 //
@@ -237,6 +238,8 @@ func main() {
 	runner = jobs.New(*dataDir, kinds)
 	jobsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(jobsDone) }()
+	// The boards installed over USB, waiting: each added once it answers (waiting.go).
+	go waiter{adopt: adopt, runner: runner, lookup: reg.Lookup}.Run(ctx)
 	// The newest release, asked for at start, every day and when a new node shows up: an
 	// update to it is offered with nothing downloaded.
 	go func() {

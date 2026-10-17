@@ -4,7 +4,8 @@
 // set, only from the controller's own machine; it logs in), the keys (GET /api/key: the
 // release key made in the controller or imported, the recovery key made in this browser with
 // only its public half sent, recovery.pem saved offline; keys.js), the first and the second
-// node (a new board installed with Install over USB, usb.js, then added with + Add node,
+// node (a new board installed with Install over USB, usb.js, whose OK has the controller add
+// it once it answers, GET /api/nodes/waiting; one on the network added with + Add node,
 // addnode.js), your zone (optional: + Add zone, addzone.js, as the Zones
 // page has it: a zone of your own hosted here first, or copied from a DNS server you run, or
 // forwarded; a pending change until Apply), telling the router (the nodes' addresses to
@@ -23,7 +24,7 @@ import { canMake, makeRecovery, readPublic, save, base64 } from "./keys.js";
 shell("setup.html");
 
 const $ = id => document.getElementById(id);
-const data = { setup: null, error: null, key: null, nodes: null, found: [], boards: new Map(), sess: {} };
+const data = { setup: null, error: null, key: null, nodes: null, found: [], waiting: [], boards: new Map(), sess: {} };
 // recovery: the recovery key made in this page ({pem, pub, fp}), to download again until the
 // page is left; saved: "I saved recovery.pem" ticked.
 const ui = { open: null, sig: "", bodies: new Map(), recovery: null, saved: false };
@@ -32,7 +33,7 @@ const ui = { open: null, sig: "", bodies: new Map(), recovery: null, saved: fals
 const STEPS = {
   password: ["Set a password", "Every change needs it."],
   keys: ["Make your keys", "Your nodes take only changes signed with them."],
-  first_node: ["Add your first node", "Install a new board with Install over USB, then add it. A node already on your network is just added."],
+  first_node: ["Add your first node", "Install a new board with Install over USB: it's added once it's on your network. A node already on your network is just added."],
   second_node: ["Add a second node", "Two nodes keep DNS answering while one restarts."],
   zones: ["Add your zone", "A name for your network, like home.example."],
   router: ["Tell your router", "So every device on your network asks espDNS."],
@@ -53,7 +54,7 @@ const boardName = b => data.boards.get(str(b)) || str(b);
 
 function render(force) {
   const sig = JSON.stringify([data.setup, data.error, keySig(), ui.open, data.sess.logged_in,
-    listed().map(n => [n.addr, nodeText(n)]), data.found.length, zones.added.length]);
+    listed().map(n => [n.addr, nodeText(n)]), data.found.length, data.waiting.map(w => [w.id, w.state, w.error]), zones.added.length]);
   if (!force && sig === ui.sig) return;
   // Not while + Add node or + Add zone is open: it would lose what is typed; it says when
   // it's done.
@@ -411,7 +412,7 @@ function keyBody() {
 
 // One Install over USB and one + Add node for both steps, moved into the step open.
 const nodeBox = h("div", { class: "setup-box" });
-const usbBtn = h("button", { class: "btn", type: "button", id: "setup-usb", onclick: () => openUSB({ found: adder && adder.next }) }, "Install over USB");
+const usbBtn = h("button", { class: "btn", type: "button", id: "setup-usb", onclick: () => openUSB({ waiting: readFound }) }, "Install over USB");
 let adder = null;
 function nodeBody(step) {
   const ns = listed();
@@ -427,6 +428,16 @@ function nodeBody(step) {
   const out = [];
   if (step === "second_node") {
     out.push(h("p", { class: "small" }, `${ns[0] ? `${nodeText(ns[0])} is your first node. ` : ""}Add the second the same way; wired is best.`));
+  }
+  // The boards installed and waiting: what each waits for, or why adding it failed.
+  for (const w of data.waiting) {
+    const failed = w.state === "failed";
+    out.push(h("p", { class: failed ? "small bad" : "small", "data-waiting": str(w.id) }, failed ? `Couldn't add ${str(w.name)}: ${str(w.error)} `
+      : w.state === "adding" ? `Adding ${str(w.name)}…` : `${str(w.name)} is installed: it's added as soon as it answers on your network.`,
+    failed ? h("button", { class: "btn small", type: "button", onclick: async () => {
+      try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/retry`); } catch (e) { toast(e.message); }
+      readFound();
+    } }, "Retry") : null));
   }
   if (arr(data.found).length) out.push(h("p", { class: "hint" }, `${arr(data.found).length === 1 ? "One node is" : `${arr(data.found).length} nodes are`} on your network and not added yet.`));
   out.push(h("div", { class: "row" }, usbBtn), nodeBox);
@@ -531,6 +542,10 @@ async function readKey() {
 async function readFound() {
   if (!data.sess.logged_in) return;
   try { data.found = arr(obj(await getJSON("api/nodes/found")).nodes); } catch { /* kept */ }
+  const had = data.waiting.length;
+  try { data.waiting = arr(obj(await getJSON("api/nodes/waiting")).nodes); } catch { /* kept */ }
+  // One waiting is added: on to the next step.
+  if (data.waiting.length < had) { await readSetup(); openNext(); return; }
   render();
 }
 
