@@ -24,8 +24,8 @@ import (
 // one in settings.json's no_dhcp): the node's address must then be reserved there (-reserved).
 //
 // The zone primary (internal/primary) is settings.json's "primary": nothing is changed on
-// it. For a config with secondary zones, adopt says once when the node's address is in none
-// of the networks it allows zone transfers from ("allows"), and goes on.
+// it. For a config with secondary zones, adopt says once that it must allow zone transfers
+// to the node's address, and goes on.
 //
 // The flags make an adoption.Request, which the controller's Adopt page makes too
 // (adoption.Web): both are built and run by internal/adoption.

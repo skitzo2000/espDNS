@@ -20,7 +20,6 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
-	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
@@ -459,30 +458,20 @@ func TestAdoptDryRun(t *testing.T) {
 	n.unadopted, n.addr = true, "192.0.2.252/23"
 	zones := []string{"home.example"}
 	cfg := &nodecfg.Config{Secondary: &nodecfg.Secondary{Primary: "192.0.2.254", Zones: &zones}}
-	var advice []string
 	a := Adopt{Host: n.host, ID: n.id, Address: netip.MustParsePrefix("192.0.2.252/23"),
-		Gateway: netip.MustParseAddr("192.0.2.1"), Config: cfg, DryRun: true,
-		Primary: primary.Config{Address: "192.0.2.254", Allows: []string{"198.51.100.0/24"}},
-		Advice:  func(s string) { advice = append(advice, s) }}
+		Gateway: netip.MustParseAddr("192.0.2.1"), Config: cfg, DryRun: true}
 	c := w.client()
 	var logs []string
-	c.Logf = func(f string, args ...any) { logs = append(logs, f) }
+	c.Logf = func(f string, args ...any) { logs = append(logs, fmt.Sprintf(f, args...)) }
 	if err := c.Adopt(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.pushes()) != 0 {
 		t.Fatalf("dry run changed something: %v", w.pushes())
 	}
-	// Not in a network the primary allows: said once, with the node's network, not refused.
-	want := "Your zone primary must allow zone transfers from 192.0.2.252: allow its network (e.g. 192.0.2.0/23) there once."
-	if len(advice) != 1 || advice[0] != want {
-		t.Fatalf("advice %q, want %q", advice, want)
-	}
-	// In one: nothing said.
-	advice = nil
-	a.Primary.Allows = append(a.Primary.Allows, "192.0.2.0/23")
-	if err := c.Adopt(context.Background(), a); err != nil || len(advice) != 0 {
-		t.Fatal(err, advice)
+	// The zone primary: said once what it must allow, not refused.
+	if !slices.Contains(logs, "4. your zone primary must allow zone transfers (AXFR) to 192.0.2.252: set that up on it") {
+		t.Fatal(logs)
 	}
 	if slices.ContainsFunc(logs, func(s string) bool { return strings.Contains(s, "reserve") }) {
 		t.Fatal("a static address asked for a reservation:", logs)

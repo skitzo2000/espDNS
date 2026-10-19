@@ -210,10 +210,9 @@ docker compose run --rm --entrypoint /espdns espdns-controller \
 | `-wait` | `2m0s` | How long to wait for the node on its new address. |
 | `-catalog` | `/catalog` | The board catalog, for the memory plan of a node on older firmware. |
 
-Nothing changes on the zone primary. For a config with secondary zones, when the node's
-address is in none of the networks `settings.json`'s `primary` `allows`, adopt says once
-what to set up there ("Your zone primary must allow zone transfers from 192.0.2.53: allow
-its network (e.g. 192.0.2.0/24) there once.") and goes on.
+Nothing changes on the zone primary. For a config with secondary zones, adopt says once
+what to set up there ("your zone primary must allow zone transfers (AXFR) to 192.0.2.53:
+set that up on it") and goes on.
 
 Also takes the [fleet flags](#fleet-flags) and the [DNS check flags](#dns-check-flags).
 

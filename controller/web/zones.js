@@ -1,8 +1,8 @@
 // Zones (zones.html): every zone the
 // fleet answers for, in one place, whatever its source: hosted here, copied from your
 // primary, or forwarded (/api/zone-inventory). All nodes serve the same zones, so a zone
-// shows the fleet's state, never a node's. The zone primary is the first row: its address,
-// the networks it allows zone transfers from, and the zones copied from it (primary.js).
+// shows the fleet's state, never a node's. The zone primary is the first row: its address
+// and the zones copied from it (primary.js).
 // + Add zone (addzone.js; the first run mounts it too) is a box: a zone typed is looked up
 // (/api/zone-lookup) and added the way it lives: hosted here, copied from your primary, or
 // forwarded. A zone opens its page
@@ -14,7 +14,7 @@
 // Everything from a node, a config or the controller is put in as text.
 import { shell, h, arr, obj, str, hostOnly, addr, copyText, toast, panel, refreshChanges, onChanges, getJSON, post, session } from "./shell.js";
 import { onNodes, every } from "./common.js";
-import { primaryFields, uncovered, net24 } from "./primary.js";
+import { primaryFields } from "./primary.js";
 import { addZone, zoneEditor, readConfigs as readCfgs, primaryIP as primaryIPOf, IPV4, canon, fileOf, said } from "./addzone.js";
 
 shell("zones.html");
@@ -277,7 +277,7 @@ view.addEventListener("click", e => {
 
 // ---- the zone primary -------------------------------------------------------------------
 
-// primaryRow is the zone primary, closed: its address and the networks it allows; open: the
+// primaryRow is the zone primary, closed: its address; open: the
 // form (settings.json's "primary", saved at once: it is the controller's, not a node's).
 // The zones listed are those to copy from it: a zone added there is copied by every node
 // (a change to apply), one removed is no longer copied.
@@ -285,9 +285,8 @@ let primarySay = null;
 function primaryRow(box) {
   const val = h("span", { class: "val" });
   const say = () => {
-    const p = obj(obj(data.inv).primary), a = primaryAddr();
-    const nets = arr(p.allows).map(str);
-    val.textContent = !data.inv ? "" : !p.set && !a ? "Not set up" : [a, nets.length ? `allows ${nets.join(", ")}` : "no networks set"].filter(Boolean).join(" · ");
+    const a = primaryAddr();
+    val.textContent = !data.inv ? "" : a || "Not set up";
   };
   primarySay = say;
   say();
@@ -311,8 +310,7 @@ async function primaryForm(body, say) {
   try { st = await getJSON("api/settings"); await readConfigs(); } catch (e) { body.replaceChildren(h("p", { class: "hint bad" }, `Can't read the settings: ${said(e.message)}`)); return; }
   const cur = obj(obj(st.settings).primary);
   const before = [...new Set([...arr(cur.zones).map(str), ...copiedFrom(str(cur.address) || primaryAddr())])];
-  const nodeAddrs = () => listedNodes().map(n => hostOnly(n.addr));
-  const f = primaryFields(cur, nodeAddrs, before);
+  const f = primaryFields(cur, before);
   const msg = h("span", { class: "hint", role: "status" });
   const save = h("button", { class: "btn primary", type: "button", id: "psave", disabled: !data.canWrite }, "Save");
   save.addEventListener("click", async () => {
@@ -496,22 +494,26 @@ function refreshZoneHead() {
 
 // problemBox says what is wrong with a zone, with the fix: the same for every node.
 function problemBox(z, box) {
-  if (z.pending === "add" || !["expired", "waiting", "error", "no_file"].includes(z.state)) { box.replaceChildren(); return; }
-  if (box.dataset.state === z.state && box.firstChild) return;
-  box.dataset.state = z.state;
+  // failing are the nodes whose copy of a copied zone expired or whose last copies failed
+  // (their /status): the primary most often refused the transfer.
+  const failing = z.kind !== "secondary" ? [] : listedNodes().filter(n => arr(obj(n.status).zones).map(obj)
+    .some(c => canon(c.name) === z.name && (c.expired || c.fails > 0))).map(n => hostOnly(n.addr));
+  if (z.pending === "add" || (!["expired", "waiting", "error", "no_file"].includes(z.state) && !failing.length)) { box.replaceChildren(); return; }
+  const key = `${z.state} ${failing}`;
+  if (box.dataset.state === key && box.firstChild) return;
+  box.dataset.state = key;
   const alert = (...k) => h("div", { class: "alert-box", id: "problem" }, ...k);
   if (z.state === "error") { box.replaceChildren(alert(h("b", {}, "The zone file doesn't pass its checks."), h("p", {}, z.text), h("p", { class: "hint" }, "Fix the file under Advanced. The nodes keep the version they have."))); return; }
   if (z.state === "no_file") { box.replaceChildren(alert(h("b", {}, "The nodes serve this zone, but there's no file for it here."), h("p", { class: "hint" }, "The next change to the hosted zones takes it off the nodes unless you add a file first."))); return; }
   if (z.kind !== "secondary") { box.replaceChildren(alert(h("b", {}, "No node serves this zone yet."), h("p", { class: "hint" }, "It goes to the nodes with the next Apply."))); return; }
-  // A copied zone the nodes can't copy: usually the primary doesn't allow zone transfers
-  // from their network.
-  const nets = arr(obj(obj(data.inv).primary).allows).map(str);
-  const out = uncovered(listedNodes().map(n => hostOnly(n.addr)), nets);
-  box.replaceChildren(alert(h("b", {}, z.state === "expired" ? "Your nodes can't copy this zone from your primary." : "Your nodes haven't copied this zone yet."),
+  // A copied zone the nodes can't copy: usually the primary refuses them the transfer.
+  const who = failing.join(", ");
+  box.replaceChildren(alert(h("b", {}, failing.length ? `Copying this zone from your primary is failing on ${who}.`
+    : z.state === "expired" ? "Your nodes can't copy this zone from your primary." : "Your nodes haven't copied this zone yet."),
     h("p", {}, "They keep answering from the copy they have, if any."),
-    h("p", { class: "hint" }, out.length
-      ? `${out.join(", ")} ${out.length === 1 ? "is" : "are"} in none of the networks your primary allows: allow zone transfers from ${[...new Set(out.map(net24))].join(", ")} there, then add it under Zone primary.`
-      : `On your primary, check that ${z.name} allows zone transfers from your nodes' networks${nets.length ? ` (${nets.join(", ")})` : ""}, and that it serves the zone.`)));
+    h("p", { class: "hint" }, failing.length
+      ? `Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of ${z.name} from ${who}, and check that it serves the zone.`
+      : `On your primary, allow zone transfers (AXFR) of ${z.name} to your nodes' addresses, and check that it serves the zone.`)));
 }
 
 const section = (title, hint, ...kids) => h("section", {}, h("div", { class: "sec-head" }, h("h2", {}, title), hint ? h("span", { class: "hint" }, hint) : null), ...kids);

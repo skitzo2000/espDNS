@@ -166,8 +166,7 @@ one of:
 
 Picking an existing name fills the form from its config, and your choices are saved back
 to it. A name no node uses has **Delete this name**, which asks first; the file stays in
-its history. **Add node** tries the node first, changing nothing. If its address isn't in a
-network your zone primary allows zone transfers from, it tells you once which to allow.
+its history. **Add node** tries the node first, changing nothing.
 
 Node not listed? mDNS doesn't cross subnets: type its address in **+ Add node**.
 

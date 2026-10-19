@@ -119,9 +119,9 @@ Fix: apply your lists and hosted zones to it again. Nothing else on the card was
 **`zone expired`** (preceded by **`zone refresh failing`**, after three failed refreshes
 in a row). A secondary zone passed its SOA expire time without a refresh from the primary.
 Fix: check that the primary is up and reachable, that its address in the node's config is
-right, and that it allows zone transfers from this node's network (the zone's page on
-**Zones** names any node outside them;
-[On your primary](zones.md#on-your-primary-allow-zone-transfers-from-your-nodes-networks)).
+right, and that it allows zone transfers (AXFR) to this node's address (the zone's page on
+**Zones** names the nodes whose copies fail;
+[On your primary](zones.md#on-your-primary-allow-zone-transfers-to-your-nodes)).
 
 **`forwarders failing`.** The default forwarders missed five queries in a row over at least
 30 seconds (forward zones don't count).
@@ -360,13 +360,12 @@ already done are skipped).
 - Another node has the same ID, or another node is pinned to that address: see
   [Pinned to another node](#pinned-to-another-node).
 
-### "Your zone primary must allow zone transfers from ..."
+### "Copying this zone from your primary is failing on ..."
 
-The adoption worked, but the node's address is outside the networks you said your
-primary allows transfers from (**Zones**, **Zone primary**), so it can't copy secondary
-zones yet.
-Fix: allow transfers from that network on the primary, then add it under **Networks it
-allows zone transfers from** on Zones.
+A zone's page on **Zones** names the nodes whose copies of it fail or expired. Most often
+the primary refused them the transfer.
+Fix: on the primary, allow zone transfers (AXFR) of the zone to each address named, and
+check that it serves the zone.
 
 ### "zone primary API token" at startup
 

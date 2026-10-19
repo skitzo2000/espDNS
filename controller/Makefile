@@ -402,8 +402,8 @@ fleet-revert: fleet-image fleet-key-check
 # optionally ADDRESS=a.b.c.d/nn [GATEWAY=...]. Without ADDRESS the address is the
 # config's network, else the one the node runs on now (its /status). RESERVED=1 only with
 # ADDRESS=dhcp, on a network with a DHCP server (never one in settings.json's no_dhcp). Nothing
-# is changed on the zone primary: adopt says once when the node's address is in none of the
-# networks settings.json's "primary" says it allows zone transfers from. ADD_TO_SETTINGS=1:
+# is changed on the zone primary: adopt says once that it must allow zone transfers to the
+# node's address. ADD_TO_SETTINGS=1:
 # once adopted, its address goes into settings.json. The
 # controller's Adopt page builds the same adoption from the same request (internal/adoption).
 ADOPT_ARGS = $(KEY_ARGS) $(FLEET) -mdns 0 $(if $(HOST),-host $(HOST)) $(if $(NODE),-node $(NODE)) \

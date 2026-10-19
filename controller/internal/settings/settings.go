@@ -65,11 +65,10 @@ type Settings struct {
 	// node is, with its reservation.
 	NoDHCP []string `json:"no_dhcp,omitempty"`
 	// Primary is the zone primary the nodes copy their secondary zones from
-	// (internal/primary): {"address": "192.0.2.254", "allows": ["192.0.2.0/24"], "zones":
-	// ["home.example"]}, its address, the networks it allows zone transfers from, as you
-	// set it up, and the zones to copy from it (a new node's config starts with them).
-	// Adoption says once when a node's address is in none of the networks. An older file's API fields
-	// ("kind", "url", "cert_sha256") are read and ignored, and dropped when it is written.
+	// (internal/primary): {"address": "192.0.2.254", "zones": ["home.example"]}, its address
+	// and the zones to copy from it (a new node's config starts with them). An older file's
+	// fields ("kind", "url", "cert_sha256", "allows") are read and ignored, and dropped when
+	// it is written.
 	// Absent: none set up.
 	Primary *primary.Config `json:"primary,omitempty"`
 	// InternalSources is the internal allowlist: the hosts (a name or an IP address, no

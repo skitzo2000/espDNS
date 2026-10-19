@@ -27,7 +27,7 @@ import (
 
 // adoptEnv is the controller's adoption on a fake network: a node in service in
 // settings.json (203.0.113.51), one to adopt (203.0.113.52), the zone primary in
-// settings.json allowing zone transfers from 203.0.113.0/24, the job runner with the
+// settings.json, the job runner with the
 // adoption's kinds.
 type adoptEnv struct {
 	t      *testing.T
@@ -57,7 +57,7 @@ func newAdoptEnv(t *testing.T) *adoptEnv {
 		}
 	}
 	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"},
-		Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}}); err != nil {
+		Primary: &primary.Config{Address: "203.0.113.254"}}); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(configs.Path(e.dir), "n2.json"), []byte(`{"name": "dns2", "forwarders": ["9.9.9.9"], `+
@@ -147,8 +147,7 @@ func progressOf(t *testing.T, j jobs.Job) adoptProgress {
 }
 
 // The Adopt page's flow: a dry run (nothing changed), then the adoption after it: each step
-// followed, nothing said about the zone primary (the node's address is in a network it
-// allows), the node moved and confirmed, the config it runs recorded by the controller,
+// followed, the node moved and confirmed, the config it runs recorded by the controller,
 // its address added to settings.json as asked, the job in the action log.
 func TestAdoptPage(t *testing.T) {
 	e := newAdoptEnv(t)
@@ -162,7 +161,7 @@ func TestAdoptPage(t *testing.T) {
 		t.Fatal(dry.State, dry.Error, dry.Log)
 	}
 	p := progressOf(t, dry)
-	if !p.DryRun || p.Address != "203.0.113.60" || p.Primary.Advice != "" || p.Primary.Primary != "203.0.113.254" ||
+	if !p.DryRun || p.Address != "203.0.113.60" || p.Primary.Primary != "203.0.113.254" ||
 		!slices.Equal(p.Primary.Zones, []string{"home.example", "lab.example"}) || len(p.Hints) != 0 {
 		t.Fatalf("%+v", p)
 	}
@@ -189,7 +188,7 @@ func TestAdoptPage(t *testing.T) {
 			t.Errorf("step %d: %s %s", s.N, s.State, s.Detail)
 		}
 	}
-	if !strings.HasPrefix(p.Outcome, "adopted: node "+e.node.ID()+" on 203.0.113.60") || p.Primary.Advice != "" {
+	if !strings.HasPrefix(p.Outcome, "adopted: node "+e.node.ID()+" on 203.0.113.60") {
 		t.Fatalf("%+v", p)
 	}
 	var res adoptResult
@@ -353,56 +352,23 @@ func TestAdoptPageRefusesFellBack(t *testing.T) {
 	}
 }
 
-// A node whose address is in none of the networks the zone primary allows: the preview,
-// the dry run and the adoption say once what to set up there, and the adoption goes ahead
-// with nothing to confirm. GET /api/adopt says which nodes in settings.json aren't covered.
-func TestAdoptPagePrimaryAdvice(t *testing.T) {
+// The zone primary: the dry run says once what it must allow, with no hint to act on, and
+// GET /api/adopt has its address and zones only.
+func TestAdoptPagePrimary(t *testing.T) {
 	e := newAdoptEnv(t)
-	if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"},
-		Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"198.51.100.0/24"}}}); err != nil {
-		t.Fatal(err)
-	}
-	const want = "Your zone primary must allow zone transfers from 203.0.113.52: allow its network (e.g. 203.0.113.0/24) there once."
-	w := httptest.NewRecorder()
-	b, _ := json.Marshal(e.web(nil))
-	e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
-	var pv adoptPreview
-	json.Unmarshal(w.Body.Bytes(), &pv)
-	if w.Code != 200 || pv.Advice != want || pv.Refusal != "" {
-		t.Fatalf("%d %+v %s", w.Code, pv, w.Body)
-	}
 	dry := e.run("adopt", e.web(map[string]any{"dry_run": true}))
-	p := progressOf(t, dry)
-	if dry.State != jobs.Done || p.Primary.Advice != want || !slices.Contains(p.Hints, want) || countLog(dry, "must allow") != 1 {
+	if p := progressOf(t, dry); dry.State != jobs.Done || len(p.Hints) != 0 ||
+		countLog(dry, "your zone primary must allow zone transfers (AXFR) to 203.0.113.52") != 1 {
 		t.Fatalf("%s %+v %v", dry.State, p, dry.Log)
 	}
-	j := e.run("adopt", e.web(map[string]any{"after": dry.ID}))
-	if p := progressOf(t, j); j.State != jobs.Done || p.Primary.Advice != want || !slices.Contains(p.Hints, want) {
-		t.Fatal(j.State, j.Error, p)
-	}
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	e.adopt.list(w, httptest.NewRequest("GET", "/api/adopt", nil))
 	var l struct {
-		Primary struct {
-			Address   string   `json:"address"`
-			Allows    []string `json:"allows"`
-			Uncovered []string `json:"uncovered"`
-		} `json:"primary"`
+		Primary map[string]any `json:"primary"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &l)
-	if l.Primary.Address != "203.0.113.254" || !slices.Equal(l.Primary.Allows, []string{"198.51.100.0/24"}) ||
-		!slices.Equal(l.Primary.Uncovered, []string{"203.0.113.51"}) {
+	if l.Primary["address"] != "203.0.113.254" || l.Primary["allows"] != nil || l.Primary["uncovered"] != nil {
 		t.Fatalf("%s", w.Body)
-	}
-	// A config with no secondary zones: nothing to say about a primary.
-	writeFile(t, filepath.Join(configs.Path(e.dir), "plain.json"), []byte(`{"name": "dns3"}`))
-	b, _ = json.Marshal(e.web(map[string]any{"config": "plain.json"}))
-	w = httptest.NewRecorder()
-	e.adopt.preview(w, httptest.NewRequest("POST", "/api/adopt/preview", strings.NewReader(string(b))))
-	pv = adoptPreview{}
-	json.Unmarshal(w.Body.Bytes(), &pv)
-	if pv.Advice != "" {
-		t.Fatal(pv)
 	}
 }
 

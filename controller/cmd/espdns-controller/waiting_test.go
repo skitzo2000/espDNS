@@ -55,7 +55,7 @@ func (e *addNodeEnv) waiter() waiter {
 func TestWaitingAPI(t *testing.T) {
 	e := newAddNodeEnv(t)
 	s, _ := settings.Load(settings.Path(e.dir))
-	s.Primary = &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}, Zones: []string{"home.example"}}
+	s.Primary = &primary.Config{Address: "203.0.113.254", Zones: []string{"home.example"}}
 	if err := settings.Save(settings.Path(e.dir), s); err != nil {
 		t.Fatal(err)
 	}
