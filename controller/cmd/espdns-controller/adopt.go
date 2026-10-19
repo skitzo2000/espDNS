@@ -682,7 +682,6 @@ func (p adoptKind) preview(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out.Address, out.Gateway, out.How = a.Address.String(), a.Gateway.String(), a.AddressHow(st)
 		cfg.Network = &nodecfg.Network{Address: a.Address.String(), Gateway: a.Gateway.String()}
-		at = a.Address.Addr().String()
 		if a.Address.Addr().String() != adoption.HostOnly(web.Node) {
 			out.Notes = append(out.Notes, "A new address: the dry run checks nothing else answers there; the node moves there "+
 				"with a reboot and keeps it only once it is reached there.")

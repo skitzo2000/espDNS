@@ -59,7 +59,13 @@ onChanges(p => {
     readConfigs().then(() => { readInventory(); });
   }
 });
-onNodes(ns => { data.nodes = arr(ns); renderCopy(); });
+onNodes(ns => {
+  data.nodes = arr(ns);
+  renderCopy();
+  // A zone's page names the nodes whose copies fail (their /status): drawn again with them.
+  const z = zoneCtx && zoneRow(zoneCtx.name);
+  if (z) problemBox(z, zoneCtx.problem);
+});
 every(readInventory, 10000);
 
 // ---- the zones, with what waits to apply --------------------------------------------------
@@ -512,7 +518,7 @@ function problemBox(z, box) {
     : z.state === "expired" ? "Your nodes can't copy this zone from your primary." : "Your nodes haven't copied this zone yet."),
     h("p", {}, "They keep answering from the copy they have, if any."),
     h("p", { class: "hint" }, failing.length
-      ? `Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of ${z.name} from ${who}, and check that it serves the zone.`
+      ? `Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of ${z.name} to ${who}, and check that it serves the zone.`
       : `On your primary, allow zone transfers (AXFR) of ${z.name} to your nodes' addresses, and check that it serves the zone.`)));
 }
 

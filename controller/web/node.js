@@ -722,7 +722,7 @@ function renderServes() {
   const zoneLine = [parts.join(" · ") || "None", " · ", h("a", { href: "zones.html" }, "Zones ›")];
   if (stale.length) {
     zoneLine.push(h("div", { class: "bad-text small" }, `Out of date: ${stale.map(z => `${str(z.name)}${z.expired ? " (expired)" : " (copies failing)"}`).join(", ")}.`),
-      h("div", { class: "hint" }, `Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) from ${ip(n)}.`));
+      h("div", { class: "hint" }, `Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) to ${ip(n)}.`));
   }
   pair("Zones", ...zoneLine);
   // Blocking

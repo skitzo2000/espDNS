@@ -439,7 +439,7 @@ test("A copied zone: its records read-only; one the nodes can't copy, with the f
   // to allow on the primary; nothing is changed there from here.
   await page.goto("zones.html#zone=stale.example");
   await expect(page.locator("#problem")).toContainText(`Copying this zone from your primary is failing on ${DNS3}.`);
-  await expect(page.locator("#problem")).toContainText(`Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of stale.example from ${DNS3}, and check that it serves the zone.`);
+  await expect(page.locator("#problem")).toContainText(`Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of stale.example to ${DNS3}, and check that it serves the zone.`);
   await expect(page.locator(".recs")).toHaveCount(0);
   // Its records refused too: the nodes have no good copy, so it isn't said they do.
   await expect(page.locator("#records-error")).toHaveText(`Your primary DNS server (${PRIMARY}) refused to send this zone to the controller.`);

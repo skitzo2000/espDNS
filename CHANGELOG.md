@@ -21,7 +21,7 @@ version may change anything. Write each change under Unreleased as it merges;
   and dropped the next time the file is written.
 - A copied zone whose copies fail names the nodes: its page on Zones says copying is
   failing on those addresses, that the primary most likely refused the transfer, and to
-  allow zone transfers (AXFR) of the zone from them on the primary.
+  allow zone transfers (AXFR) of the zone to them on the primary.
 
 ## [controller 0.0.10] - 2026-10-19
 
