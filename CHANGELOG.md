@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.10] - 2026-10-19
+
 ### Fixed
 
 - A node of yours installed again with **Install over USB** (from its page or from Nodes)
