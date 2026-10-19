@@ -154,15 +154,20 @@ controller says so once at start.
 
 On the primary itself:
 
-1. Allow zone transfers (AXFR/IXFR) of each zone to your nodes' addresses.
+1. Allow zone transfers (AXFR/IXFR) of each zone to your nodes' addresses, and to nothing
+   else. Transfers aren't authenticated (no TSIG): anything allowed can read the whole zone.
+   Keep your nodes on fixed addresses (static, or a DHCP reservation), so an allowed address
+   stays a node.
 2. Optionally, send NOTIFY for the zone to the nodes, so a change reaches them at once.
    Without it, each node finds the change at its next SOA check (every 60 s by default,
    `soa_poll_s`).
 
 If it doesn't work, the zone's page on Zones names the nodes whose copies fail.
 
-> **Artie's tip:** allow the whole network your nodes are on, not each node's address. Then
-> new birds join the flock without a trip to the primary.
+> **Artie's tip:** the easy option is to allow an internal network your nodes are on, so new
+> birds join the flock without a trip to the primary. Do it only for a network that holds
+> nothing but devices you trust: everything on it can read your zones. Never allow any
+> address.
 
 ### Secondary zones in a node config
 
