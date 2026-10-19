@@ -195,10 +195,12 @@ function foundRow(f) {
 // A board installed over USB, waiting to be added: a light-blue row with what it waits for;
 // on DHCP, once found, the address to reserve for its MAC with Add it; "Adding it…" while
 // the controller adds it, or why that failed with Retry. Remove (asked first) takes it off
-// the list; its config file stays.
+// the list; its config file stays. One of your nodes installed again (reinstall) says
+// "Restoring its settings…" while the controller sends them, or why that failed.
 function waitingRow(w) {
-  const failed = w.state === "failed", found = w.state === "found";
-  const text = failed ? `Couldn't add it: ${str(w.error)}` : w.state === "adding" ? "Adding it…"
+  const failed = w.state === "failed", found = w.state === "found", back = !!w.reinstall;
+  const text = failed ? `${back ? "Couldn't restore its settings" : "Couldn't add it"}: ${str(w.error)}`
+    : w.state === "adding" ? (back ? "Restoring its settings…" : "Adding it…")
     : found ? `Found at ${str(w.found)}. Reserve that address for MAC ${str(w.mac)} in your router, then add it.` : "Waiting for it: plug it into your network";
   const act = (label, path, cls = "btn small") => h("button", { class: cls, type: "button", onclick: async () => {
     try { await post(`api/nodes/waiting/${encodeURIComponent(w.id)}/${path}`); } catch (e) { toast(e.message); }

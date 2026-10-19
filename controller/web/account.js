@@ -77,6 +77,7 @@ const JOBS = {
   "key-rotate": ["Keys rotated", "Rotating keys stopped at a node", "Rotating keys stopped"],
   "node-out": ["Taken out of service", "Taking out of service failed", "Taking out of service stopped"],
   "node-in": ["Returned to service", "Returning to service failed", "Returning to service stopped"],
+  "node-restore": ["Settings restored after a reinstall", "Restoring settings after a reinstall failed", "Restoring settings after a reinstall stopped"],
   "node-remove": ["Removed from the group", "Removing from the group failed", "Removing from the group stopped"],
 };
 const SKIP = new Set(["job check", "change add", "change discard"]);

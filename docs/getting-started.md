@@ -113,8 +113,17 @@ board. The panel then goes through the steps, one under the other:
   waiting until it answers, then the controller adds it by itself. On DHCP, its row says
   the address it got and its MAC once it answers: reserve that address for that MAC in your
   router, then press **Add it**. If adding it fails, its row says why, with **Retry**;
-  **Remove** takes it off the list. A node of yours installed again is waited for in the
-  panel instead, until it's back.
+  **Remove** takes it off the list.
+
+A node of yours installed again (from its page with **Reinstall over USB**, or with
+**Install over USB** on Nodes) keeps its name: the panel says to plug it into your network,
+with **OK**. Once it answers, the controller gives it back its settings by itself: its
+config, zones, lists and allowed and blocked sites, and its Wi-Fi password, sealed to its
+new node key. Installed with another address than it had, it moves there once the old
+address is silent, and keeps the new one. Its row on Nodes says **Restoring its
+settings…** meanwhile, or why that failed, with **Retry**. A node out of service stays out
+of service. A board not seen within an hour of its install is marked failed: install it
+again.
 
 **Board log**, under the steps, shows what the board prints. **Download log** saves it,
 and **Restart the board** restarts it.

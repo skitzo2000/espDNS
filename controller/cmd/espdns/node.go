@@ -113,7 +113,7 @@ func returnNode(ctx context.Context, dataDir, catalog, key, node string) error {
 	if err := service.Ready(node, st, err, fp); err != nil {
 		return err
 	}
-	steps, notes, err := service.CatchUp(dataDir, catalog, node, st, changes.New(dataDir).ListSums)
+	steps, notes, err := service.CatchUp(dataDir, catalog, node, "", st, changes.New(dataDir).ListSums)
 	if err != nil {
 		return err
 	}
