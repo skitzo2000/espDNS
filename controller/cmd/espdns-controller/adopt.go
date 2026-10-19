@@ -800,11 +800,14 @@ func (p adoptKind) settingsAdd(raw json.RawMessage) (jobs.Func, error) {
 // release key and reporting the node key recorded for that ID (catching an honest
 // mismatch); `from` is listed and silent; `node` is neither listed nor pinned to another
 // node. The entry moves in place (settings.MoveNode: the canary and out_of_service with it),
-// then the pin; a pin that fails puts the entry back.
+// then the pin; a pin that fails puts the entry back. node_key, for a node installed again
+// over USB from here (waiting.go), is the node key read over USB: a node reporting it is the
+// one expected, rather than the key pinned (pinned only once it has its settings back).
 func (p adoptKind) settingsMove(raw json.RawMessage) (jobs.Func, error) {
 	var np struct {
-		Node string `json:"node"`
-		From string `json:"from"`
+		Node    string `json:"node"`
+		From    string `json:"from"`
+		NodeKey string `json:"node_key,omitempty"`
 	}
 	if err := decodeStrict(raw, &np); err != nil {
 		return nil, err
@@ -859,7 +862,7 @@ func (p adoptKind) settingsMove(raw json.RawMessage) (jobs.Func, error) {
 		} else if err != nil && !errors.Is(err, pins.ErrNotPinned) {
 			return err
 		}
-		if why := p.nodeKeyRefusal(st); why != "" {
+		if why := p.nodeKeyRefusal(st); why != "" && (np.NodeKey == "" || st.NodeKey != np.NodeKey) {
 			return fmt.Errorf("%s: %s", np.Node, why)
 		}
 		id = st.NodeID

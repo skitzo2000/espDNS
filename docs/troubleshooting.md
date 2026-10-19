@@ -278,6 +278,14 @@ again. **Restart the board** under the Board log does the same over USB.
 the network's name and the password, and press **Join** again. The board joins 2.4 GHz
 networks only.
 
+**A node of yours installed again runs on its board's settings.** Installed from this
+controller, it gets its settings back by itself once it answers: wait for its row on Nodes.
+If the row says **Couldn't restore its settings**, it says why: fix that and press
+**Retry**. Without a node key read over USB (a wired-only P4 board, or the line missed),
+the node is found only at the address installed in its image. **Not seen within an hour of
+the install** means it never answered: install it again. Installed some other way, take
+it out of service and return it to service.
+
 **`It didn't ask for Wi-Fi`.** The board didn't answer the Wi-Fi setup: it has its Ethernet
 add-on fitted and uses that, or it isn't running espDNS yet (see the line above).
 

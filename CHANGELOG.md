@@ -11,6 +11,18 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Fixed
+
+- A node of yours installed again with **Install over USB** (from its page or from Nodes)
+  gets its settings back by itself. It came back on its board's settings, uncounted, and
+  needed **Take out of service** then **Return to service**. Now **OK** after the install
+  hands it to the controller, which, once it answers, pins the node key its console
+  printed over USB and sends it its config, zones, lists and allowed and blocked sites,
+  with its Wi-Fi password sealed to that key. Installed at another address, it moves there
+  and keeps it. Nodes shows **Restoring its settings…**, or why it failed with **Retry**. A
+  node out of service stays out of service. A board installed over USB and not seen within
+  an hour is marked failed, to install again.
+
 ## [controller 0.0.9] - 2026-10-17
 
 ### Changed

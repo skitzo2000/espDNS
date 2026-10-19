@@ -1,7 +1,8 @@
 // Package service is a node taken out of service, returned to it, or removed from the group
 // (settings.json "out_of_service" and "nodes"; docs/operations.md, Taking a node out of
 // service): the rules each one follows, and what a node returned to service is sent first.
-// The controller's jobs ("node-out", "node-in", "node-remove") and the CLI (espdns node)
+// The controller's jobs ("node-out", "node-in", "node-remove"; "node-restore" sends a node
+// installed again over USB what node-in sends) and the CLI (espdns node)
 // both take them from here.
 //
 // A node out of service stays listed, polled and shown with its last status, but nothing is
@@ -106,13 +107,14 @@ type Step struct {
 }
 
 // CatchUp is what the node at host (st, read now) is sent before it counts again, in the
-// order an apply sends them: its config (the file it runs, by its name or address, or the one
-// last pushed to it), the hosted zones, the allowed and blocked sites, its blocklist (the one
+// order an apply sends them: its config (the file cfg names if there is one, as for a node
+// back on its board's settings, which says neither; else the file it runs, by its name or
+// address, or the one last pushed to it), the hosted zones, the allowed and blocked sites, its blocklist (the one
 // it runs, or one an apply that stopped compiled it from: sums; else the fleet's list), and
 // the newest firmware for it if it runs an older one. Each is the whole of what the
 // controller has now: a node that has it already is skipped by its rollout. Notes say what
 // isn't sent and why.
-func CatchUp(dataDir, catalog, host string, st release.NodeStatus, sums func(list string) []string) ([]Step, []string, error) {
+func CatchUp(dataDir, catalog, host, cfg string, st release.NodeStatus, sums func(list string) []string) ([]Step, []string, error) {
 	var out []Step
 	var notes []string
 	one := func(what string, w rolling.Web) {
@@ -125,12 +127,16 @@ func CatchUp(dataDir, catalog, host string, st release.NodeStatus, sums func(lis
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg, text := "", []byte(nil)
+	named := slices.ContainsFunc(files, func(f configs.File) bool { return f.Name == cfg })
+	var text []byte
 	for _, f := range files {
-		if configs.Matches(f.Config, host, st) || pushedHere(dataDir, st, f.Name) {
+		if named && f.Name == cfg || !named && (configs.Matches(f.Config, host, st) || pushedHere(dataDir, st, f.Name)) {
 			cfg, text = f.Name, f.Text
 			break
 		}
+	}
+	if text == nil {
+		cfg = ""
 	}
 	switch sp, err := configs.ParseSpec(host, cfg, text); {
 	case cfg == "":
