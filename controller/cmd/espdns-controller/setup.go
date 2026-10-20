@@ -41,8 +41,7 @@ import (
 //	                     blocking chosen) or one skipped (zones, blocking): marked done in
 //	                     setup.json. keys only once both keys are there.
 //	GET  /api/settings   settings.json as the form edits it (every field, empty ones too), its
-//	                     version, and the zone primary as the Zones page shows it (the nodes
-//	                     in none of the networks it allows)
+//	                     version, and the zone primary as the Zones page shows it
 //	POST /api/settings   {"settings": {...}, "version"}: settings.json replaced whole if still
 //	                     the version read; the form again
 //
@@ -309,8 +308,7 @@ func (s setupServer) view() (map[string]any, error) {
 		}
 		out["error"] = err.Error() // shown, and replaced whole by the next save
 	}
-	// The zone primary as the Zones page shows it: which nodes' addresses are in none of
-	// the networks it allows.
+	// The zone primary as the Zones page shows it.
 	out["primary"] = primaryFacts(st)
 	return out, nil
 }
@@ -411,8 +409,7 @@ func changedFields(a, b settings.Settings) []string {
 		{"dns_peer_zones", slices.Equal(a.DNSPeerZones, b.DNSPeerZones)},
 		{"canary", a.Canary == b.Canary},
 		{"no_dhcp", slices.Equal(a.NoDHCP, b.NoDHCP)},
-		{"primary", a.ZonePrimary().Address == b.ZonePrimary().Address && slices.Equal(a.ZonePrimary().Allows, b.ZonePrimary().Allows) &&
-			slices.Equal(a.ZonePrimary().Zones, b.ZonePrimary().Zones)},
+		{"primary", a.ZonePrimary().Address == b.ZonePrimary().Address && slices.Equal(a.ZonePrimary().Zones, b.ZonePrimary().Zones)},
 		{"internal_sources", slices.Equal(a.InternalSources, b.InternalSources)},
 		{"blocklist_refresh", a.BlocklistRefresh == b.BlocklistRefresh},
 	} {

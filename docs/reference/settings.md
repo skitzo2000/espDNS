@@ -30,7 +30,7 @@ dashboard's Settings page (which writes it whole) or by hand.
   "dns_peer_zones": ["home.arpa"],
   "canary": "192.0.2.53",
   "no_dhcp": ["192.0.2.0/24"],
-  "primary": { "address": "192.0.2.1", "allows": ["192.0.2.0/24"], "zones": ["home.arpa"] }
+  "primary": { "address": "192.0.2.1", "zones": ["home.arpa"] }
 }
 ```
 
@@ -56,31 +56,31 @@ always works.
 ### primary
 
 ```json
-{ "address": "192.0.2.1", "allows": ["192.0.2.0/24"], "zones": ["home.arpa"] }
+{ "address": "192.0.2.1", "zones": ["home.arpa"] }
 ```
 
 The zone primary the nodes copy their secondary zones from. Any standards-compliant primary
 works (BIND, Knot, PowerDNS, Windows DNS, Technitium and others): each node copies a zone by
 AXFR/IXFR, checks its SOA for changes, and takes the primary's NOTIFYs if it sends them.
 
-Set the primary up once to allow zone transfers (and, if you like, NOTIFY) from your nodes'
-networks; adding a node then changes nothing there. The controller never changes the
+The primary must allow zone transfers (AXFR) to your nodes' addresses (and, if you like, send
+them NOTIFY): set that up on it. The controller never changes the
 primary. It only sends it DNS queries (a zone lookup's SOA query, or an AXFR when you open a
 copied zone).
 
 | Field | Meaning | Checks |
 |-------|---------|--------|
 | `address` | The primary's address, as a node config's `secondary.primary` names it. | An IPv4 address. |
-| `allows` | The networks the primary allows zone transfers from, as you set it up. When a node's address is in none of them, adoption says once what to allow there; it never stops on it. The Zones page names the nodes outside them. | Each an IPv4 network with its prefix length, as its network address (`192.0.2.0/24`). No duplicates. |
 | `zones` | The zones to copy from the primary. A new node's config starts with them; the node configs say what each node copies. | Each a zone name in lower case, without the final dot. No duplicates. |
 
-All three are optional. Edit them on the Zones page (Zone primary); a zone copied from a
+Both are optional. Edit them on the Zones page (Zone primary); a zone copied from a
 primary with + Add zone, there or in the setup, fills in its address and the zone.
 
 An older controller's `settings.json` may have `"kind"`, `"url"` and `"cert_sha256"` here,
-from when it drove a primary's API. They're accepted and ignored: the controller logs once at
-startup that they're unused, takes the IP address in `"url"` (if it is one) as `address` when
-none is given, and drops them the next time it writes the file.
+from when it drove a primary's API, or `"allows"`, the networks the primary allowed. They're
+accepted and ignored: the controller logs once at startup that they're unused, takes the IP
+address in `"url"` (if it is one) as `address` when none is given, and drops them the next
+time it writes the file.
 
 ## Controller flags
 

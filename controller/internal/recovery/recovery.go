@@ -129,7 +129,7 @@ var NotRecovered = []string{
 	"hosted zones' master files: /status names each zone with its serial and records, and the bundle's hash, which tells " +
 		"whether files put back here are the ones a node serves",
 	"blocklist and overrides files: build them again (espdns blocklist); /status gives each list's seq and entries",
-	"the DNS peers and the zone primary (\"primary\": its address and the networks it allows) in settings.json, and the canary: add them by hand",
+	"the DNS peers and the zone primary (\"primary\": its address and zones) in settings.json, and the canary: add them by hand",
 	"the login (espdns passwd), the action log, job records, " +
 		"config and zone history, the pushed records (the next push writes them again)",
 	"firmware builds and chip images: load them again with espdns release import",

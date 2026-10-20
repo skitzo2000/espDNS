@@ -15,7 +15,6 @@ import (
 
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
 	"github.com/skitzo2000/espdns/controller/internal/pins"
-	"github.com/skitzo2000/espdns/controller/internal/primary"
 	"github.com/skitzo2000/espdns/controller/internal/release"
 )
 
@@ -46,14 +45,6 @@ type Adopt struct {
 	Config *nodecfg.Config
 	// Identify flickers the node's LED for this long first, to match it to the board.
 	Identify time.Duration
-	// Primary is the zone primary as settings.json names it (internal/primary): step 4
-	// says once, for a node carrying secondary zones, when its address is in none of the
-	// networks it allows zone transfers from (Advice). Nothing is changed on the primary,
-	// and nothing waits on it.
-	Primary primary.Config
-	// Advice, if set, hears what step 4 says to set up on the zone primary ("" when the
-	// node's address is in a network it allows, or it carries no secondary zones).
-	Advice func(string)
 	// Check, if set, checks the config with its network set from the address, against the
 	// node's /status, before anything is changed (internal/configs: the editor's and a
 	// config rollout's checks).
@@ -223,25 +214,11 @@ func (c *Client) adopt(ctx context.Context, a Adopt, res *AdoptResult) error {
 		}
 	}
 
-	// 4. The zone primary: set up once to allow zone transfers from the nodes' networks.
-	// Nothing is changed there; when the node's address is in none of the networks it
-	// allows, that is said, once.
+	// 4. The zone primary: nothing is changed there. It must allow zone transfers to the
+	// node's address, which you set up on it.
 	step(4, "the zone primary")
 	if s := a.Config.Secondary; s != nil && s.Zones != nil && len(*s.Zones) > 0 {
-		bits := 0
-		if a.Address.IsValid() {
-			bits = a.Address.Bits()
-		}
-		ip, _ := netip.ParseAddr(addr)
-		if n, ok := a.Primary.Covers(ip); ok {
-			c.logf("4. the zone primary allows zone transfers from %s, which %s is in: nothing to set up there", n, addr)
-		} else {
-			adv := a.Primary.Uncovered(addr, bits)
-			c.logf("4. %s", adv)
-			if a.Advice != nil {
-				a.Advice(adv)
-			}
-		}
+		c.logf("4. your zone primary must allow zone transfers (AXFR) to %s: set that up on it", addr)
 	} else {
 		c.logf("4. no secondary zones: nothing to copy from a zone primary")
 	}

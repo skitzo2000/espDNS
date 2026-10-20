@@ -67,7 +67,7 @@ const INV = {
     { name: "lab.example", kind: "secondary", primary: PRIMARY, serial: 7, records: 12, configs: ["dns2.json", "dns3.json"], serving: 2, nodes: 2, state: "ok", text: "on every node" },
   ],
   counts: { hosted: 1, secondary: 1, forward: 1, records: 16 }, primaries: [PRIMARY], nodes: 2, fleet: 2,
-  primary: { set: true, address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example"] },
+  primary: { set: true, address: PRIMARY, zones: ["lab.example"] },
 };
 const HOME = "$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. ( 2026100701 3600 600 604800 300 )\n  IN NS ns1\nns1 IN A 192.0.2.53\nnas IN A 192.0.2.10\n";
 
@@ -119,8 +119,8 @@ async function fake(page) {
         { time: now(), source: "web", who: "admin", action: "job apply", event: "end", result: "done", args: ["{}"] },
         { time: now(), source: "web", who: "admin", action: "job reboot", event: "end", result: "done", args: [JSON.stringify({ node: DNS2 })] },
         { time: now(), source: "web", who: "admin", action: "zone save", event: "end", result: "done", args: ["home.example"] }]);
-      case "GET settings": return json(route, { settings: { nodes: [DNS2, DNS3], primary: { address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example"] } }, version: "v1", exists: true,
-        primary: { set: true, address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example"], uncovered: [] } });
+      case "GET settings": return json(route, { settings: { nodes: [DNS2, DNS3], primary: { address: PRIMARY, zones: ["lab.example"] } }, version: "v1", exists: true,
+        primary: { set: true, address: PRIMARY, zones: ["lab.example"] } });
       case "GET zone-inventory": return json(route, INV);
       case "GET zone-records": return json(route, { name: q("name"), primary: PRIMARY, serial: 7, more: 0, records: [] });
       case "GET zones/home.example.zone": return json(route, { name: "home.example.zone", text: HOME, hash: "h1", history: [] });

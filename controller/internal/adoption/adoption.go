@@ -101,8 +101,7 @@ func HostOnly(a string) string {
 }
 
 // Build checks the request and makes the adoption: the config (with its network set from
-// the address when it runs), the address, the zone primary as settings.json names it (step
-// 4 says when the node's network isn't one it allows), the peers and DNS peers for the rule, the checks. Nothing is changed here; the
+// the address when it runs), the address, the peers and DNS peers for the rule, the checks. Nothing is changed here; the
 // node is only found (mDNS, with -node and no -host) and the other nodes read.
 func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ...any)) (Built, error) {
 	var b Built
@@ -187,8 +186,7 @@ func Build(ctx context.Context, c *fleet.Client, r Request, logf func(string, ..
 	}
 
 	a := fleet.Adopt{Host: host, ID: r.Node, Address: pfx, Gateway: gwAddr, DHCP: dhcp, Config: cfg, Reserved: r.Reserved,
-		NodeKey: r.NodeKey, Identify: r.Identify, DryRun: r.DryRun, ConfirmWait: r.Wait, AllowSingle: r.AllowSingle, Force: r.Force,
-		Primary: s.ZonePrimary()}
+		NodeKey: r.NodeKey, Identify: r.Identify, DryRun: r.DryRun, ConfirmWait: r.Wait, AllowSingle: r.AllowSingle, Force: r.Force}
 	if sec := cfg.Secondary; sec != nil && sec.Zones != nil {
 		b.Primary, b.Zones = sec.Primary, slices.Clone(*sec.Zones)
 	}

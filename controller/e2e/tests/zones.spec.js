@@ -23,10 +23,10 @@ async function watch(page) {
 
 const DNS2 = "192.0.2.53", DNS3 = "192.0.2.54", PRIMARY = "192.0.2.254", SOURCE = "192.0.2.5", FWD = "198.51.100.53", FWD2 = "198.51.100.54";
 
-function node(addr, id, name) {
+function node(addr, id, name, zones = []) {
   return { id, addr, hostname: `${name}.local`, source: "settings", online: true, last_seen: new Date().toISOString(), qps: 0.4,
     status: { board: "p4-ip101", version: "0.0.4", uptime_s: 9660, net: { kind: "ethernet" }, health: { state: "healthy", answering: true, reasons: [] },
-      config: { name, source: "node" } } };
+      config: { name, source: "node" }, zones } };
 }
 
 const HOME = "$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. ( 2026100701 3600 600 604800 300 )\n  IN NS ns1\nns1 IN A 192.0.2.53\nnas IN A 192.0.2.10\n";
@@ -39,12 +39,12 @@ const HOMERECS = [
 
 // fake answers the page's APIs. state.changes is what /api/changes lists; state.posts what
 // was sent; state.configs the node configs as the pending changes make them; state.primary
-// the zone primary in the settings: its address, the networks it allows, the zones to copy.
+// the zone primary in the settings: its address and the zones to copy.
 async function fake(page) {
   const cfg = name => JSON.stringify({ name, secondary: { primary: PRIMARY, zones: ["lab.example", "stale.example"] },
     forward_zones: [{ zone: "corp.example", forwarder: FWD }], wifi: { ssid: "home", password: "••••••••" } }, null, 2);
   const state = { changes: [], posts: [], configs: { "dns2.json": cfg("dns2"), "dns3.json": cfg("dns3") }, zone: HOME, n: 0,
-    primary: { address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example"] }, version: 1 };
+    primary: { address: PRIMARY, zones: ["lab.example"] }, version: 1 };
   const inv = {
     zones: [
       { name: "corp.example", kind: "forward", forwarders: [FWD], configs: ["dns2.json", "dns3.json"], serving: 2, nodes: 2, state: "ok", text: "on every node" },
@@ -54,17 +54,18 @@ async function fake(page) {
         text: "2 nodes' copies expired: it can't copy the zone from its primary" },
     ],
     counts: { hosted: 1, secondary: 2, forward: 1, records: 21 }, primaries: [PRIMARY], nodes: 2, fleet: 2,
-    primary: { set: true, address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example"] },
+    primary: { set: true, address: PRIMARY, zones: ["lab.example"] },
   };
   const settings = () => ({ settings: { nodes: [DNS2, DNS3], dns_peers: [], dns_peer_zones: [], canary: "", no_dhcp: [], primary: state.primary, internal_sources: [] },
-    version: `v${state.version}`, exists: true, primary: { ...inv.primary, uncovered: [] } });
+    version: `v${state.version}`, exists: true, primary: inv.primary });
   const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   const hash = t => `h${t.length}`;
   await page.route(/\/api\//, route => {
     const req = route.request(), u = new URL(req.url()), p = u.pathname.replace(/^\/api\//, ""), m = req.method();
     const q = k => u.searchParams.get(k);
     const body = () => req.postDataJSON();
-    if (m === "GET" && p === "nodes") return json(route, [node(DNS2, "aa:bb:cc:00:00:02", "dns2"), node(DNS3, "aa:bb:cc:00:00:03", "dns3")]);
+    if (m === "GET" && p === "nodes") return json(route, [node(DNS2, "aa:bb:cc:00:00:02", "dns2"), node(DNS3, "aa:bb:cc:00:00:03", "dns3",
+      [{ name: "lab.example", serial: 7, records: 12, fails: 0 }, { name: "stale.example", serial: 3, records: 5, fails: 4, expired: true }])]);
     if (m === "GET" && p === "zone-inventory") return json(route, inv);
     if (m === "GET" && p === "configs") return json(route, { configs: Object.keys(state.configs).map(name => ({ name, nodes: [{ host: name === "dns2.json" ? DNS2 : DNS3, listed: true }] })), nodes: [] });
     if (m === "GET" && p === "changes/file") {
@@ -136,9 +137,9 @@ async function fake(page) {
       state.posts.push(["settings", b]);
       if (b.version !== `v${state.version}`) return json(route, { error: "the settings changed meanwhile" }, 409);
       const np = b.settings.primary || {};
-      if (Object.keys(np).some(k => !["address", "allows", "zones"].includes(k))) return json(route, { error: "primary: unknown field", field: "settings" }, 400);
+      if (Object.keys(np).some(k => !["address", "zones"].includes(k))) return json(route, { error: "primary: unknown field", field: "settings" }, 400);
       state.primary = np;
-      inv.primary = { set: !!b.settings.primary, address: np.address || "", allows: np.allows || [], zones: np.zones || [] };
+      inv.primary = { set: !!b.settings.primary, address: np.address || "", zones: np.zones || [] };
       state.version++;
       return json(route, settings());
     }
@@ -157,37 +158,26 @@ async function fake(page) {
   return state;
 }
 
-// The zone primary: its address, the networks it allows zone transfers from (the nodes in
-// none of them named, with the network to allow), and the zones copied from it: one added
-// is copied by every node, one removed no longer is, each a change to apply.
-test("Zones: the zone primary's address, networks and zones", async ({ page }) => {
+// The zone primary: its address, what to set up on it (one line, no networks asked), and
+// the zones copied from it: one added is copied by every node, one removed no longer is,
+// each a change to apply.
+test("Zones: the zone primary's address and zones", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
   const state = await fake(page);
-  state.primary = { address: PRIMARY, allows: ["198.51.100.0/24"], zones: ["lab.example"] };
   await page.goto("zones.html");
   const row = page.locator("#primary-row");
-  await expect(row.locator("summary")).toContainText(`${PRIMARY} · allows 192.0.2.0/24`);
+  await expect(row.locator("summary")).toContainText(PRIMARY);
   await row.locator("summary").click();
   await expect(page.locator("#pa")).toHaveValue(PRIMARY);
-  await expect(page.locator("#pn-list li")).toHaveText([/198\.51\.100\.0\/24/]);
-  // Both nodes outside the networks it allows: said, with the network to allow.
-  await expect(page.locator("#pn-uncovered")).toHaveText(`Not in these networks: ${DNS2}, ${DNS3}. Allow their network on your primary (e.g. 192.0.2.0/24), then add it here.`);
-  await expect(page.locator("#pn-uncovered")).toHaveClass(/\bbad\b/);
+  await expect(page.locator("#pa-axfr")).toHaveText("Your primary must allow zone transfers (AXFR) to your nodes' addresses: set that up on your DNS server.");
+  await expect(row).not.toContainText(/networks/i);
+  await expect(page.locator("#pn")).toHaveCount(0);
   // The zones the nodes copy from it, listed.
   await expect(page.locator("#pz-list li .mono")).toHaveText(["lab.example", "stale.example"]);
   // No API, token or certificate.
   await expect(row).not.toContainText(/token|certificate|Test connection|Kind/i);
 
-  // A network that isn't one: refused, said in place.
-  await page.locator("#pn").fill("192.0.2.1");
-  await page.locator("#pn-add").click();
-  await expect(row.locator(".hint.bad").filter({ hasText: "isn't a network" })).toBeVisible();
-  await page.locator("#pn").fill("192.0.2.77/24");
-  await page.locator("#pn").press("Enter");
-  await expect(page.locator("#pn-list li .mono")).toHaveText(["198.51.100.0/24", "192.0.2.0/24"]);
-  await expect(page.locator("#pn-uncovered")).toHaveText("Every node's address is in these networks.");
-  await page.getByRole("button", { name: "Remove 198.51.100.0/24" }).click();
   // A zone added, one removed.
   await page.locator("#pz").fill("IoT.Example.");
   await page.locator("#pz-add").click();
@@ -196,12 +186,12 @@ test("Zones: the zone primary's address, networks and zones", async ({ page }) =
   await page.locator("#psave").click();
   await expect(row).toContainText("Saved. The zones' changes wait in \"changes to apply\".");
   const saved = state.posts.filter(([k]) => k === "settings").map(([, b]) => b.settings.primary);
-  expect(saved[0]).toEqual({ address: PRIMARY, allows: ["192.0.2.0/24"], zones: ["lab.example", "iot.example"] });
+  expect(saved[0]).toEqual({ address: PRIMARY, zones: ["lab.example", "iot.example"] });
   expect(state.primary.zones).toEqual(["lab.example", "iot.example"]);
   const cs = changePosts(state, "config");
   expect(cs.length).toBe(4);
   for (const c of cs.slice(2)) expect(JSON.parse(c.text).secondary.zones).toEqual(["lab.example", "iot.example"]);
-  await expect(row.locator("summary")).toContainText(`${PRIMARY} · allows 192.0.2.0/24`);
+  await expect(row.locator("summary")).toContainText(PRIMARY);
 
   // An address that isn't one: refused before anything is sent.
   const n = state.posts.length;
@@ -239,13 +229,12 @@ test("Zones: every zone in one place, with the fleet's state", async ({ page }) 
   // No node's state on the zones page.
   await expect(page.locator("#zones")).not.toContainText("dns3");
   await expect(page.locator("#facts")).toHaveText(/2 copied from your primary\s*1 forwarded\s*1 hosted here\s*21 records/);
-  await expect(page.locator("#primary-row summary")).toContainText(`${PRIMARY} · allows 192.0.2.0/24`);
+  await expect(page.locator("#primary-row summary")).toContainText(PRIMARY);
   await expect(page.locator("#copy-dns")).toHaveAttribute("title", `${DNS2}, ${DNS3}`);
 
   // The zone primary opens to its form.
   await page.locator("#primary-row summary").click();
   await expect(page.locator("#pa")).toHaveValue(PRIMARY);
-  await expect(page.locator("#pn-uncovered")).toHaveText("Every node's address is in these networks.");
   await expect(page.locator("#primary-row")).not.toContainText("null");
 
   // A row opens its zone.
@@ -275,6 +264,7 @@ test("+ Add zone: looked up, then copied, hosted or forwarded as pending changes
   // On the primary: copied, into both nodes' configs.
   await box.fill("iot.example");
   await expect(res).toContainText(`Found on your primary at ${PRIMARY}, version 42`);
+  await expect(res).toContainText("Your primary must allow zone transfers (AXFR) to your nodes' addresses: set that up on your DNS server.");
   await res.getByRole("button", { name: "Copy from your primary" }).click();
   await expect(page.locator("#zq")).toHaveCount(0);
   let cs = changePosts(state, "config");
@@ -445,10 +435,11 @@ test("A copied zone: its records read-only; one the nodes can't copy, with the f
   for (const c of cs) expect(JSON.parse(c.text).secondary.zones).toEqual(["stale.example"]);
   await expect(page.locator("#pending")).toContainText("this zone is removed with the next Apply");
 
-  // An expired one: what to check on the primary; nothing is changed there from here.
+  // An expired one, its copies failing on a node (its /status): that node named, with what
+  // to allow on the primary; nothing is changed there from here.
   await page.goto("zones.html#zone=stale.example");
-  await expect(page.locator("#problem")).toContainText("Your nodes can't copy this zone from your primary.");
-  await expect(page.locator("#problem")).toContainText("check that stale.example allows zone transfers from your nodes' networks (192.0.2.0/24)");
+  await expect(page.locator("#problem")).toContainText(`Copying this zone from your primary is failing on ${DNS3}.`);
+  await expect(page.locator("#problem")).toContainText(`Your primary most likely refused the transfer: on your primary, allow zone transfers (AXFR) of stale.example to ${DNS3}, and check that it serves the zone.`);
   await expect(page.locator(".recs")).toHaveCount(0);
   // Its records refused too: the nodes have no good copy, so it isn't said they do.
   await expect(page.locator("#records-error")).toHaveText(`Your primary DNS server (${PRIMARY}) refused to send this zone to the controller.`);

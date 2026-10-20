@@ -394,19 +394,17 @@ test("+ Add node: a new name, with the node's fixed address", async ({ page }) =
 });
 
 // + Add node all the way: the new name's config starts with the zones to copy from the zone
-// primary; the node's address is in none of the networks the primary allows, so that is
-// said once, plainly, and the node is added all the same: nothing to confirm by hand.
-test("+ Add node: the zone primary's zones, and what to allow there", async ({ page }) => {
+// primary, and the node is added: nothing to confirm by hand.
+test("+ Add node: the zone primary's zones", async ({ page }) => {
   const violations = await watch(page);
   await login(page);
   const state = await fake(page);
-  const ADVICE = `Your zone primary must allow zone transfers from ${FOUND}: allow its network (e.g. 198.51.100.0/24) there once.`;
   await page.route(/\/api\/adopt$/, r => r.fulfill({ contentType: "application/json", body: JSON.stringify({ nodes: [], configs: [],
-    primary: { set: true, address: "192.0.2.254", allows: ["192.0.2.0/24"], zones: ["home.example"], uncovered: [] }, key: true, no_dhcp: [], dry_run_valid_s: 900 }) }));
+    primary: { set: true, address: "192.0.2.254", zones: ["home.example"] }, key: true, no_dhcp: [], dry_run_valid_s: 900 }) }));
   await page.route(/\/api\/adopt\/preview$/, r => {
     state.posts.push(["preview", r.request().postDataJSON()]);
     return r.fulfill({ contentType: "application/json", body: JSON.stringify({ address: `${FOUND}/24`, gateway: "198.51.100.1", how: "kept",
-      check: { ok: true }, primary: "192.0.2.254", zones: ["home.example"], advice: ADVICE }) });
+      check: { ok: true }, primary: "192.0.2.254", zones: ["home.example"] }) });
   });
   let n = 0;
   await page.route(/\/api\/jobs$/, r => {
@@ -417,8 +415,8 @@ test("+ Add node: the zone primary's zones, and what to allow there", async ({ p
   });
   await page.route(/\/api\/jobs\/a\d\/events/, r => {
     const id = r.request().url().match(/jobs\/(a\d)\//)[1];
-    const progress = { dry_run: id === "a1", steps: [{ n: 4, title: "The zone primary", state: "done" }], primary: { primary: "192.0.2.254", zones: ["home.example"], advice: ADVICE },
-      hints: [ADVICE], outcome: id === "a1" ? "dry run passed" : "adopted" };
+    const progress = { dry_run: id === "a1", steps: [{ n: 4, title: "The zone primary", state: "done" }], primary: { primary: "192.0.2.254", zones: ["home.example"] },
+      outcome: id === "a1" ? "dry run passed" : "adopted" };
     const end = { id, kind: "adopt", who: "admin", state: "done", progress };
     return r.fulfill({ status: 200, contentType: "text/event-stream", body: `id: 1\nevent: end\ndata: ${JSON.stringify(end)}\n\n` });
   });
@@ -430,7 +428,7 @@ test("+ Add node: the zone primary's zones, and what to allow there", async ({ p
   await list.locator("#nnnew").fill("dns5");
   await list.locator("#nnip").fill(`${FOUND}/24`);
   await list.getByRole("button", { name: "Add node" }).click();
-  await expect(page.locator("#toast")).toContainText(`dns5 is added. ${ADVICE}`);
+  await expect(page.locator("#toast")).toContainText("dns5 is added and serving");
   expect(state.posts.filter(p => p[0] === "config").map(p => JSON.parse(p[2].text))).toEqual(
     [{ name: "dns5", network: { address: `${FOUND}/24`, gateway: "198.51.100.1" }, secondary: { primary: "192.0.2.254", zones: ["home.example"] } }]);
   const jobs = state.posts.filter(p => p[0] === "job").map(p => p[1].params);

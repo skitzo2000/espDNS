@@ -100,7 +100,7 @@ func steps(out map[string]any) map[string]bool {
 
 // A fresh install, set up from the browser: first_run until there is a password or a
 // settings file; the password (from this machine, logged in at once); the zone primary
-// (its address and the networks it allows); two nodes; each step then done.
+// (its address); two nodes; each step then done.
 func TestFirstRun(t *testing.T) {
 	e := newSetupEnv(t)
 	code, out := e.do("GET /api/setup", "")
@@ -125,25 +125,25 @@ func TestFirstRun(t *testing.T) {
 	if code != http.StatusOK || out["first_run"] != false || !steps(out)["password"] {
 		t.Fatalf("after the password: %d %v", code, out)
 	}
-	// The zone primary: its address and the networks it allows; the file made (version "").
-	code, out = e.do("POST /api/settings", `{"settings": {"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24"]}},
+	// The zone primary: its address; the file made (version "").
+	code, out = e.do("POST /api/settings", `{"settings": {"primary": {"address": "192.0.2.254"}},
 		"version": "", "primary_token": "`+setupToken+`"}`)
 	if code != http.StatusBadRequest {
 		t.Fatalf("a token taken: %d %v", code, out)
 	}
-	code, out = e.do("POST /api/settings", `{"settings": {"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24"]}},
+	code, out = e.do("POST /api/settings", `{"settings": {"primary": {"address": "192.0.2.254"}},
 		"version": ""}`)
 	if code != http.StatusOK || out["exists"] != true || out["version"] == "" {
 		t.Fatalf("primary: %d %v", code, out)
 	}
-	if p := out["primary"].(map[string]any); p["address"] != "192.0.2.254" || len(p["uncovered"].([]any)) != 0 {
+	if p := out["primary"].(map[string]any); p["address"] != "192.0.2.254" {
 		t.Fatalf("primary: %v", p)
 	}
 	// Two nodes, the first the canary: on the version just read.
 	v := out["version"].(string)
 	code, out = e.do("POST /api/settings", `{"settings": {"nodes": ["192.0.2.53", "192.0.2.52"], "canary": "192.0.2.52",
 		"no_dhcp": ["192.0.2.0/24"], "dns_peers": ["192.0.2.254"],
-		"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24"]}}, "version": "`+v+`"}`)
+		"primary": {"address": "192.0.2.254"}}, "version": "`+v+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("nodes: %d %v", code, out)
 	}
@@ -204,7 +204,7 @@ func TestSettingsRefused(t *testing.T) {
 		`{"settings": {"no_dhcp": ["192.0.2.1/24"]}, "version": "V"}`:                    "no_dhcp",
 		`{"settings": {"dns_peers": ["192.0.2.254:"]}, "version": "V"}`:                  "dns_peers",
 		`{"settings": {"primary": {"address": "primary.example"}}, "version": "V"}`:      "primary",
-		`{"settings": {"primary": {"allows": ["192.0.2.1/24"]}}, "version": "V"}`:        "primary",
+		`{"settings": {"primary": {"zones": ["Home.example"]}}, "version": "V"}`:         "primary",
 		`{"settings": {"primary": {"token": "x"}}, "version": "V"}`:                      "settings",
 		`{"settings": {"nodez": []}, "version": "V"}`:                                    "settings",
 		`{"settings": null, "version": "V"}`:                                             "settings",

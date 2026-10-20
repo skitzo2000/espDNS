@@ -72,7 +72,7 @@ func TestZoneInventoryAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := settings.Save(settings.Path(dir), settings.Settings{Nodes: []string{"192.0.2.11", "192.0.2.12"},
-		Primary: &primary.Config{Address: "192.0.2.254", Allows: []string{"192.0.2.0/24"}}}); err != nil {
+		Primary: &primary.Config{Address: "192.0.2.254"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := zonefiles.Save(dir, "home.example.zone", []byte("$TTL 3600\n@ IN SOA ns1.home.example. hostmaster.home.example. "+
@@ -141,7 +141,7 @@ func TestZoneInventoryAPI(t *testing.T) {
 	if inv.Fleet != 2 || inv.Nodes != 2 || strings.Join(inv.Primaries, ",") != "192.0.2.254" {
 		t.Errorf("inventory: %+v", inv.Inventory)
 	}
-	if inv.Primary["address"] != "192.0.2.254" || fmt.Sprint(inv.Primary["allows"]) != "[192.0.2.0/24]" || inv.Primary["set"] != true ||
+	if inv.Primary["address"] != "192.0.2.254" || inv.Primary["allows"] != nil || inv.Primary["set"] != true ||
 		inv.Primary["uncovered"] != nil {
 		t.Errorf("primary: %v", inv.Primary)
 	}
@@ -196,7 +196,7 @@ func TestLookupPrimaries(t *testing.T) {
 	if got := strings.Join(primaries(s, inv), ","); got != "192.0.2.254,192.0.2.253" {
 		t.Errorf("got %s", got)
 	}
-	if got := strings.Join(primaries(settings.Settings{Primary: &primary.Config{Allows: []string{"192.0.2.0/24"}}}, inv), ","); got != "192.0.2.253,192.0.2.254" {
+	if got := strings.Join(primaries(settings.Settings{Primary: &primary.Config{Zones: []string{"home.example"}}}, inv), ","); got != "192.0.2.253,192.0.2.254" {
 		t.Errorf("no address: %s", got)
 	}
 	if got := primaries(settings.Settings{}, inventory.Inventory{}); len(got) != 0 {

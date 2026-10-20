@@ -286,9 +286,8 @@ Adoption, from the web UI or the CLI:
 2. **Address.** Keep the current one or give a static one; the controller first checks that
    nothing else answers there. A network in `settings.json`'s `"no_dhcp"` never gets a DHCP
    config.
-3. **Zone primary.** Nothing changes on the primary: you allow zone transfers from your
-   nodes' networks once and list them in `settings.json`'s `"primary"` `"allows"`. If a node
-   with secondary zones is outside them, the controller says once what to allow.
+3. **Zone primary.** Nothing changes on the primary. For a node with secondary zones, the
+   controller says once that the primary must allow zone transfers to the node's address.
 4. **Config.** The controller pushes the node's config. A new address waits for a reboot,
    which the controller then does.
 5. **Confirm.** A config that changes the address or Wi-Fi network boots *on trial*. It's
@@ -440,8 +439,7 @@ uses host networking to find nodes over mDNS and reach them.
   controller doesn't speak is offered no update.
 - Jobs and pending changes. Edits collect as pending changes and go out in one apply
   job. Jobs run one at a time with live progress, and every change goes in the action log.
-- Zone primaries. The controller keeps only the primary's address, the networks it allows
-  and the zones to copy. It never changes the primary and holds no token for it.
+- Zone primaries. The controller keeps only the primary's address and the zones to copy. It never changes the primary and holds no token for it.
 - CLI. The same operations as the web UI, from the same image:
 
   ```sh

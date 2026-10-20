@@ -11,6 +11,18 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Changed
+
+- The zone primary no longer asks which networks it allows zone transfers from. **Zone
+  primary** on Zones is its address and the zones to copy, with one line: your primary
+  must allow zone transfers (AXFR) to your nodes' addresses, set up on your DNS server.
+  Adding a node no longer checks its address against those networks. A `settings.json`
+  with `"allows"` under `"primary"` still loads; the field is ignored, said once at start,
+  and dropped the next time the file is written.
+- A copied zone whose copies fail names the nodes: its page on Zones says copying is
+  failing on those addresses, that the primary most likely refused the transfer, and to
+  allow zone transfers (AXFR) of the zone to them on the primary.
+
 ## [controller 0.0.10] - 2026-10-19
 
 ### Fixed

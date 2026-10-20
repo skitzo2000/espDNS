@@ -28,8 +28,7 @@ import (
 
 // env is a fake network: an adopted node in settings.json (203.0.113.51), a node to adopt
 // (203.0.113.52, unadopted, on its board's address), a web server on 203.0.113.99, a zone
-// primary in settings.json that allows zone transfers from 203.0.113.0/24, and a data
-// directory.
+// primary in settings.json (203.0.113.254), and a data directory.
 type env struct {
 	t    *testing.T
 	dir  string
@@ -100,9 +99,9 @@ func (e *env) req(r Request) Request {
 	return r
 }
 
-// zp is the zone primary in settings.json: it allows zone transfers from 203.0.113.0/24.
+// zp is the zone primary in settings.json.
 func zp() *primary.Config {
-	return &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}
+	return &primary.Config{Address: "203.0.113.254"}
 }
 
 func (e *env) adopt(r Request) (Result, error) {
@@ -119,8 +118,8 @@ func (e *env) pushes(n *fakenode.Node) []string {
 	return slices.DeleteFunc(n.Events(), func(s string) bool { return !strings.HasPrefix(s, "push config") })
 }
 
-// A node adopted onto a new static address, in a network the zone primary allows (nothing
-// said about it), the config goes to where it is, it reboots onto the address, is confirmed there,
+// A node adopted onto a new static address (the zone primary said once to allow zone
+// transfers to it), the config goes to where it is, it reboots onto the address, is confirmed there,
 // the config it runs is recorded and its address added to settings.json.
 func TestAdoptNewAddress(t *testing.T) {
 	e := newEnv(t)
@@ -135,8 +134,7 @@ func TestAdoptNewAddress(t *testing.T) {
 	if _, err := pins.Open(e.dir).Seq(e.node.ID(), "config"); !errors.Is(err, pins.ErrNotPinned) {
 		t.Fatal("the dry run pinned the node:", err)
 	}
-	if !strings.Contains(e.log(), "4. the zone primary allows zone transfers from 203.0.113.0/24, which 203.0.113.60 is in") ||
-		strings.Contains(e.log(), "must allow") {
+	if strings.Count(e.log(), "4. your zone primary must allow zone transfers (AXFR) to 203.0.113.60: set that up on it") != 1 {
 		t.Fatal(e.log())
 	}
 	r, err = e.adopt(Request{Address: "203.0.113.60/24", AddToSettings: true})
@@ -243,16 +241,16 @@ func TestAdoptConfigCheck(t *testing.T) {
 	}
 }
 
-// A node whose address is in none of the networks the zone primary allows: the dry run and
-// the adoption say once what to set up there, and go on (nothing is waited for). With no
-// zone primary set up at all, the same.
-func TestAdoptPrimaryAllows(t *testing.T) {
-	for _, p := range []*primary.Config{{Address: "203.0.113.254", Allows: []string{"198.51.100.0/24"}}, nil} {
+// A node with secondary zones: the dry run and the adoption say once what to set up on the
+// zone primary, and go on (nothing is waited for). With no zone primary set up at all, the
+// same.
+func TestAdoptPrimary(t *testing.T) {
+	for _, p := range []*primary.Config{zp(), nil} {
 		e := newEnv(t)
 		if err := settings.Save(settings.Path(e.dir), settings.Settings{Nodes: []string{"203.0.113.51"}, Primary: p}); err != nil {
 			t.Fatal(err)
 		}
-		const want = "4. Your zone primary must allow zone transfers from 203.0.113.52: allow its network (e.g. 203.0.113.0/24) there once."
+		const want = "4. your zone primary must allow zone transfers (AXFR) to 203.0.113.52: set that up on it"
 		if _, err := e.adopt(Request{DryRun: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -276,20 +274,20 @@ func TestAdoptPrimaryAllows(t *testing.T) {
 }
 
 // A settings.json written for an API-driven primary (its kind, its API, its pinned
-// certificate) still loads: those fields are ignored, the API's IP address taken as the
+// certificate) or with the networks it allowed still loads: those fields are ignored, the API's IP address taken as the
 // primary's address, and adoption goes on as for any primary.
 func TestAdoptOldSettings(t *testing.T) {
 	e := newEnv(t)
 	old := `{"nodes": ["203.0.113.51"], "primary": {"kind": "technitium", "url": "https://203.0.113.254:53443", "cert_sha256": "` +
-		strings.Repeat("ab", 32) + `"}}`
+		strings.Repeat("ab", 32) + `", "allows": ["203.0.113.0/24"]}}`
 	if err := os.WriteFile(settings.Path(e.dir), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := settings.Load(settings.Path(e.dir))
-	if err != nil || s.ZonePrimary().Address != "203.0.113.254" || !slices.Equal(s.ZonePrimary().Ignored(), []string{"kind", "url", "cert_sha256"}) {
+	if err != nil || s.ZonePrimary().Address != "203.0.113.254" || !slices.Equal(s.ZonePrimary().Ignored(), []string{"kind", "url", "cert_sha256", "allows"}) {
 		t.Fatal(s, err)
 	}
-	if _, err := e.adopt(Request{DryRun: true}); err != nil || !strings.Contains(e.log(), "must allow zone transfers from 203.0.113.52") {
+	if _, err := e.adopt(Request{DryRun: true}); err != nil || !strings.Contains(e.log(), "must allow zone transfers (AXFR) to 203.0.113.52") {
 		t.Fatal(err, e.log())
 	}
 }

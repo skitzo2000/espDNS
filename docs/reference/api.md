@@ -156,7 +156,7 @@ covers one request. Without one, the request gets `403` with `{"reauth": true}`.
 |--------|------|-------|------|-------|
 | GET | `/api/setup` | open | — | What is set up: the password, `settings.json`, the keys (`release_key`, `recovery_key`, `keys_saved`), the zone primary (`primary`: its address), the nodes, and `zones`, the zones of your own as the Zones page counts them (hosted zone files and hosted zones waiting as pending changes, and the secondary and forward zones the node configs hold as the pending changes make them; the firmware's default zones, in no config, don't count). `first_run` while there is neither a password nor `settings.json`. The first run's steps (`password`, `keys`, `first_node`, `second_node`, `zones`, `router`, `blocking`), and `done` once every one is; `blocklists`, the lists defined. `keys` is done with both keys there and `keys` marked; `zones` with a zone of your own or `zones` marked. |
 | POST | `/api/setup/step` | login | `{"step"}`: `keys`, `zones`, `router` or `blocking` | Marks a first-run step done that the controller can't see done (recovery.pem saved offline: only once both keys are there; the router told) or that was skipped (zones, blocking). Kept in `setup.json` in the data directory. `400` with `field` for another step (`primary`, a step in 0.0.2 and before, among them; an older `setup.json` with it marked is read fine and the mark ignored). The setup again. |
-| GET | `/api/settings` | open | — | `settings.json` as the form edits it (every field, empty ones too), its `version`, and `primary`: the zone primary's `address`, `allows` and `zones`, `set`, and `uncovered`, the nodes in `settings.json` whose address is in none of the networks it allows. |
+| GET | `/api/settings` | open | — | `settings.json` as the form edits it (every field, empty ones too), its `version`, and `primary`: the zone primary's `address` and `zones`, and `set`. |
 | POST | `/api/settings` | login | `{"settings": {...}, "version"}` | Replaces `settings.json` whole if it is still `version` (`""` while there is no file; `409` otherwise). Returns the form again. A refused field: `{"error", "field"}`. See [settings.md](settings.md#settingsjson). |
 
 ### Node configs
@@ -235,13 +235,12 @@ The push itself is a job: kind [`rollout`](#job-kinds).
 | Method | Path | Level | Body | Reply |
 |--------|------|-------|------|-------|
 | GET | `/api/adopt` | login | — | The nodes found (unadopted ones to adopt; adopted ones not in `settings.json`), the configs, the zone primary (as `GET /api/settings` has it). |
-| POST | `/api/adopt/preview` | login | An [adoption request](#adoption-request) | The address it would get, the config checked for the node, the zones, and `advice`: what to allow once on the zone primary, when the node's address is in none of the networks it allows. Read only, no job. |
+| POST | `/api/adopt/preview` | login | An [adoption request](#adoption-request) | The address it would get, the config checked for the node, and the zones. Read only, no job. |
 
 Adoption itself is a job: kinds [`adopt` and `settings-add`](#job-kinds). Nothing changes on
-the zone primary. The job's progress has `primary`: `{"primary", "zones", "advice"}`, with
-`advice` set when the node's address is in none of the networks the primary allows:
-"Your zone primary must allow zone transfers from 192.0.2.60: allow its network (e.g.
-192.0.2.0/24) there once." It's said once and never stops the adoption.
+the zone primary. The job's progress has `primary`: `{"primary", "zones"}`. For a config with
+secondary zones, its log says once "your zone primary must allow zone transfers (AXFR) to
+192.0.2.60: set that up on it". It never stops the adoption.
 
 ### Boards and flashing
 

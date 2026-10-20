@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skitzo2000/espdns/controller/internal/primary"
 )
 
 // blocklist_refresh: none is every day, "off" none, a time from an hour to 30 days;
@@ -39,7 +38,7 @@ func TestExample(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	s, err := Load(filepath.Join(repo, "configs", "example-settings.json"))
 	if err != nil || len(s.Nodes) == 0 || len(s.DNSPeers) == 0 || s.Canary == "" || len(s.NoDHCP) == 0 ||
-		s.ZonePrimary().Address == "" || len(s.ZonePrimary().Allows) == 0 || len(s.InternalSources) == 0 || s.BlocklistRefresh == "" {
+		s.ZonePrimary().Address == "" || len(s.ZonePrimary().Zones) == 0 || len(s.InternalSources) == 0 || s.BlocklistRefresh == "" {
 		t.Fatal(s, err)
 	}
 	doc := netip.MustParsePrefix("192.0.2.0/24")
@@ -161,25 +160,25 @@ func TestSave(t *testing.T) {
 	}
 }
 
-// The zone primary: "primary" is its address and the networks it allows zone transfers
-// from, checked; an older file's API fields ("kind", "url", "cert_sha256") are accepted and
-// ignored (the API's IP address taken as the address when none is given), anything else
+// The zone primary: "primary" is its address and the zones to copy, checked; an older
+// file's fields ("kind", "url", "cert_sha256", "allows") are accepted and ignored (the
+// API's IP address taken as the address when none is given), anything else
 // refused; none: the zero Config.
 func TestPrimary(t *testing.T) {
 	pin := strings.Repeat("0f", 32)
 	for _, c := range []struct {
 		json    string
 		address string
-		allows  []string
 		zones   []string
 		ignored []string
 		bad     string
 	}{
 		{json: `{}`},
 		{json: `{"primary": {}}`},
-		{json: `{"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24", "198.51.100.0/25"], "zones": ["home.example", "_x.lab.example"]}}`,
-			address: "192.0.2.254", allows: []string{"192.0.2.0/24", "198.51.100.0/25"}, zones: []string{"home.example", "_x.lab.example"}},
-		// An older file: loads, its API fields ignored
+		{json: `{"primary": {"address": "192.0.2.254", "zones": ["home.example", "_x.lab.example"]}}`,
+			address: "192.0.2.254", zones: []string{"home.example", "_x.lab.example"}},
+		// An older file: loads, its API fields and networks ignored
+		{json: `{"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24"]}}`, address: "192.0.2.254", ignored: []string{"allows"}},
 		{json: `{"primary": {"kind": "manual"}}`, ignored: []string{"kind"}},
 		{json: `{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "` + pin + `"}}`,
 			address: "192.0.2.254", ignored: []string{"kind", "url", "cert_sha256"}},
@@ -190,9 +189,6 @@ func TestPrimary(t *testing.T) {
 		{json: `{"technitium": "http://192.0.2.254:5380"}`, bad: "unknown field"},
 		{json: `{"primary": {"address": "dns.example"}}`, bad: `"address": "dns.example" is not an IPv4 address`},
 		{json: `{"primary": {"address": "2001:db8::1"}}`, bad: "not an IPv4 address"},
-		{json: `{"primary": {"allows": ["192.0.2.1/24"]}}`, bad: "192.0.2.1/24 is not a network (192.0.2.0/24 is)"},
-		{json: `{"primary": {"allows": ["192.0.2.0"]}}`, bad: "not an IPv4 network"},
-		{json: `{"primary": {"allows": ["192.0.2.0/24", "192.0.2.0/24"]}}`, bad: "192.0.2.0/24 twice"},
 		{json: `{"primary": {"zones": ["Home.example"]}}`, bad: `"zones": "Home.example" is not a zone name`},
 		{json: `{"primary": {"zones": ["home.example."]}}`, bad: "not a zone name"},
 		{json: `{"primary": {"zones": ["-a.example"]}}`, bad: "not a zone name"},
@@ -203,17 +199,18 @@ func TestPrimary(t *testing.T) {
 		switch {
 		case c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)):
 			t.Errorf("%s: %v, want %q", c.json, err, c.bad)
-		case c.bad == "" && (err != nil || zp.Address != c.address || !slices.Equal(zp.Allows, c.allows) || !slices.Equal(zp.Zones, c.zones) ||
+		case c.bad == "" && (err != nil || zp.Address != c.address || !slices.Equal(zp.Zones, c.zones) ||
 			!slices.Equal(zp.Ignored(), c.ignored)):
 			t.Errorf("%s: %+v %v %v", c.json, zp, zp.Ignored(), err)
 		}
 	}
-	// Written back: the API fields dropped, and a "primary" left empty dropped whole.
+	// Written back: the older fields dropped, and a "primary" left empty dropped whole.
 	path := filepath.Join(t.TempDir(), File)
 	for in, want := range map[string]string{
 		`{"primary": {"kind": "technitium", "url": "https://192.0.2.254:53443", "cert_sha256": "` + pin + `"}}`: `"primary": {
     "address": "192.0.2.254"
   }`,
+		`{"primary": {"address": "192.0.2.254", "allows": ["192.0.2.0/24"]}}`: `"address": "192.0.2.254"`,
 		`{"nodes": ["192.0.2.53"], "primary": {"kind": "manual"}}`: `"nodes"`,
 	} {
 		s, err := Parse([]byte(in))
@@ -221,30 +218,10 @@ func TestPrimary(t *testing.T) {
 			err = Save(path, s)
 		}
 		b, _ := os.ReadFile(path)
-		if err != nil || !strings.Contains(string(b), want) || strings.Contains(string(b), "kind") || strings.Contains(string(b), "url") ||
+		if err != nil || !strings.Contains(string(b), want) || strings.Contains(string(b), "kind") || strings.Contains(string(b), "url") || strings.Contains(string(b), "allows") ||
 			(want == `"nodes"` && strings.Contains(string(b), "primary")) {
 			t.Errorf("%s: wrote %s, %v", in, b, err)
 		}
-	}
-}
-
-// Covers and Uncovered: a node in a network the primary allows needs nothing said; one in
-// none is told its network, by its prefix length (24 when unknown), once to allow there.
-func TestPrimaryCovers(t *testing.T) {
-	c := primary.Config{Address: "192.0.2.254", Allows: []string{"192.0.2.0/24", "198.51.100.128/25"}}
-	for addr, want := range map[string]string{
-		"192.0.2.53":     "",
-		"198.51.100.200": "",
-		"198.51.100.9":   "Your zone primary must allow zone transfers from 198.51.100.9: allow its network (e.g. 198.51.100.0/24) there once.",
-		"203.0.113.7":    "Your zone primary must allow zone transfers from 203.0.113.7: allow its network (e.g. 203.0.113.0/24) there once.",
-		"dns2.local":     "Your zone primary must allow zone transfers from dns2.local: allow its network there once.",
-	} {
-		if got := c.Uncovered(addr, 0); got != want {
-			t.Errorf("%s: %q, want %q", addr, got, want)
-		}
-	}
-	if got := (primary.Config{}).Uncovered("192.0.2.53", 23); !strings.Contains(got, "(e.g. 192.0.2.0/23)") {
-		t.Error(got)
 	}
 }
 

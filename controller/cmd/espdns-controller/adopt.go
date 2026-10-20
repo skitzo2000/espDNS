@@ -33,8 +33,7 @@ import (
 // config from <data>/configs and its address, as make fleet-adopt does it, through the same
 // code: the page's request becomes the request the CLI's flags make (internal/adoption,
 // Web), built and run by the same functions (fleet.AdoptNode: the address checked free, the
-// config checked for the node, a word on the zone primary when the node's address is in
-// none of the networks it allows, the config pushed, the node confirmed on its address), then the config it runs recorded and, if asked, its address
+// config checked for the node, the config pushed, the node confirmed on its address), then the config it runs recorded and, if asked, its address
 // added to settings.json.
 //
 //	GET  /api/adopt              the nodes found (unadopted ones to adopt; adopted ones not in settings.json), the configs, the zone primary
@@ -46,10 +45,8 @@ import (
 // An adoption signs a config for a node found over mDNS, not one in settings.json (that is
 // what adopting is): so only a node that says it isn't adopted, under an ID no other node
 // the controller knows has, as the dry run found it (the same ID, the same files), within
-// 15 minutes of it; one adoption per dry run. Nothing is changed on the zone primary: it is
-// set up once to allow zone transfers from the nodes' networks, and when the node's address
-// is in none of those settings.json names ("primary" "allows"), the dry run and the
-// adoption say so, once, and go on.
+// 15 minutes of it; one adoption per dry run. Nothing is changed on the zone primary: it must
+// allow zone transfers to the nodes' addresses, which you set up on it.
 
 type adoptKind struct {
 	actions
@@ -99,12 +96,10 @@ type adoptProgress struct {
 }
 
 // primaryState is step 4 as the page shows it: the primary the config copies its zones
-// from, the zones, and what to set up on the primary once, if anything (internal/primary,
-// Advice).
+// from, and the zones.
 type primaryState struct {
 	Primary string   `json:"primary,omitempty"`
 	Zones   []string `json:"zones,omitempty"`
-	Advice  string   `json:"advice,omitempty"`
 }
 
 var stepTitles = map[int]string{2: "Find the node", 3: "The address and the config", 4: "The zone primary",
@@ -352,7 +347,6 @@ func (p adoptKind) run(ctx context.Context, run *jobs.Run, w adoption.Web) (any,
 		}
 	}
 	b.Adopt.Step = t.step
-	b.Adopt.Advice = func(a string) { t.update(func(pp *adoptProgress) { pp.Primary.Advice = a }) }
 	b.Adopt.Resolved = func(addr string) {
 		t.update(func(pp *adoptProgress) {
 			pp.Address = addr
@@ -407,9 +401,6 @@ func (p adoptKind) finish(t *adoptTracker, w adoption.Web, b adoption.Built, r a
 		switch {
 		case err == nil && w.DryRun:
 			pp.Outcome = "dry run passed: every step checked; nothing was changed"
-			if pp.Primary.Advice != "" {
-				hints = append(hints, pp.Primary.Advice)
-			}
 		case err == nil:
 			pp.Outcome = fmt.Sprintf("adopted: node %s on %s, config seq %d", r.NodeID, r.Addr, r.Seq)
 			if len(r.Servers) >= 2 {
@@ -420,9 +411,6 @@ func (p adoptKind) finish(t *adoptTracker, w adoption.Web, b adoption.Built, r a
 			}
 			if !r.InSettings {
 				hints = append(hints, r.Addr+" is not in settings.json: add it (below) so rollouts count it and change it.")
-			}
-			if pp.Primary.Advice != "" {
-				hints = append(hints, pp.Primary.Advice)
 			}
 		case errors.Is(err, fleet.ErrStopped):
 			pp.Outcome = "stopped on request"
@@ -602,9 +590,6 @@ type adoptPreview struct {
 	Notes   []string       `json:"notes,omitempty"`
 	Primary string         `json:"primary,omitempty"`
 	Zones   []string       `json:"zones,omitempty"`
-	// Advice is what to set up once on the zone primary for the node's address, when it is
-	// in none of the networks the primary allows (internal/primary); "" otherwise.
-	Advice string `json:"advice,omitempty"`
 }
 
 // preview reads the node's /status now and works out the address and the config check as
@@ -697,7 +682,6 @@ func (p adoptKind) preview(w http.ResponseWriter, r *http.Request) {
 	} else {
 		out.Address, out.Gateway, out.How = a.Address.String(), a.Gateway.String(), a.AddressHow(st)
 		cfg.Network = &nodecfg.Network{Address: a.Address.String(), Gateway: a.Gateway.String()}
-		at = a.Address.Addr().String()
 		if a.Address.Addr().String() != adoption.HostOnly(web.Node) {
 			out.Notes = append(out.Notes, "A new address: the dry run checks nothing else answers there; the node moves there "+
 				"with a reboot and keeps it only once it is reached there.")
@@ -719,13 +703,6 @@ func (p adoptKind) preview(w http.ResponseWriter, r *http.Request) {
 	if !out.Check.OK {
 		refuse("the config doesn't pass its checks for this node: " +
 			adoption.CheckConfig(web.Config, cfg, web.Node, st, p.catalog, p.dataDir).Error())
-	}
-	if len(out.Zones) > 0 {
-		if s, err := settings.Load(req.SettingsPath()); err != nil {
-			refuse(err.Error())
-		} else {
-			out.Advice = s.ZonePrimary().Uncovered(at, a.Address.Bits())
-		}
 	}
 	writeJSON(w, out)
 }
