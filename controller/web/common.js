@@ -31,12 +31,18 @@ export function api(url, opts = {}) {
   return fetch(url, { cache: "no-store", ...opts, headers });
 }
 
-// session is /api/session: {password_set, logged_in, user, expires, error}. Loaded once per
+// session is /api/session: {password_set, logged_in, user, expires, version, error}. Loaded once per
 // page; every page but the login page needs a session once a password is set (the
 // controller redirects there), and without a password set the controller is read-only.
 export const session = api("api/session")
   .then(r => r.json())
   .catch(() => ({ password_set: false, logged_in: false }));
+
+// footer puts the controller's version at the foot of the page, as /api/session says it
+// (internal/version: "dev" for a build that wasn't given one).
+export function footer() {
+  session.then(s => { if (s.version) document.body.append(el("footer", "foot", `espDNS controller ${s.version}`)); });
+}
 
 // key is /api/key: whether there is a release key to sign actions with.
 export const releaseKey = () => getJSON("api/key").catch(e => ({ present: false, error: e.message }));

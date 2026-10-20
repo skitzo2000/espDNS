@@ -11,6 +11,10 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Added
+
+- Every page of the controller ends with its version, such as "espDNS controller 0.0.11".
+
 ## [controller 0.0.11] - 2026-10-20
 
 ### Changed

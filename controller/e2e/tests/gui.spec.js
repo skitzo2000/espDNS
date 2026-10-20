@@ -167,6 +167,10 @@ const NAV = [["Nodes", /\/$/], ["Zones", /\/zones\.html$/], ["Blocking", /\/bloc
 
 test("the top bar: every item goes to its page from every page; nothing links to a page that isn't there", async ({ page }) => {
   const violations = await watch(page);
+  // Every page's foot says the controller's version, as /api/session does: the login page's too.
+  await page.goto("login.html");
+  const foot = `espDNS controller ${(await (await page.request.get("api/session")).json()).version}`;
+  await expect(page.locator("footer.foot")).toHaveText(foot);
   await login(page);
   await fake(page);
   for (const start of ["./", "zones.html", "blocklists.html", "querylog.html", `node.html#${K2}`]) {
@@ -175,6 +179,7 @@ test("the top bar: every item goes to its page from every page; nothing links to
       await page.locator("nav.main").getByRole("link", { name, exact: true }).click();
       await expect(page).toHaveURL(url);
       await expect(page.locator("nav.main").getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(page.locator("footer.foot")).toHaveText(foot);
       await page.waitForLoadState("networkidle");
       for (const l of await pageLinks(page)) expect(PAGES, `${name} from ${start} links to ${l}`).toContain(l);
     }
