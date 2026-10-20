@@ -11,6 +11,8 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+## [controller 0.0.11] - 2026-10-20
+
 ### Changed
 
 - The zone primary no longer asks which networks it allows zone transfers from. **Zone
