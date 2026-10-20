@@ -298,7 +298,7 @@ func loadSettings(dataDir string, logf func(format string, args ...any)) (settin
 	}
 	if old := st.ZonePrimary().Ignored(); len(old) > 0 {
 		logf(`settings.json: "primary" fields %s are no longer used and are ignored: the nodes copy zones by zone transfer, `+
-			`and your primary allows them once (Zones, Zone primary)`, strings.Join(old, ", "))
+			`which your primary must allow to their addresses`, strings.Join(old, ", "))
 	}
 	return st, nil
 }

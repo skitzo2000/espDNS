@@ -26,7 +26,7 @@ import (
 )
 
 // adoptWorld is a data directory (settings.json with a node in service and the zone primary,
-// which allows zone transfers from 203.0.113.0/24, a config), and a fake network with that
+// a config), and a fake network with that
 // node and one to adopt.
 type adoptWorld struct {
 	data, catalog string
@@ -51,7 +51,7 @@ func newAdoptWorld(t *testing.T) *adoptWorld {
 		}
 	}
 	if err := settings.Save(settings.Path(w.data), settings.Settings{Nodes: []string{"203.0.113.51"}, DNSPeers: []string{"203.0.113.254"},
-		DNSPeerZones: []string{"home.example"}, Primary: &primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}}); err != nil {
+		DNSPeerZones: []string{"home.example"}, Primary: &primary.Config{Address: "203.0.113.254"}}); err != nil {
 		t.Fatal(err)
 	}
 	put(t, filepath.Join(configs.Path(w.data), "n2.json"), []byte(`{"name": "dns2", "forwarders": ["9.9.9.9"], `+
@@ -78,8 +78,6 @@ type adoptView struct {
 	CheckSet                   bool
 	ConfigName, Primary        string
 	Zones                      []string
-	ZonePrimary                string
-	Allows                     []string
 }
 
 func viewOf(t *testing.T, b adoption.Built) adoptView {
@@ -91,16 +89,15 @@ func viewOf(t *testing.T, b adoption.Built) adoptView {
 	v := adoptView{Host: a.Host, ID: a.ID, Address: a.Address.String(), Gateway: a.Gateway.String(), DHCP: a.DHCP,
 		Reserved: a.Reserved, Payload: string(p), Identify: a.Identify, Wait: a.ConfirmWait,
 		Peers: a.Peers, DNSPeers: a.DNSPeers, AllowSingle: a.AllowSingle, Force: a.Force, DryRun: a.DryRun, Checks: a.Checks,
-		CheckSet: a.Check != nil, ConfigName: b.ConfigName, Primary: b.Primary, Zones: b.Zones,
-		ZonePrimary: a.Primary.Address, Allows: a.Primary.Allows}
+		CheckSet: a.Check != nil, ConfigName: b.ConfigName, Primary: b.Primary, Zones: b.Zones}
 	return v
 }
 
 // The CLI's flags, as make fleet-adopt[-dry] passes them, and the Adopt page's request for
 // the same adoption make the same request, and it builds into the same adoption: the same
 // node and ID, the same address and gateway (or DHCP with its reservation), the same
-// config payload and checks, the same peers and DNS peers for the rule, the same zone
-// primary from settings.json (its address and the networks it allows). So the page adopts
+// config payload and checks, the same peers and DNS peers for the rule, with or without a
+// zone primary in settings.json. So the page adopts
 // as the CLI does, not with a copy of it.
 func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 	w := newAdoptWorld(t)
@@ -108,7 +105,7 @@ func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 	cfg := filepath.Join(configs.Path(w.data), "n2.json")
 	base := []string{"-key", "-", "-data", w.data, "-mdns", "0", "-host", "203.0.113.52", "-node", id, "-config", cfg,
 		"-catalog", w.catalog}
-	set := primary.Config{Address: "203.0.113.254", Allows: []string{"203.0.113.0/24"}}
+	set := primary.Config{Address: "203.0.113.254"}
 	var none primary.Config
 	var newFlags []string
 	for _, tc := range []struct {
@@ -169,8 +166,7 @@ func TestCLIAndAdoptPageBuildTheSameAdoption(t *testing.T) {
 			if !reflect.DeepEqual(cv, wv) {
 				t.Fatalf("adoptions differ:\nCLI %+v\npage %+v", cv, wv)
 			}
-			if cv.ZonePrimary != tc.set.Address || !slices.Equal(cv.Allows, tc.set.Allows) ||
-				!slices.Equal(cv.Peers, []string{"203.0.113.51"}) || len(cv.DNSPeers) != 1 || !cv.CheckSet ||
+			if !slices.Equal(cv.Peers, []string{"203.0.113.51"}) || len(cv.DNSPeers) != 1 || !cv.CheckSet ||
 				cv.Wait != adoption.DefaultWait || !slices.Equal(cv.Checks.Forwarded, []string{"example.com"}) {
 				t.Fatalf("%+v", cv)
 			}
@@ -218,8 +214,8 @@ func TestAdoptPrimaryFlagsGone(t *testing.T) {
 }
 
 // espdns adopt: the node adopted, the config it runs recorded by the CLI, and with
-// -add-to-settings its address in settings.json. A node in none of the networks the zone
-// primary allows is adopted all the same, after being told what to set up there.
+// -add-to-settings its address in settings.json. A node with secondary zones is told once
+// what to set up on the zone primary.
 func TestCLIAdoptRecords(t *testing.T) {
 	w := newAdoptWorld(t)
 	keyFile := filepath.Join(t.TempDir(), "release.pem")
@@ -249,7 +245,7 @@ func TestCLIAdoptRecords(t *testing.T) {
 	if !slices.Equal(s.Nodes, []string{"203.0.113.51", "203.0.113.60"}) {
 		t.Fatal(s.Nodes)
 	}
-	// Outside every network the primary allows: said, and adopted.
+	// Without -add-to-settings: what the zone primary must allow said, and adopted.
 	w2 := newAdoptWorld(t)
 	adoptClient = func(o *fleetOpts) (*fleet.Client, error) {
 		c, err := o.client()
@@ -259,11 +255,6 @@ func TestCLIAdoptRecords(t *testing.T) {
 		hc := w2.lan.HTTP()
 		c.HTTP, c.DNS, c.PeerDNS, c.Poll, c.Pusher.Client = hc, w2.lan, w2.lan, 10*time.Millisecond, hc
 		return c, nil
-	}
-	s2, _ := settings.Load(settings.Path(w2.data))
-	s2.Primary.Allows = []string{"198.51.100.0/24"}
-	if err := settings.Save(settings.Path(w2.data), s2); err != nil {
-		t.Fatal(err)
 	}
 	var logged strings.Builder
 	log.SetOutput(&logged)
@@ -275,7 +266,7 @@ func TestCLIAdoptRecords(t *testing.T) {
 		"-catalog", w2.catalog, "-wait", "5s"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logged.String(), "Your zone primary must allow zone transfers from 203.0.113.52: allow its network (e.g. 203.0.113.0/24) there once.") ||
+	if !strings.Contains(logged.String(), "your zone primary must allow zone transfers (AXFR) to 203.0.113.52: set that up on it") ||
 		!slices.Contains(w2.node.Events(), "push config") {
 		t.Fatal(logged.String(), w2.node.Events())
 	}

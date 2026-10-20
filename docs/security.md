@@ -216,8 +216,8 @@ What they can do today:
   node**, and only while the node's old address is silent, so check it is your board first.
   A board erased and installed again makes a new node key, so its move is refused, unless
   it was installed again from this controller (below).
-- Copy your secondary zones. Your primary allows zone transfers by network, with no
-  TSIG, so any device on an allowed network (or one that takes an address there, for
+- Copy your secondary zones. Your primary allows zone transfers by address, with no
+  TSIG, so any device at an allowed address (or one that takes that address, for
   example with ARP spoofing) can copy those zones.
 
 What they can't do:
@@ -338,8 +338,9 @@ used to change your other nodes.
 What to do:
 
 1. Change the Wi-Fi password, if it was a Wi-Fi node.
-2. Your zone primary still allows zone transfers from the node's network. A board taken
-   away can't copy them from elsewhere, but treat any device on that network as able to.
+2. Your zone primary still allows zone transfers to the node's address. A board taken
+   away can't copy them from elsewhere, but treat any device that takes that address as
+   able to.
 3. Remove the node from `settings.json`. Its pin in `pins/` stays until you replace it; pin
    the replacement board with `espdns pin` (see
    [architecture.md](architecture.md#signed-releases-and-pins)).

@@ -8,14 +8,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
 
-	"github.com/skitzo2000/espdns/controller/internal/adoption"
 	"github.com/skitzo2000/espdns/controller/internal/fleet"
 	"github.com/skitzo2000/espdns/controller/internal/inventory"
 	"github.com/skitzo2000/espdns/controller/internal/nodes"
@@ -86,23 +84,11 @@ func (v inventoryServer) build() (inventory.Inventory, settings.Settings, error)
 	return inv, s, err
 }
 
-// primaryFacts is settings.json's zone primary as the pages show it: its address, the
-// networks it allows zone transfers from, the zones to copy from it, and the nodes in settings.json whose address is
-// in none of them (each must be allowed there once).
+// primaryFacts is settings.json's zone primary as the pages show it: its address and the
+// zones to copy from it.
 func primaryFacts(s settings.Settings) map[string]any {
 	zp := s.ZonePrimary()
-	uncovered := []string{}
-	for _, h := range s.Nodes {
-		a, err := netip.ParseAddr(adoption.HostOnly(h))
-		if err != nil {
-			continue // a name: its address isn't known here
-		}
-		if _, ok := zp.Covers(a); !ok {
-			uncovered = append(uncovered, a.String())
-		}
-	}
-	return map[string]any{"set": !zp.IsZero(), "address": zp.Address, "allows": append([]string{}, zp.Allows...),
-		"zones": append([]string{}, zp.Zones...), "uncovered": uncovered}
+	return map[string]any{"set": !zp.IsZero(), "address": zp.Address, "zones": append([]string{}, zp.Zones...)}
 }
 
 func (v inventoryServer) list(w http.ResponseWriter, r *http.Request) {
@@ -111,14 +97,10 @@ func (v inventoryServer) list(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	// The zone primary without the nodes it doesn't cover: the inventory names no node
-	// (GET /api/settings and /api/adopt do).
-	zp := primaryFacts(s)
-	delete(zp, "uncovered")
 	writeJSON(w, struct {
 		inventory.Inventory
 		Primary map[string]any `json:"primary"`
-	}{inv, zp})
+	}{inv, primaryFacts(s)})
 }
 
 // primaries are the primaries a lookup asks, in order: settings.json's zone primary (its

@@ -13,6 +13,7 @@
 // every listed node's config, and settings.json's zones to copy kept in step.
 // Everything from a node, a config or the controller is put in as text.
 import { h, arr, obj, str, toast, getJSON, post } from "./shell.js";
+import { AXFR } from "./primary.js";
 
 const enc = encodeURIComponent;
 export const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
@@ -282,12 +283,12 @@ export function addZone(box, opts) {
           break;
         case "primary":
           out.push(found(name, "Found on your primary at ", h("span", { class: "mono" }, str(r.primary)), r.serial ? `, version ${r.serial}` : "",
-            ". Your nodes keep a copy; you edit it there."),
+            ". Your nodes keep a copy; you edit it there."), h("p", { class: "hint" }, AXFR),
           h("div", { class: "actions" }, act("Copy from your primary", () => add(name, "copy", str(r.primary)))), manual(name, "copy", str(r.primary)));
           break;
         case "primary_within":
           out.push(found(name, "A name inside ", h("span", { class: "mono" }, str(r.parent)), ", on your primary at ", h("span", { class: "mono" }, str(r.primary)),
-            ". Copy that zone and this name comes with it."),
+            ". Copy that zone and this name comes with it."), h("p", { class: "hint" }, AXFR),
           h("div", { class: "actions" }, act(`Copy ${str(r.parent)} from your primary`, () => add(str(r.parent), "copy", str(r.primary)))), manual(name, "host", str(r.primary)));
           break;
         default:

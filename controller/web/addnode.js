@@ -11,8 +11,7 @@
 // runs; one no node uses can be deleted there (POST /api/configs/<name>/delete). The node
 // is then added by the adoption (adopt.go): its preview,
 // the dry run, then the adoption, which adds it to settings.json. Nothing is changed on the
-// zone primary: when the node's address is in none of the networks it allows zone
-// transfers from, that is said once. A new name's config starts with the zones to copy
+// zone primary. A new name's config starts with the zones to copy
 // from the zone primary (settings.json's "primary"). One adopted already is added by the settings-add job.
 // Esc, or a click outside with nothing typed or chosen, closes it.
 //
@@ -561,8 +560,6 @@ export function addNode(box, opts) {
     dry = await follow(dry, pr => { flow.progress = pr; show(); });
     const dp = obj(flow.progress);
     if (dry.state !== "done") { fail(str(dp.outcome) || str(dry.error) || `The check ${dry.state}.`, dp.hints); return; }
-    // What to allow on the zone primary, once, if the node's network isn't one it allows.
-    flow.advice = str(obj(dp.primary).advice) || str(pv.advice);
     flow.what = `Adding it${pv.how === "new" ? ": it restarts on its new address" : ", no restart"}.`;
     flow.progress = null;
     show();
@@ -574,7 +571,7 @@ export function addNode(box, opts) {
     if (job.state !== "done") { fail(str(ap.outcome) || str(job.error) || `The adoption ${job.state}.`, ap.hints); return; }
     flow.busy = false;
     const name = (st.form.config === NEW ? st.form.newName : str(obj(config()).config_name)) || hostOnly(f.host);
-    toast(flow.advice ? `${name} is added. ${flow.advice}` : `${name} is added and serving`);
+    toast(`${name} is added and serving`);
     st.flow = null;
     close();
     opts.done();
@@ -630,7 +627,6 @@ export function addNode(box, opts) {
       out.push(h("ol", { class: "steps" }, steps.map(s => h("li", { class: s.state === "done" ? "done" : s.state === "running" ? "now" : s.state === "failed" ? "failed" : "" },
         h("span", { class: "m" }), h("div", {}, h("b", {}, str(s.title)), s.detail ? h("div", { class: "hint" }, str(s.detail)) : null)))));
     }
-    if (fl.advice) out.push(h("p", { class: "small", id: "primary-advice" }, fl.advice));
     if (fl.error) {
       out.push(h("p", { class: "small bad" }, fl.error));
       if (fl.hints.length) out.push(h("ul", { class: "hint" }, fl.hints.map(x => h("li", {}, str(x)))));

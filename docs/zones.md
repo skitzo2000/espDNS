@@ -132,8 +132,6 @@ to the primary and needs no credential for it.
 Open **Zones** and expand **Zone primary**:
 
 - **Address**: the primary's IPv4 address. The nodes copy each zone from it.
-- **Networks it allows zone transfers from**: the networks you allowed on the primary (for
-  example `192.0.2.0/24`). The hint names any node outside them, and the network to allow.
 - **Zones to copy**: add or remove a name, then **Save**. Each change goes to every node's
   config and waits in **changes to apply**. Hosted zones are separate: add those with
   **+ Add zone**.
@@ -144,32 +142,32 @@ data directory:
 ```json
 "primary": {
   "address": "192.0.2.254",
-  "allows": ["192.0.2.0/24"],
   "zones": ["example.com", "home.arpa"]
 }
 ```
 
-A node added later starts with these zones. An older `settings.json` with `"kind"`, `"url"`
-or `"cert_sha256"` under `"primary"` still loads; those fields are ignored, and the
+A node added later starts with these zones. An older `settings.json` with `"kind"`, `"url"`,
+`"cert_sha256"` or `"allows"` under `"primary"` still loads; those fields are ignored, and the
 controller says so once at start.
 
-### On your primary: allow zone transfers from your nodes' networks
+### On your primary: allow zone transfers to your nodes
 
-Do this once, on the primary itself:
+On the primary itself:
 
-1. Allow zone transfers (AXFR/IXFR) of each zone to the networks your nodes are on, for
-   example `192.0.2.0/24`.
+1. Allow zone transfers (AXFR/IXFR) of each zone to your nodes' addresses, and to nothing
+   else. Transfers aren't authenticated (no TSIG): anything allowed can read the whole zone.
+   Keep your nodes on fixed addresses (static, or a DHCP reservation), so an allowed address
+   stays a node.
 2. Optionally, send NOTIFY for the zone to the nodes, so a change reaches them at once.
    Without it, each node finds the change at its next SOA check (every 60 s by default,
    `soa_poll_s`).
-3. Add the same networks under **Networks it allows zone transfers from** on Zones.
 
-After that, adding a node changes nothing on the primary. If a new node's address is outside
-those networks, adoption says once: "Your zone primary must allow zone transfers from
-192.0.2.60: allow its network (e.g. 192.0.2.0/24) there once." It adds the node anyway.
+If it doesn't work, the zone's page on Zones names the nodes whose copies fail.
 
-> **Artie's tip:** allow the whole network, not each node's address. Then new birds join the
-> flock without a trip to the primary.
+> **Artie's tip:** the easy option is to allow an internal network your nodes are on, so new
+> birds join the flock without a trip to the primary. Do it only for a network that holds
+> nothing but devices you trust: everything on it can read your zones. Never allow any
+> address.
 
 ### Secondary zones in a node config
 
@@ -203,9 +201,10 @@ controller's computer too.
 
 ### When the nodes can't copy a zone
 
-A zone the nodes can't copy shows **Can't copy it** on Zones. Its page says what to check:
-that the primary allows zone transfers from your nodes' networks, and that it serves the
-zone. The nodes keep answering from the copy they have until it expires.
+A zone the nodes can't copy shows **Can't copy it** on Zones. Its page names the nodes
+whose copies fail, as their status reports it: most often the primary refused them the
+transfer. Allow zone transfers (AXFR) of the zone to those addresses on the primary, and
+check that it serves the zone. The nodes keep answering from the copy they have until it expires.
 
 ### When a copy expires
 
@@ -289,5 +288,5 @@ Both are controller APIs today (`GET /api/zone-inventory` and
 | Push hosted zones | **Apply** (changes to apply); or `rollout -kind zones` |
 | Revert hosted zones on one node | Zones page, **Revert zones**; or `revert -kind zones` |
 | Add secondary zones, forward zones | Zones page, **+ Add zone**, then **Apply** |
-| Set the zone primary, its networks and zones to copy | Zones page, **Zone primary**; or `settings.json`, `"primary"` |
-| Let the nodes copy zones | On your primary: allow zone transfers from your nodes' networks, once |
+| Set the zone primary and the zones to copy | Zones page, **Zone primary**; or `settings.json`, `"primary"` |
+| Let the nodes copy zones | On your primary: allow zone transfers to your nodes' addresses |

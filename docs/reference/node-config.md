@@ -140,9 +140,8 @@ Zones the node copies from the zone primary over AXFR/IXFR, kept fresh by NOTIFY
 | `soa_poll_s` | Check the primary's serial at least this often, in seconds. Default `60`. | 10 to 86400. | live |
 | `retry_s` | Wait this long after a failed check, in seconds. Default `30`. | 5 to 3600. | live |
 
-The primary must allow zone transfers from the node's network. Set that up once on the
-primary for all your nodes' networks; adoption tells you when a node's address is in none of
-the networks you listed (see [settings.md](settings.md#primary)).
+The primary must allow zone transfers (AXFR) to the node's address. Set that up on the
+primary (see [zones.md](../zones.md#on-your-primary-allow-zone-transfers-to-your-nodes)).
 
 ### hosted
 

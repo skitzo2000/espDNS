@@ -112,7 +112,7 @@ async function fake(page, done = []) {
   // posts). No zone primary: that is the Zones page's, not a step.
   const settings = () => ({ settings: { nodes: state.nodes.map(n => n.addr), dns_peers: [], dns_peer_zones: [], canary: "", no_dhcp: [], primary: null, internal_sources: [] },
     version: state.nodes.length ? "v1" : "", exists: state.nodes.length > 0,
-    primary: { set: false, address: "", allows: [], zones: [], uncovered: [] } });
+    primary: { set: false, address: "", zones: [] } });
   await page.route(/\/api\/settings$/, r => {
     if (r.request().method() === "POST") state.posts.push(["settings", r.request().postDataJSON()]);
     return json(r, settings());
@@ -142,7 +142,7 @@ async function fake(page, done = []) {
   });
   await page.route(/\/api\/configs$/, r => json(r, { configs: Object.keys(state.configs).map(name => ({ name, nodes: [{ host: name === "dns2.json" ? DNS2 : DNS3, listed: true }] })), nodes: [] }));
   await page.route(/\/api\/zone-inventory$/, r => json(r, { zones: [], counts: { hosted: 0, secondary: 0, forward: 0, records: 0 }, primaries: [], nodes: state.nodes.length,
-    fleet: state.nodes.length, primary: { set: false, address: "", allows: [], zones: [] } }));
+    fleet: state.nodes.length, primary: { set: false, address: "", zones: [] } }));
   await page.route(/\/api\/zone-lookup\?/, r => {
     const name = new URL(r.request().url()).searchParams.get("name").toLowerCase().replace(/\.$/, "");
     state.posts.push(["lookup", name]);
