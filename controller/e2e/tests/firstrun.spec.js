@@ -175,6 +175,9 @@ test("first run: the steps, then the password set from the browser", async ({ pa
     "Add your first node", "Add a second node", "Add your zone", "Tell your router", "Turn on blocking"]);
   await expect(page.locator("#steps")).not.toContainText(/zone primary/i);
   await expect(page.locator("#facts")).toHaveText("0 of 7 steps done");
+  // This session says no version: no foot, rather than "undefined".
+  await page.waitForLoadState("networkidle");
+  await expect(page.locator("footer")).toHaveCount(0);
   // The read-only band isn't shown here: this page sets the password.
   await expect(page.locator(".band")).toHaveCount(0);
   await expect(page.locator(".s .btn.primary")).toHaveCount(1);

@@ -184,6 +184,11 @@ test("the top bar: every item goes to its page from every page; nothing links to
       for (const l of await pageLinks(page)) expect(PAGES, `${name} from ${start} links to ${l}`).toContain(l);
     }
   }
+  // The pages no top-bar item goes to: a node's and the first run's.
+  for (const p of [`node.html#${K2}`, "setup.html"]) {
+    await page.goto(p);
+    await expect(page.locator("footer.foot")).toHaveText(foot);
+  }
   // The brand goes home; the account chip and the changes chip open their panels.
   await page.goto("zones.html");
   await page.locator(".top a.brand").click();
