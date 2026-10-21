@@ -1,5 +1,7 @@
 // The login (login.html): the form, the countdown after too many failures, and where to go after.
-import { session, loggedIn, deviceToken, getJSON } from "./common.js";
+import { session, loggedIn, deviceToken, getJSON, footer } from "./common.js";
+
+footer();
 
 // Where to go after: a page of this controller only. Resolved as the browser will (it
 // drops tabs and newlines, so "/\t/elsewhere" is "//elsewhere"), then its origin checked.
