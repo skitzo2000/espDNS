@@ -40,6 +40,9 @@
 
 * { box-sizing: border-box }
 [hidden] { display: none !important }
+/* The pinned foot's height: the body's padding keeps the end of the page, and scrolling to a
+   control (focus, scrollIntoView) keeps it, clear of the foot. */
+html { scroll-padding-bottom: calc(33px + env(safe-area-inset-bottom, 0px)) }
 body { margin: 0; padding-bottom: calc(33px + env(safe-area-inset-bottom, 0px)); background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans) }
 a { color: inherit }
 button, input, select, textarea { font: inherit; color: inherit }
@@ -92,6 +95,8 @@ main { max-width: 1160px; margin: 0 auto; padding: 34px 16px 64px; display: grid
    of it. Under the top bar, the panels and the toast. */
 footer.foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0; padding: 6px 16px calc(6px + env(safe-area-inset-bottom, 0px)); line-height: 20px;
   background: var(--bg); border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: center }
+/* On paper the foot comes once, after the content, not over the end of every sheet. */
+@media print { html { scroll-padding-bottom: 0 } body { padding-bottom: 0 } footer.foot { position: static; border-top: none; background: none } }
 h1 { font-size: 24px; font-weight: 600; letter-spacing: -.015em; margin: 0; text-wrap: balance }
 h2 { font-size: 16px; font-weight: 600; margin: 0; text-wrap: balance }
 h3 { font-size: 14.5px; font-weight: 600; margin: 0 }
