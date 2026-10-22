@@ -11,6 +11,11 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Changed
+
+- The controller's version sits at the foot of the window on every page, not after the
+  page's content.
+
 ## [controller 0.0.12] - 2026-10-21
 
 ### Added
