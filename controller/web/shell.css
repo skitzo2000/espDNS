@@ -40,7 +40,10 @@
 
 * { box-sizing: border-box }
 [hidden] { display: none !important }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans) }
+/* The pinned foot's height: the body's padding keeps the end of the page, and scrolling to a
+   control (focus, scrollIntoView) keeps it, clear of the foot. */
+html { scroll-padding-bottom: calc(33px + env(safe-area-inset-bottom, 0px)) }
+body { margin: 0; padding-bottom: calc(33px + env(safe-area-inset-bottom, 0px)); background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans) }
 a { color: inherit }
 button, input, select, textarea { font: inherit; color: inherit }
 :focus-visible { outline: 2px solid var(--fg); outline-offset: 2px }
@@ -87,8 +90,13 @@ nav.main a[aria-current="page"] { color: var(--topbar-fg); border-bottom-color: 
 .bands { margin-top: 6px }
 
 main { max-width: 1160px; margin: 0 auto; padding: 34px 16px 64px; display: grid; gap: 28px }
-/* The foot of every page: the controller's version (footer, common.js). */
-footer.foot { max-width: 1160px; margin: 0 auto; padding: 0 16px 24px; color: var(--muted); font-size: 13px; text-align: center }
+/* The foot of every page: the controller's version (footer, common.js), pinned to the bottom
+   of the window, 33px tall above the safe area; the body's padding keeps the last content clear
+   of it. Under the top bar, the panels and the toast. */
+footer.foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0; padding: 6px 16px calc(6px + env(safe-area-inset-bottom, 0px)); line-height: 20px;
+  background: var(--bg); border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: center }
+/* On paper the foot comes once, after the content, not over the end of every sheet. */
+@media print { html { scroll-padding-bottom: 0 } body { padding-bottom: 0 } footer.foot { position: static; border-top: none; background: none } }
 h1 { font-size: 24px; font-weight: 600; letter-spacing: -.015em; margin: 0; text-wrap: balance }
 h2 { font-size: 16px; font-weight: 600; margin: 0; text-wrap: balance }
 h3 { font-size: 14.5px; font-weight: 600; margin: 0 }
@@ -279,8 +287,8 @@ details.ex[open] > summary { border-bottom: 1px solid var(--line); box-shadow: i
 details.ex > .exb { padding: 16px 18px; display: grid; gap: 14px; box-shadow: inset 3px 0 0 var(--sky) }
 @media (prefers-reduced-motion: reduce) { details.ex > summary::after { transition: none } }
 
-/* A toast: what just happened, with Review when changes wait */
-.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--navy); color: #ffffff; box-shadow: 0 -3px 0 var(--orange) inset; padding: 10px 14px; border-radius: var(--r); display: flex; gap: 14px; align-items: center; z-index: 40; max-width: calc(100% - 32px) }
+/* A toast: what just happened, with Review when changes wait; above the foot */
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(53px + env(safe-area-inset-bottom, 0px)); background: var(--navy); color: #ffffff; box-shadow: 0 -3px 0 var(--orange) inset; padding: 10px 14px; border-radius: var(--r); display: flex; gap: 14px; align-items: center; z-index: 40; max-width: calc(100% - 32px) }
 .toast button { background: none; border: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0 }
 
 /* An add box: the button becomes an input with what it finds right under it */
