@@ -4,7 +4,7 @@
 // dot and the toast. The pending changes are collected by the pages (POST /api/changes,
 // /api/updates) and sent by one Apply from the header's panel (the apply job, apply.go).
 // Everything from a node or the controller is put in as text.
-import { api, getJSON, post, session, events, el, loggedIn, onNodes, watchNodes, every, answering, wired, ended, nodeText, inService } from "./common.js";
+import { api, getJSON, post, session, events, el, footer, loggedIn, onNodes, watchNodes, every, answering, wired, ended, nodeText, inService } from "./common.js";
 
 const PAGES = [["index.html", "Nodes"], ["zones.html", "Zones"], ["blocklists.html", "Blocking"], ["querylog.html", "Query log"]];
 const SVG = "http://www.w3.org/2000/svg";
@@ -668,7 +668,7 @@ function searchBox() {
 
 // ---- the shell --------------------------------------------------------------------------
 // shell draws the top bar for the page current (one of PAGES), the band and the skip link,
-// and starts reading the nodes and the pending changes every 5 s.
+// the footer with the controller's version, and starts reading the nodes and the pending changes every 5 s.
 export function shell(current) {
   const nav = h("nav", { class: "main", "aria-label": "Main" },
     PAGES.map(([href, name]) => h("a", { href: href === "index.html" ? "./" : href, "aria-current": href === current ? "page" : null }, name)));
@@ -679,6 +679,7 @@ export function shell(current) {
   const main = document.querySelector("main");
   if (main) { if (!main.id) main.id = "content"; main.tabIndex = -1; }
   document.body.prepend(h("a", { class: "skip", href: `#${main ? main.id : "content"}` }, "Skip to the page"), top, bandBox);
+  footer();
 
   session.then(s => {
     canWrite = !!s.logged_in;
