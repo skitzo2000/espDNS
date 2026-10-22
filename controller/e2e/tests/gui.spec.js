@@ -189,6 +189,19 @@ test("the top bar: every item goes to its page from every page; nothing links to
     await page.goto(p);
     await expect(page.locator("footer.foot")).toHaveText(foot);
   }
+  // The foot is pinned to the bottom of the window, and the end of a long page scrolls clear of it.
+  await page.setViewportSize({ width: 375, height: 400 });
+  await page.goto("./");
+  await expect(page.locator("footer.foot")).toHaveText(foot);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const at = await page.evaluate(() => {
+    const f = document.querySelector("footer.foot"), r = f.getBoundingClientRect();
+    return { pos: getComputedStyle(f).position, bottom: r.bottom, top: r.top, vh: innerHeight, end: document.querySelector("main").lastElementChild.getBoundingClientRect().bottom };
+  });
+  expect(at.pos).toBe("fixed");
+  expect(at.bottom).toBe(at.vh);
+  expect(at.end).toBeLessThanOrEqual(at.top);
+  await page.setViewportSize({ width: 1280, height: 720 });
   // The brand goes home; the account chip and the changes chip open their panels.
   await page.goto("zones.html");
   await page.locator(".top a.brand").click();
