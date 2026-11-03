@@ -1,12 +1,14 @@
 """Package a board for a first flash: its chip image with its board definition.
 
 Takes a catalog board (boards/<board>.json) and the build of the chip image it names, and
-writes one image that is written at offset 0 to a new node, with an ESP Web Tools manifest:
+writes one image that is written at offset 0 to a new node, with a manifest in the
+format the browser flashers read (espDNS' own Install over USB writes the image at
+offset 0 itself and reads no manifest):
 
     dist/<board>/dns2-<board>.bin       bootloader, partition table for the board's flash size,
                                         OTA data, the board partition, the keys partition (with
                                         --keys), the app (erases NVS)
-    dist/<board>/manifest.json          ESP Web Tools: {"builds": [{"chipFamily", "parts"}]}
+    dist/<board>/manifest.json          {"builds": [{"chipFamily", "parts"}], ...}
     dist/<board>/info.json              board, chip image, version, build time, ELF SHA-256
 
 The node's address goes into the board partition ("network"), as the builder writes it: a
@@ -94,7 +96,7 @@ def main():
     args = json.load(open(f"{a.build}/flasher_args.json"))
     chip = args["extra_esptool_args"]["chip"]
     if chip not in CHIP_FAMILY:
-        sys.exit(f"no ESP Web Tools chip family for {chip}")
+        sys.exit(f"no chip family for {chip}")
     if not board["image"].startswith(chip):
         sys.exit(f"board {name} runs {board['image']}, but {a.build} is an {chip} build")
     flash_mb = board.get("flash_mb", 4)
@@ -143,9 +145,9 @@ def main():
         "new_install_prompt_erase": True,
         "builds": [{"chipFamily": CHIP_FAMILY[chip], "parts": [{"path": image, "offset": 0}]}],
     }
-    # As the controller's (image.Chip.Manifest): a board that may run on Wi-Fi (no Ethernet,
-    # or Ethernet that may not be fitted) gets ESP Web Tools' Improv step after installing, at
-    # its default wait, for the network the erased NVS no longer has; a wired one only installs.
+    # A board that may run on Wi-Fi (no Ethernet, or Ethernet that may not be fitted) gets
+    # the flasher's Improv step after installing, at its default wait, for the network the
+    # erased NVS no longer has; a wired one only installs.
     eth = board.get("ethernet") or {"kind": "none"}
     if eth.get("kind", "none") != "none" and not eth.get("optional"):
         manifest["new_install_improv_wait_time"] = 0

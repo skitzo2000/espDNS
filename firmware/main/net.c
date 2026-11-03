@@ -421,9 +421,10 @@ static uint16_t s_scan_n;
 static int64_t s_scan_at;
 
 /* Scanning takes the radio off the access point's channel, and frames it sends meanwhile go
- * unacknowledged: scanning every few seconds (as ESP Web Tools' Wi-Fi dialog does) got the
- * node dropped for "low ACK" and lost ~10% of packets. So while connected, the last results
- * are reused for a minute, and a scan dwells briefly and goes back between channels. */
+ * unacknowledged: scanning every few seconds, as an installer dialog left open on the board
+ * does, got the node dropped for "low ACK" and lost ~10% of packets. So while connected, the
+ * last results are reused for a minute, and a scan dwells briefly and goes back between
+ * channels. */
 int net_wifi_scan(void (*cb)(const char *ssid, int rssi, bool secure, void *arg), void *arg)
 {
     if (s_kind != NET_WIFI)
