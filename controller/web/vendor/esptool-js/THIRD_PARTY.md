@@ -3,7 +3,7 @@
 `bundle.js` is esptool-js's ES module bundle (`bundle.js` of the npm package, the version
 and the registry's integrity in `VERSION`), unmodified. esptool-js is Copyright Espressif
 Systems, under the Apache License 2.0 (`LICENSE`), from https://github.com/espressif/esptool-js.
-It is the version esp-web-tools 10.4.0's bundle (`../esp-web-tools`) was built with.
+The version is pinned in `VERSION` and bumped on purpose with `make vendor-etj`.
 
 The bundle (rollup, minified) includes code from these packages:
 

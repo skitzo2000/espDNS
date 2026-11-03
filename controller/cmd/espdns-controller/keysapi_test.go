@@ -257,8 +257,7 @@ func TestBuildNeedsKeys(t *testing.T) {
 		t.Fatalf("keys only: %d %v", code, out)
 	}
 	id := out["id"].(string)
-	// No ESP Web Tools manifest for it (its install would offer to erase): the page writes
-	// image.bin itself.
+	// No manifest for it (or any build): the page writes image.bin itself.
 	if w := serve(e.h, withSession(fromHere("GET /build/"+id+"/manifest.json", ""), e.cookie, e.tok)); w.Code != http.StatusNotFound {
 		t.Fatalf("keys-only manifest: %d %s", w.Code, w.Body)
 	}

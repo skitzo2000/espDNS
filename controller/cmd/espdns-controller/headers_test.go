@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
@@ -14,17 +13,10 @@ import (
 )
 
 // hasSecurityHeaders checks the response to r for every header websec sets, once, with its
-// value: websec.USBCSP on websec.USBPages, websec.CSP everywhere else.
+// value: websec.CSP on every page and route.
 func hasSecurityHeaders(t *testing.T, what string, r *http.Request, w *httptest.ResponseRecorder) {
 	t.Helper()
-	csp := websec.CSP
-	if slices.Contains(websec.USBPages, r.URL.Path) {
-		csp = websec.USBCSP
-	}
 	for _, kv := range websec.Set {
-		if kv[0] == "Content-Security-Policy" {
-			kv[1] = csp
-		}
 		if got := w.Header().Values(kv[0]); len(got) != 1 || got[0] != kv[1] {
 			t.Errorf("%s (%d): %s = %q", what, w.Code, kv[0], got)
 		}

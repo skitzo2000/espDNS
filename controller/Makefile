@@ -51,16 +51,9 @@ firmware:
 test:
 	CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...
 
-# Updates the vendored esp-web-tools (web/vendor/esp-web-tools/, the builder's flasher):
-# V=<version> SHA512=<the registry's dist.integrity for it, sha512-...>. Refuses a tarball
-# whose sha512 differs. Then make test, make e2e, and flash a board from the builder.
-.PHONY: vendor-ewt
-vendor-ewt:
-	@$(if $(and $(V),$(SHA512)),,echo "usage: make vendor-ewt V=<version> SHA512=sha512-<base64> (https://registry.npmjs.org/esp-web-tools/<version>, dist.integrity)"; exit 1)
-	scripts/vendor-esp-web-tools.sh '$(V)' '$(SHA512)'
-
-# Updates the vendored esptool-js (web/vendor/esptool-js/, Write keys only's flasher): the
-# version esp-web-tools' bundle was built with. Then make test and make e2e.
+# Updates the vendored esptool-js (web/vendor/esptool-js/, Install over USB's and Write keys
+# only's flasher), pinned at the version in its VERSION and bumped on purpose. Then make
+# test and make e2e.
 .PHONY: vendor-etj
 vendor-etj:
 	@$(if $(and $(V),$(SHA512)),,echo "usage: make vendor-etj V=<version> SHA512=sha512-<base64> (https://registry.npmjs.org/esptool-js/<version>, dist.integrity)"; exit 1)

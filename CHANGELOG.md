@@ -11,6 +11,12 @@ version may change anything. Write each change under Unreleased as it merges;
 
 ## [Unreleased]
 
+### Removed
+
+- ESP Web Tools is no longer vendored. Install over USB has drawn its own install, its log
+  and its Wi-Fi form since controller 0.0.7, so nothing loaded it; its vendor directory, the
+  builder's manifest route and the CSP's hashed inline styles went with it.
+
 ## [controller 0.0.13] - 2026-10-22
 
 ### Changed
