@@ -263,11 +263,9 @@ What protects you:
   page keeps and sends in the `X-Session-Token` header. Another site can't send that header,
   and another program on another localhost port can't read the token. The cookie alone opens
   no API.
-- A strict Content Security Policy on every response: only the controller's own scripts
-  and styles, no inline scripts, connections only to the controller, no framing. The
-  pages that install over USB (Nodes, a node's page and the first run) also allow exactly two hashed
-  inline styles from ESP Web Tools, which is bundled with the controller, not loaded from a
-  CDN.
+- A strict Content Security Policy on every response, the same on every page: only the
+  controller's own scripts and styles, no inline scripts, no hashed inline style, nothing
+  from another origin or a CDN, connections only to the controller, no framing.
 - Other headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`.
 - Nodes check `Host` too. A node serves a request only if its `Host` is the node's IP
@@ -361,7 +359,7 @@ What to do:
 | DNS clients | Port 53 answers private source addresses only, plus the node config's `allow` networks; any other query gets no answer, so a node is no open resolver or reflector ([allow](reference/node-config.md#allow)). |
 | Forwarding | Random source port and ID per upstream query; no worker waits on a forwarder; per-group caps. |
 | Controller on localhost | Refuses to listen on any other address, unless it is behind an HTTPS reverse proxy (`ESPDNS_URL` and `ESPDNS_PROXY`); then it serves only the proxy and its own machine, by the URL's name, with a `Secure` cookie. |
-| Controller CSP and headers | Strict CSP, no inline scripts, no framing, no referrer, no CORS; ESP Web Tools bundled, not from a CDN. |
+| Controller CSP and headers | Strict CSP on every page, no inline scripts, no hashed inline style, nothing from a CDN, no framing, no referrer, no CORS. |
 | Sessions | argon2id password hash; `HttpOnly` `SameSite=Strict` cookie plus a header token; 2 hours idle, 12 hours at most; all sessions end on restart or password change; login back-off; password asked again for backups and revealed Wi-Fi passwords. |
 | No zone primary credential | The controller sends the primary DNS queries only; it stores no token for it, and deletes an old one at start. |
 | SSRF guard | Blocklist URL sources are https from public addresses only, checked at every connection; internal list servers only from an explicit allowlist. |

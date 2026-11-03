@@ -1,9 +1,9 @@
 #!/bin/sh
 # Vendors esptool-js's ES module bundle into web/vendor/esptool-js/ (served by the
 # controller, embedded in the binary): `make vendor-etj V=<version> SHA512=<integrity>`.
-# usb.js's Write keys only drives it directly (ESPLoader, Transport): one write of the keys
-# partition, no erase, no ESP Web Tools dialog. Pin the version esp-web-tools' bundle was
-# built with (its package.json's esptool-js range, resolved when it was published).
+# usb.js drives it directly (ESPLoader, Transport) for the install and for Write keys only:
+# the image written at 0, or one write of the keys partition, no erase. Pin the version in
+# VERSION and bump it on purpose, checking the new one against the board fleet.
 #
 #   V       the npm version, e.g. 0.6.0
 #   SHA512  the registry's integrity for that version, sha512-<base64>, as

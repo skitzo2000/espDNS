@@ -491,27 +491,24 @@ To bump one, on purpose:
   `make -C firmware components`. It solves again for every chip target and writes the
   locks. Commit them.
 
-## Updating the vendored flashers
+## Updating the vendored flasher
 
-Install over USB uses [ESP Web Tools](https://github.com/esphome/esp-web-tools), and Write
-keys only uses esptool-js. Both are committed in `controller/web/vendor/` and built into the
-binary, so the pages load nothing from another origin. Each directory has a `VERSION` (the
-version and its npm integrity), `SHA256SUMS`, `LICENSE` and `THIRD_PARTY.md`.
+Install over USB (the install and Write keys only) drives esptool-js directly. It is
+committed in `controller/web/vendor/esptool-js/` and built into the binary, so the pages
+load nothing from another origin. The directory has a `VERSION` (the version and its npm
+integrity), `SHA256SUMS`, `LICENSE` and `THIRD_PARTY.md`.
 
-Keep esptool-js at the version ESP Web Tools was built with (0.6.0 for ESP Web Tools
-10.4.0). From `controller/`:
+esptool-js is pinned at the version in that `VERSION` (0.6.0) and bumped on purpose, never
+as a side effect of another dependency. From `controller/`:
 
 ```sh
-curl -s https://registry.npmjs.org/esp-web-tools/10.4.0 | jq -r .dist.integrity
-make vendor-ewt V=10.4.0 SHA512=sha512-...
 curl -s https://registry.npmjs.org/esptool-js/0.6.0 | jq -r .dist.integrity
 make vendor-etj V=0.6.0 SHA512=sha512-...
 make test
 make e2e
 ```
 
-Each target refuses a tarball whose sha512 differs, then replaces the files and writes
-`VERSION` and `SHA256SUMS`. Check `THIRD_PARTY.md` against the new version's dependencies
-by hand. If ESP Web Tools' inline styles change, the Content Security Policy's hashes must
-change with them: `USBStyleHashes` and `USBStyleMapHashes` in `internal/websec`, and the
-tests that list them. Then install a board with Install over USB before you commit.
+The target refuses a tarball whose sha512 differs, then replaces the files and writes
+`VERSION` and `SHA256SUMS`. Check `THIRD_PARTY.md` against the new version's dependencies by
+hand. Then install a board with Install over USB before you commit, on each chip the fleet
+has: the flasher's own wording and its chip detection are the flow's.

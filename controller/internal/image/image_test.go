@@ -63,15 +63,3 @@ func TestSetFlashSizeRejectsNonImages(t *testing.T) {
 		t.Fatal("accepted something that isn't an ESP image")
 	}
 }
-
-// Manifest: a board that may run on Wi-Fi gets ESP Web Tools' Improv step after installing
-// (no wait time given: its default); a wired one a wait of 0, so it only installs.
-func TestManifestImprov(t *testing.T) {
-	c := Chip{Version: "0.0.4", ChipFamily: "ESP32-S3"}
-	if w, ok := c.Manifest("b", true, "image.bin")["new_install_improv_wait_time"]; ok {
-		t.Errorf("Wi-Fi: improv wait %v, want none (the default)", w)
-	}
-	if w := c.Manifest("b", false, "image.bin")["new_install_improv_wait_time"]; w != 0 {
-		t.Errorf("wired: improv wait %v, want 0", w)
-	}
-}

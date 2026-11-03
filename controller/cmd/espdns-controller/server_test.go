@@ -179,9 +179,9 @@ func TestEveryRouteNeedsLogin(t *testing.T) {
 		}
 	}
 	// The builder's vendored flasher is a script like the others, served from here.
-	if w := serve(h, request("GET /vendor/esp-web-tools/install-button.js")); w.Code != http.StatusOK ||
+	if w := serve(h, request("GET /vendor/esptool-js/bundle.js")); w.Code != http.StatusOK ||
 		!strings.Contains(w.Header().Get("Content-Type"), "javascript") {
-		t.Errorf("the vendored esp-web-tools logged out: %d %q", w.Code, w.Header().Get("Content-Type"))
+		t.Errorf("the vendored esptool-js logged out: %d %q", w.Code, w.Header().Get("Content-Type"))
 	}
 	// The icons and the mascot (web/img/), which the login page shows too: open, as images.
 	imgs, _ := fs.ReadDir(web.Files, "img")

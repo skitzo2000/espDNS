@@ -131,8 +131,8 @@ others over a network and the AGPL asks you to offer them its source.
 
 Two vendored parts keep their AGPL-compatible Apache-2.0 license:
 
-- ESP Web Tools in [`controller/web/vendor/esp-web-tools/`](controller/web/vendor/esp-web-tools/):
-  see its `LICENSE` and `THIRD_PARTY.md`.
+- esptool-js in [`controller/web/vendor/esptool-js/`](controller/web/vendor/esptool-js/), what
+  Install over USB flashes with: see its `LICENSE` and `THIRD_PARTY.md`.
 - The W5500 driver in [`firmware/components/w5500/`](firmware/components/w5500/), a changed
   copy of ESP-IDF's: see its `LICENSE`, each file's SPDX header, and its `README.md` (the
   ESP-IDF version it came from and what espDNS changed).

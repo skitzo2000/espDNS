@@ -21,7 +21,7 @@ import (
 type Chip struct {
 	Image      string         `json:"image"`
 	Chip       string         `json:"chip"`
-	ChipFamily string         `json:"chip_family"` // ESP Web Tools' name, e.g. ESP32-S3
+	ChipFamily string         `json:"chip_family"` // the chip family's name, e.g. ESP32-S3
 	Offsets    map[string]int `json:"offsets"`
 	FlashMode  string         `json:"flash_mode"`
 	FlashFreq  string         `json:"flash_freq"`
@@ -61,33 +61,6 @@ func Open(dir string) (Chip, error) {
 	}
 	c.dir = dir
 	return c, nil
-}
-
-// Manifest is the ESP Web Tools manifest that installs one whole-flash image (Assemble's)
-// at offset 0, erasing the flash first; path is the image's URL, relative to the manifest's.
-// The controller's builder serves it for the image it assembled (a release has no factory
-// images: internal/dist).
-//
-// wifi is whether the board may run on Wi-Fi (boards.Board.MayRunOnWiFi). The image erases
-// NVS, so such a board has no network until it is given one: ESP Web Tools then waits for
-// the firmware's Improv Wi-Fi serial (firmware/main/improv.c) after installing, for its
-// default 10 s, and offers its Wi-Fi form; on a board that already runs espDNS it offers
-// Connect to Wi-Fi or Change Wi-Fi. A wired board doesn't speak Improv, so the wait is 0
-// and ESP Web Tools only installs.
-func (c Chip) Manifest(board string, wifi bool, path string) map[string]any {
-	m := map[string]any{
-		"name":                     "espDNS " + board,
-		"version":                  c.Version,
-		"new_install_prompt_erase": true,
-		"builds": []any{map[string]any{
-			"chipFamily": c.ChipFamily,
-			"parts":      []any{map[string]any{"path": path, "offset": 0}},
-		}},
-	}
-	if !wifi {
-		m["new_install_improv_wait_time"] = 0
-	}
-	return m
 }
 
 // Dir is the directory the chip image was read from.

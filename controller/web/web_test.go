@@ -4,18 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
-	"path"
 	"regexp"
 	"strings"
 	"testing"
 )
 
-const ewt = "vendor/esp-web-tools"
-
-// The vendored directories, each with the files it must have: esp-web-tools (`make
-// vendor-ewt`) and esptool-js (`make vendor-etj`).
+// The vendored directories, each with the files it must have: esptool-js (`make vendor-etj`).
 var vendored = map[string][]string{
-	ewt:                 {"install-button.js", "LICENSE", "THIRD_PARTY.md", "VERSION"},
 	"vendor/esptool-js": {"bundle.js", "LICENSE", "THIRD_PARTY.md", "VERSION"},
 }
 
@@ -27,8 +22,8 @@ func TestVendorSums(t *testing.T) {
 	}
 }
 
-func vendorSums(t *testing.T, ewt string, must []string) {
-	sums, err := fs.ReadFile(Files, ewt+"/SHA256SUMS")
+func vendorSums(t *testing.T, dir string, must []string) {
+	sums, err := fs.ReadFile(Files, dir+"/SHA256SUMS")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +35,7 @@ func vendorSums(t *testing.T, ewt string, must []string) {
 		}
 		want, name := f[0], f[1]
 		listed[name] = true
-		b, err := fs.ReadFile(Files, ewt+"/"+name)
+		b, err := fs.ReadFile(Files, dir+"/"+name)
 		if err != nil {
 			t.Errorf("%s: listed, not embedded: %v", name, err)
 			continue
@@ -49,7 +44,7 @@ func vendorSums(t *testing.T, ewt string, must []string) {
 			t.Errorf("%s: sha256 %x, SHA256SUMS says %s", name, got, want)
 		}
 	}
-	entries, err := fs.ReadDir(Files, ewt)
+	entries, err := fs.ReadDir(Files, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +52,7 @@ func vendorSums(t *testing.T, ewt string, must []string) {
 	for _, e := range entries {
 		switch name := e.Name(); {
 		case e.IsDir():
-			t.Errorf("%s: a directory in %s", name, ewt)
+			t.Errorf("%s: a directory in %s", name, dir)
 		case name == "SHA256SUMS":
 		case !listed[name]:
 			t.Errorf("%s: embedded, not in SHA256SUMS", name)
@@ -67,11 +62,11 @@ func vendorSums(t *testing.T, ewt string, must []string) {
 	}
 	for _, name := range must {
 		if !listed[name] {
-			t.Errorf("%s/%s: missing", ewt, name)
+			t.Errorf("%s/%s: missing", dir, name)
 		}
 	}
 	if scripts < 1 {
-		t.Errorf("%s: %d scripts", ewt, scripts)
+		t.Errorf("%s: %d scripts", dir, scripts)
 	}
 }
 
@@ -95,40 +90,6 @@ func TestEsptoolBundle(t *testing.T) {
 // The module specifiers in a script: import ... from "x", import "x", import("x"), export
 // ... from "x". Minified (from"x") or not.
 var importSpec = regexp.MustCompile(`(?:\bfrom|\bimport)\s*\(?\s*["'` + "`" + `]([^"'` + "`" + `]+)["'` + "`" + `]`)
-
-// Every import in the vendored chunks is relative and names an embedded file: the whole
-// chunk graph (the install dialog, the chips' and stub flashers' chunks, loaded on demand)
-// is served from here, with nothing from another origin.
-func TestVendorImports(t *testing.T) {
-	entries, err := fs.ReadDir(Files, ewt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	imports := 0
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".js") {
-			continue
-		}
-		b, err := fs.ReadFile(Files, ewt+"/"+e.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, m := range importSpec.FindAllStringSubmatch(string(b), -1) {
-			spec := m[1]
-			imports++
-			if !strings.HasPrefix(spec, "./") && !strings.HasPrefix(spec, "../") {
-				t.Errorf("%s imports %q: not relative", e.Name(), spec)
-				continue
-			}
-			if _, err := fs.Stat(Files, path.Join(ewt, spec)); err != nil {
-				t.Errorf("%s imports %q: not embedded", e.Name(), spec)
-			}
-		}
-	}
-	if imports == 0 {
-		t.Error("no imports found: the pattern no longer matches the bundle")
-	}
-}
 
 // A URL that names another origin: absolute (scheme://) or protocol-relative ("//host",
 // after a quote, "(", "=", "," or a space). Any of them in a first-party page, script or style
@@ -166,7 +127,7 @@ func otherOrigins(src string) map[int]string {
 
 func TestOtherOriginPattern(t *testing.T) {
 	for _, s := range []string{
-		`<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>`,
+		`<script type="module" src="https://unpkg.com/some-tools@10/dist/web/flasher.js?module"></script>`,
 		`<link rel="stylesheet" href="//cdn.example.com/x.css">`,
 		`<img src=http://example.com/a.png>`,
 		`<img srcset="a.png 1x, https://example.com/b.png 2x">`,
@@ -193,7 +154,7 @@ func TestOtherOriginPattern(t *testing.T) {
 		}
 	}
 	for _, s := range []string{
-		`<script type="module" src="vendor/esp-web-tools/install-button.js"></script>`,
+		`<script type="module" src="vendor/esptool-js/bundle.js"></script>`,
 		`<link rel="icon" href="data:,">`,
 		`import { api } from "./common.js";`,
 		`fetch("/api/nodes")`,
@@ -219,7 +180,7 @@ func TestNoOtherOrigin(t *testing.T) {
 	checked := 0
 	for _, e := range entries {
 		if e.IsDir() {
-			continue // vendor/: third-party, checked by TestVendorImports
+			continue // vendor/: third-party, checked by TestVendorSums and TestEsptoolBundle
 		}
 		b, err := fs.ReadFile(Files, e.Name())
 		if err != nil {
