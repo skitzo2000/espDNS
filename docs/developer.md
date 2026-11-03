@@ -311,7 +311,7 @@ printed. Then, on the setup's Make your keys:
 | `controller/cmd/espdns-controller/` | The controller: its HTTP server, API and jobs |
 | `controller/cmd/espdns/` | The `espdns` CLI |
 | `controller/internal/` | The packages both share: the fleet and rolling push, signed releases, keys, the board catalog and image builder, blocklists, zones, backup |
-| `controller/web/` | The pages, built into the binary, and the vendored flashers in `web/vendor/` |
+| `controller/web/` | The pages, built into the binary, and the vendored flasher in `web/vendor/` |
 | `controller/e2e/` | The browser tests |
 | `firmware/main/` | The node firmware. The DNS core (wire format, zones, answers, cache, forwarding, blocklists, releases, keys) is portable C, tested on the host |
 | `firmware/images/` | One directory per chip image, its `sdkconfig.defaults` on top of the shared one |
@@ -474,7 +474,7 @@ Everything a build fetches from outside the repository is pinned:
 - CI actions by commit, with the tag in a comment.
 - ESP-IDF components by the committed lock for each chip target,
   `firmware/dependencies.lock.<target>`.
-- The vendored flashers by version and checksum (below).
+- The vendored flasher by version and checksum (below).
 
 `controller/pins_test.go` refuses an image or action that isn't pinned, two Go versions, or
 a chip target without its lock. `controller/releasescripts_test.go` refuses an ESP-IDF
