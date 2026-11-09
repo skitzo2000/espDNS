@@ -311,7 +311,7 @@ printed. Then, on the setup's Make your keys:
 | `controller/cmd/espdns-controller/` | The controller: its HTTP server, API and jobs |
 | `controller/cmd/espdns/` | The `espdns` CLI |
 | `controller/internal/` | The packages both share: the fleet and rolling push, signed releases, keys, the board catalog and image builder, blocklists, zones, backup |
-| `controller/web/` | The pages, built into the binary, and the vendored flashers in `web/vendor/` |
+| `controller/web/` | The pages, built into the binary, and the vendored flasher in `web/vendor/` |
 | `controller/e2e/` | The browser tests |
 | `firmware/main/` | The node firmware. The DNS core (wire format, zones, answers, cache, forwarding, blocklists, releases, keys) is portable C, tested on the host |
 | `firmware/images/` | One directory per chip image, its `sdkconfig.defaults` on top of the shared one |
@@ -474,7 +474,7 @@ Everything a build fetches from outside the repository is pinned:
 - CI actions by commit, with the tag in a comment.
 - ESP-IDF components by the committed lock for each chip target,
   `firmware/dependencies.lock.<target>`.
-- The vendored flashers by version and checksum (below).
+- The vendored flasher by version and checksum (below).
 
 `controller/pins_test.go` refuses an image or action that isn't pinned, two Go versions, or
 a chip target without its lock. `controller/releasescripts_test.go` refuses an ESP-IDF
@@ -491,27 +491,24 @@ To bump one, on purpose:
   `make -C firmware components`. It solves again for every chip target and writes the
   locks. Commit them.
 
-## Updating the vendored flashers
+## Updating the vendored flasher
 
-Install over USB uses [ESP Web Tools](https://github.com/esphome/esp-web-tools), and Write
-keys only uses esptool-js. Both are committed in `controller/web/vendor/` and built into the
-binary, so the pages load nothing from another origin. Each directory has a `VERSION` (the
-version and its npm integrity), `SHA256SUMS`, `LICENSE` and `THIRD_PARTY.md`.
+Install over USB (the install and Write keys only) drives esptool-js directly. It is
+committed in `controller/web/vendor/esptool-js/` and built into the binary, so the pages
+load nothing from another origin. The directory has a `VERSION` (the version and its npm
+integrity), `SHA256SUMS`, `LICENSE` and `THIRD_PARTY.md`.
 
-Keep esptool-js at the version ESP Web Tools was built with (0.6.0 for ESP Web Tools
-10.4.0). From `controller/`:
+esptool-js is pinned at the version in that `VERSION` (0.6.0) and bumped on purpose, never
+as a side effect of another dependency. From `controller/`:
 
 ```sh
-curl -s https://registry.npmjs.org/esp-web-tools/10.4.0 | jq -r .dist.integrity
-make vendor-ewt V=10.4.0 SHA512=sha512-...
 curl -s https://registry.npmjs.org/esptool-js/0.6.0 | jq -r .dist.integrity
 make vendor-etj V=0.6.0 SHA512=sha512-...
 make test
 make e2e
 ```
 
-Each target refuses a tarball whose sha512 differs, then replaces the files and writes
-`VERSION` and `SHA256SUMS`. Check `THIRD_PARTY.md` against the new version's dependencies
-by hand. If ESP Web Tools' inline styles change, the Content Security Policy's hashes must
-change with them: `USBStyleHashes` and `USBStyleMapHashes` in `internal/websec`, and the
-tests that list them. Then install a board with Install over USB before you commit.
+The target refuses a tarball whose sha512 differs, then replaces the files and writes
+`VERSION` and `SHA256SUMS`. Check `THIRD_PARTY.md` against the new version's dependencies by
+hand. Then install a board with Install over USB before you commit, on each chip the fleet
+has: the flasher's own wording and its chip detection are the flow's.

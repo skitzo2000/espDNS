@@ -252,11 +252,10 @@ secondary zones, its log says once "your zone primary must allow zone transfers 
 | GET | `/api/images` | open | — | `{"images", "known"}`: the imported chip images and the image names boards may use. |
 | GET | `/api/firmware` | open | — | `{"images": [{"image", "version", "built", "origin", "label", "fingerprint", "error"}], "release_url", "project_key"}`: each imported chip image and where it came from (`origin` `project`, `own` or `build`; `label` "project release v0.0.2", "your build v0.0.2" or "your build"), where Get firmware fetches from, and the project key's fingerprint (`""`: none, so nothing can be fetched). |
 | POST | `/api/build` | session | `{"name": "<catalog board>"}` or `{"board": {...}}`, with `"network": {"address": "192.0.2.52/24", "gateway": "192.0.2.1"}` or `{"address": "dhcp"}` | Builds a flash image for the board with that address and the controller's two public keys in its keys partition (0x1b000). `{"id", "board", "chip", "keys"}` (`keys`: the fingerprints). `422` if it can't be built (no network, "set up your keys first", chip image not imported or exported before the keys partition). |
-| POST | `/api/build/keys` | session | `{}` | Write keys only: the keys partition alone. `{"id", "keys", "keys_only": true}`; `/build/{id}/image.bin` is the 8 KB the page writes at 0x1b000 itself (esptool-js: no erase, read back); no ESP Web Tools manifest (`404`). `422` "set up your keys first". |
-| GET | `/build/{id}/manifest.json` | open | — | The ESP Web Tools manifest for that build. |
+| POST | `/api/build/keys` | session | `{}` | Write keys only: the keys partition alone. `{"id", "keys", "keys_only": true}`; `/build/{id}/image.bin` is the 8 KB the page writes at 0x1b000 itself (esptool-js: no erase, read back). `422` "set up your keys first". |
 | GET | `/build/{id}/image.bin` | open | — | The flash image (`application/octet-stream`). |
 
-The two `/build/` routes need only the session cookie, not the `X-Session-Token` header.
+The `/build/` route needs only the session cookie, not the `X-Session-Token` header.
 "session" means any session, as every POST needs; these four POSTs have no further check. The
 controller keeps the last 32 or so builds in memory. Flashing from the browser (Web Serial)
 works because the dashboard is on localhost, or on HTTPS behind a reverse proxy.

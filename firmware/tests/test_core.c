@@ -43,6 +43,7 @@
 #include "mbedtls/hkdf.h"
 #include "mbedtls/sha256.h"
 #include "memplan.h"
+#include "netsw.h"
 #include "nodekey.h"
 #include "release.h"
 #include "release_vectors.h"
@@ -6498,6 +6499,123 @@ static void test_tcp_deadline(void)
     CHECK(tcp_slot(held, 6, 8, 3) == TCP_SLOT_FULL);
 }
 
+/* A wired board's Wi-Fi backup (netsw.h), driven as net.c drives it (switch_check): every
+ * Ethernet link change, and boot, stops the pending move and starts it again if one is due;
+ * when the hold ends the move is made if the links still ask for it, and checked again after. */
+typedef struct {
+    bool eth, backup, wifi_set;
+    int due_ms; /* -1: no move pending */
+    int moves;
+} sw_sim_t;
+
+static void sw_check(sw_sim_t *s, int now)
+{
+    netsw_t next = netsw_next(s->eth, s->backup, s->wifi_set);
+    s->due_ms = next == NETSW_STAY ? -1 : now + netsw_hold_ms(next);
+}
+
+static void sw_link(sw_sim_t *s, bool up, int now)
+{
+    s->eth = up;
+    sw_check(s, now);
+}
+
+static void sw_run(sw_sim_t *s, int from, int to)
+{
+    for (int t = from; t <= to; t++) {
+        if (s->due_ms < 0 || t < s->due_ms)
+            continue;
+        s->due_ms = -1;
+        switch (netsw_next(s->eth, s->backup, s->wifi_set)) {
+        case NETSW_TO_WIFI: s->backup = true; s->moves++; break;
+        case NETSW_TO_ETH: s->backup = false; s->moves++; break;
+        case NETSW_STAY: break;
+        }
+        sw_check(s, t);
+    }
+}
+
+static void test_netsw(void)
+{
+    /* The rule */
+    CHECK(netsw_next(false, false, true) == NETSW_TO_WIFI);
+    CHECK(netsw_next(false, false, false) == NETSW_STAY); /* no network set: stays on Ethernet */
+    CHECK(netsw_next(true, false, true) == NETSW_STAY);
+    CHECK(netsw_next(true, true, true) == NETSW_TO_ETH);
+    CHECK(netsw_next(true, true, false) == NETSW_TO_ETH); /* the network removed: back all the same */
+    CHECK(netsw_next(false, true, true) == NETSW_STAY);
+    CHECK(netsw_hold_ms(NETSW_TO_WIFI) == 5000 && netsw_hold_ms(NETSW_TO_ETH) == 10000);
+    CHECK(netsw_hold_ms(NETSW_STAY) == 0);
+
+    /* Cable out: on Wi-Fi 5 s later, not sooner */
+    sw_sim_t s = { .eth = true, .wifi_set = true, .due_ms = -1 };
+    sw_link(&s, false, 0);
+    sw_run(&s, 0, 4999);
+    CHECK(!s.backup);
+    sw_run(&s, 5000, 5000);
+    CHECK(s.backup && s.moves == 1);
+    /* Cable in: back on Ethernet 10 s later, not sooner */
+    sw_link(&s, true, 20000);
+    sw_run(&s, 20000, 29999);
+    CHECK(s.backup);
+    sw_run(&s, 30000, 30000);
+    CHECK(!s.backup && s.moves == 2);
+
+    /* A 2 s bump moves nothing */
+    s = (sw_sim_t){ .eth = true, .wifi_set = true, .due_ms = -1 };
+    sw_link(&s, false, 0);
+    sw_link(&s, true, 2000);
+    sw_run(&s, 0, 60000);
+    CHECK(!s.backup && s.moves == 0);
+    /* Flapping restarts the hold from the last change: down at 0, 3000 and 6000, up between */
+    sw_link(&s, false, 0);
+    sw_run(&s, 0, 2999);
+    sw_link(&s, true, 3000);
+    sw_link(&s, false, 4000);
+    sw_run(&s, 3000, 8999);
+    CHECK(!s.backup); /* 4000 + 5000 not reached */
+    sw_run(&s, 9000, 9000);
+    CHECK(s.backup && s.moves == 1);
+    /* On the backup, a cable that comes and goes within 10 s keeps it there */
+    sw_link(&s, true, 10000);
+    sw_link(&s, false, 15000);
+    sw_link(&s, true, 16000);
+    sw_run(&s, 10000, 25999);
+    CHECK(s.backup && s.moves == 1);
+    sw_run(&s, 26000, 26000);
+    CHECK(!s.backup && s.moves == 2);
+
+    /* Booted with the cable out (no link event): on Wi-Fi 5 s after boot; a link that comes
+     * up sooner keeps it on Ethernet */
+    s = (sw_sim_t){ .eth = false, .wifi_set = true, .due_ms = -1 };
+    sw_check(&s, 0);
+    sw_run(&s, 0, 5000);
+    CHECK(s.backup && s.moves == 1);
+    s = (sw_sim_t){ .eth = false, .wifi_set = true, .due_ms = -1 };
+    sw_check(&s, 0);
+    sw_link(&s, true, 2500);
+    sw_run(&s, 0, 60000);
+    CHECK(!s.backup && s.moves == 0);
+
+    /* The cable comes back while the move to Wi-Fi is being made (the link event sees the node
+     * still on Ethernet and arms nothing): the check after the move arms the way back */
+    s = (sw_sim_t){ .eth = false, .wifi_set = true, .due_ms = -1 };
+    s.eth = true;    /* the link event, mid-move */
+    s.due_ms = -1;   /* netsw_next(true, false, true): nothing to arm */
+    s.backup = true; /* the move ends */
+    sw_check(&s, 6000);
+    sw_run(&s, 6000, 15999);
+    CHECK(s.backup);
+    sw_run(&s, 16000, 16000);
+    CHECK(!s.backup);
+
+    /* No network set: the cable out leaves the node on Ethernet */
+    s = (sw_sim_t){ .eth = true, .wifi_set = false, .due_ms = -1 };
+    sw_link(&s, false, 0);
+    sw_run(&s, 0, 60000);
+    CHECK(!s.backup && s.moves == 0);
+}
+
 int main(void)
 {
     nodekey_setup();
@@ -6556,6 +6674,7 @@ int main(void)
     test_sup();
     test_hosted();
     test_reboot();
+    test_netsw();
     zone_free(g_zone);
     if (s_fail) {
         fprintf(stderr, "%d check(s) failed\n", s_fail);

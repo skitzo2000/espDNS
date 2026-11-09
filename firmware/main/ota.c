@@ -774,14 +774,16 @@ static esp_err_t status_get(httpd_req_t *req)
         (unsigned long)s.refused_source, (unsigned long)s.tcp_closed);
     /* Boot timing in ms since the app started; null for a step that hasn't finished. */
     /* The MAC of the interface it uses (Ethernet or Wi-Fi), what a DHCP reservation or a
-     * static address is set by; "" before the interface is up. */
+     * static address is set by; "" before the interface is up. "backup": a wired board on its
+     * Wi-Fi backup (kind "wifi", the Wi-Fi MAC), "eth_link": the Ethernet link either way. */
     uint8_t mac[6];
     char e_mac[18];
     net_mac(mac);
     n += (size_t)snprintf(j + n, cap - n,
-                          "\"net\":{\"kind\":\"%s\",\"mac\":\"%s\",\"link\":%s,\"hostname\":\"%s.local\"",
+                          "\"net\":{\"kind\":\"%s\",\"mac\":\"%s\",\"link\":%s,\"backup\":%s,\"eth_link\":%s,"
+                          "\"hostname\":\"%s.local\"",
                           net_kind_name(), json_mac(e_mac, sizeof(e_mac), mac), net_link_up() ? "true" : "false",
-                          net_hostname());
+                          net_wifi_backup() ? "true" : "false", net_eth_link_up() ? "true" : "false", net_hostname());
     if (net_kind() == NET_WIFI) {
         net_wifi_stats_t ws;
         net_wifi_stats(&ws);

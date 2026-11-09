@@ -11,7 +11,7 @@
 #include "net.h"
 #include "sdkconfig.h"
 
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG && NET_HAS_WIFI
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_netif.h"
@@ -73,6 +73,8 @@ static void send_url(uint8_t cmd)
     send_result(cmd, s, 1);
 }
 
+/* Provisioned once a network is saved and the node is on the network, on Wi-Fi or on its
+ * Ethernet (a wired board's Wi-Fi is its backup); the URL is the node's one address. */
 static void send_state(void)
 {
     bool up = net_wifi_configured() && net_online(); /* a static address is there before the link */
@@ -171,8 +173,6 @@ static void improv_task(void *arg)
 
 void improv_start(void)
 {
-    if (net_kind() != NET_WIFI)
-        return;
     usb_serial_jtag_driver_config_t cfg = { .rx_buffer_size = 512, .tx_buffer_size = 1024 };
     if (usb_serial_jtag_driver_install(&cfg) != ESP_OK) {
         ESP_LOGE(TAG, "usb serial driver failed to start");

@@ -2,7 +2,7 @@
 // esptool-js 0.6.0) on a Web Serial port the page asked for. connect reaches the board's
 // serial bootloader and says which chip and how much flash; write writes parts ({data,
 // address}) at their offsets, erasing the whole flash first only when asked; reset restarts
-// the board into its firmware, as ESP Web Tools does; close lets go of the port. serialError
+// the board into its firmware; close lets go of the port. serialError
 // says what went wrong, in words, for the step that failed.
 
 let esptool = null;

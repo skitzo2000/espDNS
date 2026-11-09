@@ -251,9 +251,10 @@ print-idf-image:
 	@echo $(IDF_IMAGE)
 
 # dist/<board>/: the board's chip image (built without a fallback or an address) with its board
-# partition, which carries the node's address, as one whole-flash image for a new node, plus an
-# ESP Web Tools manifest.json. Its keys partition holds FACTORY_KEYS's public keys (relative to
-# firmware/), as the controller's Install over USB writes the controller's; the app is
+# partition, which carries the node's address, as one whole-flash image for a new node,
+# plus the flasher's manifest.json. Its keys partition holds FACTORY_KEYS's public keys
+# (relative to firmware/), as the controller's Install over USB writes the controller's; the
+# app is
 # key-neutral unless INSTALL_KEYS_SEED is given.
 factory: $(INSTALL_SEED_FILES) $(FACTORY_KEY_FILES)
 	@test -n "$(ADDRESS)" || { echo "set ADDRESS=a.b.c.d/nn (and GATEWAY=), or ADDRESS=dhcp on a network with a DHCP server"; exit 1; }

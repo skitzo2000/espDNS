@@ -2,7 +2,7 @@
 // without them nothing is prepared (the page says so, and serve.sh's controller, which has
 // none, refuses); Write keys only (keeps settings) writes the keys partition alone with the
 // vendored esptool-js, on a stubbed Web Serial port with a fake ESP32-S3 bootloader behind
-// it: no hardware, no ESP Web Tools dialog, no erase. A node found in setup mode offers it
+// it: no hardware, no dialog of its own, no erase. A node found in setup mode offers it
 // first. The keys and the prepared build are answered here (page.route), so serve.sh's
 // controller keeps no keys for the other tests.
 const { test, expect } = require("@playwright/test");
@@ -108,7 +108,7 @@ test("Install over USB: the search box filters the library, and a filtered board
 // on the board's bootloader (here a fake one on a stubbed port): one compressed write of 8 KB
 // at 0x1b000, read back, the board reset (RTS raised, then dropped); no erase command at all (ERASE_FLASH 0xd0,
 // ERASE_REGION 0xd1), no uncompressed FLASH_BEGIN, nothing written outside the keys region,
-// and no ESP Web Tools dialog.
+// and nothing else written to the board.
 test("Write keys only: esptool-js writes the 8 KB at 0x1b000 alone, erases nothing, reads it back", async ({ page }) => {
   const violations = await watch(page);
   await page.addInitScript(fakeEsp);
@@ -124,7 +124,6 @@ test("Write keys only: esptool-js writes the 8 KB at 0x1b000 alone, erases nothi
   await only.getByRole("button", { name: "Write the keys over USB" }).click();
   await expect(only.locator("#usb-keys-status")).toContainText("Done: the board has your keys", { timeout: 20000 });
   await expect(only.locator("#usb-keys-status")).toContainText(`release ${RELFP}, recovery ${RECFP}`);
-  await expect(page.locator("ewt-install-dialog")).toHaveCount(0);
   const esp = await page.evaluate(() => ({ ops: window.__esp.ops, begins: window.__esp.begins, flash: window.__esp.flash, signals: window.__esp.signals }));
   expect(esp.ops).not.toContain(0xd0);
   expect(esp.ops).not.toContain(0xd1);

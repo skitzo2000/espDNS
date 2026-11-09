@@ -1,21 +1,12 @@
 // Every page of the controller under its Content-Security-Policy (internal/websec): it loads
-// with no violation and its scripts run, and the vendored esp-web-tools (still shipped, no
-// longer used by Install over USB) loads, opens its dialog on a stubbed Web Serial port and
-// imports every chunk it ships, with no hardware.
+// with no violation and its scripts run. The same CSP on every page: nothing hashed, nothing
+// from another origin, no inline style.
 const fs = require("node:fs");
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
   "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
-// The pages that open Install over USB (websec.USBCSP, websec.USBPages): style attributes
-// with exactly the two values of esp-web-tools' "no port picked" dialog and the three its
-// Wi-Fi form's styleMaps start with, by hash; nothing else.
-const USB_PAGES = ["index.html", "node.html", "setup.html"];
-const USB_CSP = CSP + "; style-src-attr 'unsafe-hashes' " +
-  "'sha256-w68cv7ZL7DW/1c2v0g4i6aPlMi0iRw663JuMxEmNmU4=' 'sha256-2PZQPqAcY6IE7H879XiZ2Hm3cBUNVB41T1m3kjNvN6E=' " +
-  "'sha256-EDKRS+IvBWVSFJYjnWOymFAGVOawal4UoghutFq1ngI=' 'sha256-0EZqoz+oBhx7gF4nvY2bSqoGyy4zLjNF+SDQXGp/ZrY=' " +
-  "'sha256-rZZVnJxMO/XQV/2QyewiamVXFmVWYmr6mN1ilULHFrU='";
 const web = path.join(__dirname, "..", "..", "web");
 const pages = fs.readdirSync(web).filter(f => f.endsWith(".html")).sort();
 
@@ -33,7 +24,6 @@ async function watch(page) {
 }
 
 const { login, apiGet } = require("./session");
-const { fakeEsp } = require("./fakeboard");
 
 // serve.sh's controller lists no node and browses no mDNS (-browse-mdns=false): one found
 // here means it went on the network, to the nodes on this LAN.
@@ -57,7 +47,7 @@ for (const name of pages.filter(p => p !== "login.html")) {
     await login(page);
     const r = await page.goto(name);
     expect(r.status()).toBe(200);
-    expect(r.headers()["content-security-policy"]).toBe(USB_PAGES.includes(name) ? USB_CSP : CSP);
+    expect(r.headers()["content-security-policy"]).toBe(CSP);
     expect(r.headers()["x-frame-options"]).toBe("DENY");
     // shell.js draws the top bar: the page's module ran.
     await expect(page.locator('nav[aria-label="Main"]')).toBeVisible();
@@ -139,152 +129,13 @@ test("a page logged out: redirected to the login, with the headers", async ({ pa
   expect(await violations()).toEqual([]);
 });
 
-// A Web Serial port that opens and never answers: enough for esp-web-tools to open its
-// dialog and try to reach the chip.
-function stubSerial() {
-  const port = {
-    readable: new ReadableStream({ pull() { return new Promise(() => {}); } }),
-    writable: new WritableStream({ write() {} }),
-    async open() {}, async close() {}, async setSignals() {}, async forget() {},
-    getInfo() { return { usbVendorId: 0x303a, usbProductId: 0x1001 }; },
-    addEventListener() {}, removeEventListener() {},
-  };
-  const serial = {
-    async requestPort() { return port; }, async getPorts() { return [port]; },
-    addEventListener() {}, removeEventListener() {},
-  };
-  Object.defineProperty(Navigator.prototype, "serial", { configurable: true, get: () => serial });
-}
-
-// openUSB opens Install over USB from its button on Nodes, as a click does, and loads the
-// vendored flasher's module into the page.
+// openUSB opens Install over USB from its button on Nodes, as a click does.
 async function openUSB(page) {
   const r = await page.goto("./");
-  expect(r.headers()["content-security-policy"]).toBe(USB_CSP);
+  expect(r.headers()["content-security-policy"]).toBe(CSP);
   await page.getByRole("button", { name: "Install over USB", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Install a board over USB" })).toBeVisible();
-  await page.evaluate(() => import("./vendor/esp-web-tools/install-button.js"));
-  await page.waitForFunction(() => customElements.get("esp-web-install-button") !== undefined);
 }
-
-test("Install over USB: the flasher loads, opens on a stubbed port, every chunk imports", async ({ page }) => {
-  const violations = await watch(page);
-  await page.addInitScript(stubSerial);
-  await login(page);
-  await openUSB(page);
-
-  // The button as usb.js makes it for a prepared image; its activate slot opens the dialog.
-  await page.evaluate(() => {
-    const b = document.createElement("esp-web-install-button");
-    b.id = "e2e-install";
-    b.setAttribute("manifest", "build/e2e/manifest.json");
-    const act = document.createElement("button");
-    act.slot = "activate";
-    act.textContent = "Install over USB";
-    b.append(act);
-    document.querySelector("aside.drawer .body").append(b);
-  });
-  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
-  await page.waitForFunction(() => customElements.get("ewt-install-dialog") !== undefined &&
-    document.querySelector("ewt-install-dialog") !== null);
-
-  // Every chunk the vendored copy ships (its SHA256SUMS), imported under the CSP.
-  const sums = await (await page.request.get("vendor/esp-web-tools/SHA256SUMS")).text();
-  const chunks = sums.trim().split("\n").map(l => l.split(/\s+/)[1]).filter(f => f.endsWith(".js"));
-  expect(chunks.length).toBeGreaterThan(20);
-  const failed = await page.evaluate(async chunks => {
-    const out = [];
-    for (const c of chunks) {
-      try { await import(`./vendor/esp-web-tools/${c}`); } catch (e) { out.push(`${c}: ${e.message}`); }
-    }
-    return out;
-  }, chunks);
-  expect(failed).toEqual([]);
-  await page.waitForLoadState("networkidle");
-  expect(await violations()).toEqual([]);
-});
-
-// The port picker cancelled (requestPort rejects with NotFoundError, as Chromium does): the
-// install button opens esp-web-tools' "no port picked" dialog, whose icon has the two style
-// attributes USB_CSP allows by hash.
-test("Install over USB: the port picker cancelled, the no-port dialog shows, no CSP violation", async ({ page }) => {
-  const violations = await watch(page);
-  await page.addInitScript(() => {
-    const serial = {
-      async requestPort() { throw new DOMException("No port selected by the user.", "NotFoundError"); },
-      async getPorts() { return []; },
-      addEventListener() {}, removeEventListener() {},
-    };
-    Object.defineProperty(Navigator.prototype, "serial", { configurable: true, get: () => serial });
-  });
-  await login(page);
-  await openUSB(page);
-  await page.evaluate(() => {
-    const b = document.createElement("esp-web-install-button");
-    b.setAttribute("manifest", "build/e2e/manifest.json");
-    const act = document.createElement("button");
-    act.slot = "activate";
-    act.textContent = "Install over USB";
-    b.append(act);
-    document.querySelector("aside.drawer .body").append(b);
-  });
-  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
-  const dialog = page.locator("ewt-no-port-picked-dialog");
-  await expect(dialog.getByText("Try Again")).toBeVisible();
-  // Its icon, with the two style attributes, was drawn.
-  expect(await page.evaluate(() =>
-    document.querySelector("ewt-no-port-picked-dialog").shadowRoot.querySelectorAll("svg[style]").length)).toBeGreaterThan(0);
-  await page.waitForLoadState("networkidle");
-  expect(await violations()).toEqual([]);
-});
-
-// A Wi-Fi board's manifest (no Improv wait of 0) on a board that already runs espDNS: the
-// dialog finds it over Improv and offers Connect to Wi-Fi; its form (the networks scanned,
-// the password) shows and joins, all under USB_CSP with no violation.
-test("Install over USB: a Wi-Fi board's Improv step, its Wi-Fi form, no CSP violation", async ({ page }) => {
-  const violations = await watch(page);
-  await page.addInitScript(fakeEsp, { app: true, wifi: true, bootLog: [] });
-  await page.route("**/build/e2e-wifi/manifest.json", r => r.fulfill({ json: {
-    name: "espDNS xiao-s3-sense", version: "0.0.5", new_install_prompt_erase: true,
-    builds: [{ chipFamily: "ESP32-S3", parts: [{ path: "image.bin", offset: 0 }] }] } }));
-  await login(page);
-  await openUSB(page);
-  await page.evaluate(() => {
-    const b = document.createElement("esp-web-install-button");
-    b.setAttribute("manifest", "build/e2e-wifi/manifest.json");
-    const act = document.createElement("button");
-    act.slot = "activate";
-    act.textContent = "Install over USB";
-    b.append(act);
-    document.querySelector("aside.drawer .body").append(b);
-  });
-  await page.locator("aside.drawer").getByRole("button", { name: "Install over USB" }).click();
-  const dialog = page.locator("ewt-install-dialog");
-  await expect(dialog.getByText("Connected to espdns-e2e")).toBeVisible();
-  await expect(dialog.getByText("Install espDNS xiao-s3-sense")).toBeVisible();
-  await dialog.getByText("Connect to Wi-Fi").click();
-  await expect(dialog.getByText("Connect your device to the network")).toBeVisible();
-  await expect(dialog.locator("ew-filled-select")).toBeVisible();
-  // The networks' menu opens; Join other… asks for the network's name too.
-  await dialog.locator("ew-filled-select").click();
-  await expect(dialog.getByText("example-guest")).toBeVisible();
-  await dialog.getByText("Join other…").click();
-  const ssid = dialog.locator("ew-filled-text-field[name=ssid] input");
-  await expect(ssid).toBeVisible();
-  await ssid.fill("example-net");
-  const pass = dialog.locator("ew-filled-text-field[name=password] input");
-  await expect(pass).toBeVisible();
-  await pass.fill("e2e password");
-  await dialog.locator("ew-text-button", { hasText: "Connect" }).click();
-  await expect(dialog.locator("ewt-page-message")).toContainText("Device connected to the network!");
-  // The network and the password, as the firmware's RPC reads them.
-  expect(await page.evaluate(() => window.__improvJoin)).toBe("\x0bexample-net\x0ce2e password");
-  // Back on the dashboard, provisioned: Change Wi-Fi.
-  await dialog.getByText("Skip").click();
-  await expect(dialog.getByText("Change Wi-Fi")).toBeVisible();
-  await page.waitForLoadState("networkidle");
-  expect(await violations()).toEqual([]);
-});
 
 // Prepare image (its chip image given as imported, the build answered for it): a board that
 // may run on Wi-Fi (the build says so) gets the line saying the panel asks for the Wi-Fi

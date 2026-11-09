@@ -63,7 +63,6 @@ func (b *builder) routes(mux jobs.Mux) {
 	mux.HandleFunc("GET /api/images", b.listImages)
 	mux.HandleFunc("POST /api/build", b.prepare)
 	mux.HandleFunc("POST /api/build/keys", b.prepareKeys)
-	mux.HandleFunc("GET /build/{id}/manifest.json", b.manifest)
 	mux.HandleFunc("GET /build/{id}/image.bin", b.image)
 }
 
@@ -87,8 +86,8 @@ func (b *builder) keysPart() ([]byte, buildKeys, error) {
 // prepareKeys makes the keys partition alone for Write keys only (POST /api/build/keys, no
 // body), served at /build/<id>/image.bin: usb.js writes it at 0x1b000 with the vendored
 // esptool-js (one write, no erase, read back), keeping the rest of the flash, so a node in
-// setup mode (no keys, or corrupt ones) gets its keys and keeps its settings. It has no ESP
-// Web Tools manifest. It answers with the build's id, as POST /api/build does.
+// setup mode (no keys, or corrupt ones) gets its keys and keeps its settings. There is no
+// manifest for it: the page writes the image itself. It answers with the build's id, as POST /api/build does.
 func (b *builder) prepareKeys(w http.ResponseWriter, r *http.Request) {
 	part, fps, err := b.keysPart()
 	if err != nil {
@@ -275,19 +274,6 @@ func (b *builder) get(w http.ResponseWriter, r *http.Request) *build {
 		http.Error(w, "no such build: prepare it again", http.StatusNotFound)
 	}
 	return bl
-}
-
-func (b *builder) manifest(w http.ResponseWriter, r *http.Request) {
-	bl := b.get(w, r)
-	if bl == nil {
-		return
-	}
-	if bl.KeysOnly {
-		// Never through ESP Web Tools: its install would offer to erase the whole flash.
-		http.Error(w, "Write keys only has no ESP Web Tools manifest: the page writes /build/<id>/image.bin itself", http.StatusNotFound)
-		return
-	}
-	writeJSON(w, bl.Chip.Manifest(bl.Board.Name, bl.Board.MayRunOnWiFi(), "image.bin"))
 }
 
 func (b *builder) image(w http.ResponseWriter, r *http.Request) {
