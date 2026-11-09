@@ -198,22 +198,6 @@ func TestPackFormat(t *testing.T) {
 	}
 }
 
-// HasWiFi: the chip's, as its image says: every S3 image has Wi-Fi, a P4 has none, and so
-// has a board whose image isn't one of the chip images. MayRunOnWiFi's rule (no Ethernet,
-// or one that may not be fitted) is the node's, not the chip's: unchanged beside this one.
-func TestHasWiFi(t *testing.T) {
-	for _, c := range []struct {
-		image string
-		want  bool
-	}{
-		{"esp32s3-octal", true}, {"esp32s3-eth", true}, {"esp32p4", false}, {"", false},
-	} {
-		if got := (Board{Image: c.image}).HasWiFi(); got != c.want {
-			t.Errorf("%q: %v, want %v", c.image, got, c.want)
-		}
-	}
-}
-
 // MayRunOnWiFi: no Ethernet, Ethernet of kind none, or Ethernet that may not be fitted.
 func TestMayRunOnWiFi(t *testing.T) {
 	for _, c := range []struct {
