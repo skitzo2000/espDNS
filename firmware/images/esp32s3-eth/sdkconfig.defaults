@@ -1,5 +1,6 @@
 # ESP32-S3 with octal PSRAM (S3R8, S3R16V) and wired Ethernet (a W5500 over SPI): Waveshare
-# ESP32-S3-ETH. For wired S3 boards only: a Wi-Fi S3 board runs esp32s3-octal.
+# ESP32-S3-ETH. For wired S3 boards: a Wi-Fi-only S3 board runs esp32s3-octal, and a wired
+# S3 with the Wi-Fi backup (net.c: Wi-Fi only while the cable is out) stays here.
 #
 # esp32s3-octal, plus speed bought with internal RAM. A Wi-Fi S3 can't spare that RAM (the
 # XIAO ESP32S3 Sense on Wi-Fi bottoms out at 28.6 KB of internal RAM free on esp32s3-octal),
@@ -25,3 +26,7 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # not from flash through the cache.
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_LWIP_IRAM_OPTIMIZATION=y
+# The Wi-Fi backup's buffers in PSRAM first, internal RAM only if that fails: Wi-Fi runs only
+# while the cable is out, and wifi_up() logs the internal RAM free before and after it starts.
+# lwIP's own heap allocations prefer PSRAM too, on Ethernet as well.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

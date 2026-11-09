@@ -175,7 +175,8 @@ can use (unused drivers cost flash, not RAM).
 `esp32s3-eth` doubles the instruction cache to 32 KB and puts the SPI master and lwIP's
 packet path in IRAM. On the Waveshare board it answered 78.6% of a 3,000 queries/s flood
 where `esp32s3-octal` answered 30.5%. The cost is about 29 KB less free internal RAM, which
-a Wi-Fi S3 needs, so S3 boards on Wi-Fi stay on `esp32s3-octal`.
+a Wi-Fi S3 needs, so S3 boards on Wi-Fi only stay on `esp32s3-octal`. A wired S3 with Wi-Fi
+as its backup stays on `esp32s3-eth`: Wi-Fi runs there only while the cable is out.
 
 The two are siblings (same chip, PSRAM and flash layout): a node moves between them with an
 ordinary firmware update, keeping its board definition, config, zones and lists, without a
@@ -231,7 +232,19 @@ failed, as before; and a node that can't read its keys partition deletes nothing
 ## Wired first, Wi-Fi as a fallback
 
 At boot a node starts its board's Ethernet. If there's none, or it doesn't start (an
-optional W5500 that isn't fitted), it uses Wi-Fi. It doesn't switch while running.
+optional W5500 that isn't fitted), it uses Wi-Fi.
+
+A wired S3 node with a Wi-Fi network set (in its config, or saved over USB) uses Wi-Fi as a
+backup while its cable is out:
+
+- When the Ethernet link has been down for 5 seconds, the node starts Wi-Fi and joins the
+  network, keeping its address. It doesn't answer until it has joined.
+- When the link has been back for 10 seconds, it moves back to Ethernet and turns Wi-Fi off
+  again.
+- A cable that comes back sooner, or drops again sooner, moves nothing.
+- On the backup, its `/status` shows `wifi` with the Wi-Fi MAC, `backup: true` and
+  `eth_link: false`. The gateway and your clients learn the new MAC from the node itself.
+- Wi-Fi is off while the node is wired, so it costs no memory until the cable goes.
 
 Wire the nodes you rely on. Wi-Fi is best effort:
 
@@ -244,7 +257,7 @@ Wire the nodes you rely on. Wi-Fi is best effort:
 - A Wi-Fi node's config holds the Wi-Fi password, so the controller treats it as a secret.
 
 The ESP32-P4 has no Wi-Fi of its own, and espDNS doesn't use a P4 board's companion Wi-Fi
-chip yet, so P4 nodes are wired only.
+chip yet, so P4 nodes are wired only, with no Wi-Fi backup.
 
 ## Describing your own board
 
