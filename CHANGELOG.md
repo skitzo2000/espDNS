@@ -14,8 +14,8 @@ version may change anything. Write each change under Unreleased as it merges;
 ### Added
 
 - **Wi-Fi as a backup to Ethernet** (firmware): a wired S3 node with a Wi-Fi network set
-  moves to Wi-Fi when its cable has been out for 5 seconds, keeping its address, and back to
-  Ethernet when the cable has been in for 10 seconds. Wi-Fi stays off while it is wired.
+  moves to Wi-Fi when its cable has been out for 5 seconds, keeping its static address, and
+  back to Ethernet when the cable has been in for 10 seconds. Wi-Fi stays off while it is wired.
   `/status` says `backup` and `eth_link` under `net`. The node also answers Wi-Fi setup over
   USB while on Ethernet.
 

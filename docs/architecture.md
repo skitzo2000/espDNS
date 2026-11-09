@@ -248,7 +248,8 @@ Settings come in layers. A value comes from the first of:
 
 The board definition only changes by flashing over USB.
 
-Wired is the supported way. Wi-Fi is a best-effort fallback for boards without Ethernet.
+Wired is the supported way. Wi-Fi is best effort: the network of a board without Ethernet,
+and the backup of a wired S3 board with a Wi-Fi network set, while its cable is out.
 Keep at least one node wired; the controller warns when only Wi-Fi nodes are answering.
 
 ## Boot

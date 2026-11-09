@@ -46,6 +46,10 @@ static bool s_mdns;
 static EventGroupHandle_t s_events;
 #if NET_HAS_WIFI
 static esp_netif_t *volatile s_wifi_netif; /* NULL while Wi-Fi is off */
+/* Wi-Fi's interface, made at the first wifi_up and never destroyed: Wi-Fi stops and starts
+ * under it. mDNS keeps a pointer to it, and a reader of s_netif may still hold it as a move
+ * back to Ethernet is made. */
+static esp_netif_t *s_wifi_sta;
 static volatile bool s_wifi_link;          /* associated with the access point */
 static volatile uint16_t s_last_reason; /* why the last disconnect happened (wifi_err_reason_t) */
 static net_wifi_stats_t s_stats;        /* since boot */
@@ -126,6 +130,20 @@ static void ip_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 #if NET_HAS_WIFI
 static esp_timer_handle_t s_switch; /* the pending move between Ethernet and the backup */
 static void switch_due(void *arg);
+
+/* The Wi-Fi backup (netsw.h): stops the pending move and starts the one the links ask for,
+ * if any, to be made once its hold is over. On every Ethernet link change, at boot (a cable
+ * out from power-on sends no event), after a move (the link changed while it was being made)
+ * and after a join (a network newly saved). */
+static void switch_check(void)
+{
+    if (!s_eth_netif)
+        return;
+    esp_timer_stop(s_switch);
+    netsw_t next = netsw_next(s_eth_link, s_kind == NET_WIFI, net_wifi_configured());
+    if (next != NETSW_STAY)
+        esp_timer_start_once(s_switch, (uint64_t)netsw_hold_ms(next) * 1000);
+}
 #endif
 
 static void eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -136,12 +154,7 @@ static void eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (s_kind == NET_ETHERNET)
         link_changed(s_eth_link);
 #if NET_HAS_WIFI
-    /* The Wi-Fi backup: a move once the link has held its new state (netsw.h); a link that
-     * changes back sooner stops the pending one. */
-    esp_timer_stop(s_switch);
-    netsw_t next = netsw_next(s_eth_link, s_kind == NET_WIFI, net_wifi_configured());
-    if (next != NETSW_STAY)
-        esp_timer_start_once(s_switch, (uint64_t)netsw_hold_ms(next) * 1000);
+    switch_check();
 #endif
 }
 
@@ -219,9 +232,12 @@ static bool eth_start(void)
     esp_timer_create_args_t t = { .callback = switch_due, .name = "net_switch" };
     ESP_ERROR_CHECK(esp_timer_create(&t, &s_switch));
 #endif
+    s_kind = NET_ETHERNET; /* before the first link event */
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, eth_event, NULL));
     ESP_ERROR_CHECK(esp_eth_start(eth));
-    s_kind = NET_ETHERNET;
+#if NET_HAS_WIFI
+    switch_check();
+#endif
     return true;
 }
 
@@ -401,7 +417,9 @@ static bool wifi_up(void)
 {
     if (s_wifi_netif)
         return true;
-    esp_netif_t *n = esp_netif_create_default_wifi_sta();
+    if (!s_wifi_sta)
+        s_wifi_sta = esp_netif_create_default_wifi_sta();
+    esp_netif_t *n = s_wifi_sta;
     const cfg_t *c = settings();
     if (!(c->dhcp && !c->ip))
         dhcpc_off(n);
@@ -410,7 +428,6 @@ static bool wifi_up(void)
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&init) != ESP_OK) {
         ESP_LOGE(TAG, "wifi: init failed");
-        esp_netif_destroy_default_wifi(n);
         return false;
     }
     esp_wifi_set_storage(WIFI_STORAGE_RAM); /* the network is kept in our own NVS namespace */
@@ -427,7 +444,6 @@ static bool wifi_up(void)
         ESP_LOGE(TAG, "wifi: start failed");
         s_wifi_netif = NULL;
         esp_wifi_deinit();
-        esp_netif_destroy_default_wifi(n);
         return false;
     }
     ESP_LOGI(TAG, "wifi: %u bytes of internal RAM free after start",
@@ -437,11 +453,10 @@ static bool wifi_up(void)
     return true;
 }
 
-/* Stops Wi-Fi and gives its RAM back (a wired board on Ethernet). */
+/* Stops Wi-Fi and gives its RAM back (a wired board on Ethernet). Its interface stays. */
 static void wifi_down(void)
 {
-    esp_netif_t *n = s_wifi_netif;
-    if (!n)
+    if (!s_wifi_netif)
         return;
     s_wifi_netif = NULL; /* first: the events the stop sends are ignored */
     esp_timer_stop(s_reconnect);
@@ -449,7 +464,6 @@ static void wifi_down(void)
     esp_wifi_disconnect();
     esp_wifi_stop();
     esp_wifi_deinit();
-    esp_netif_destroy_default_wifi(n);
     s_wifi_link = false;
     s_backoff_s = 1;
     s_scan_n = 0;
@@ -522,14 +536,17 @@ static void switch_task(void *arg)
     case NETSW_STAY:
         break;
     }
+    switch_check(); /* a link change during the move, or a Wi-Fi start that failed */
     wifi_unlock();
     vTaskDelete(NULL);
 }
 
 static void switch_due(void *arg)
 {
-    if (xTaskCreate(switch_task, "net_switch", 4096, NULL, 5, NULL) != pdPASS)
-        ESP_LOGE(TAG, "no memory to switch interfaces");
+    if (xTaskCreate(switch_task, "net_switch", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "no memory to switch interfaces; trying again in 1 s");
+        esp_timer_start_once(s_switch, 1000 * 1000);
+    }
 }
 
 bool net_wifi_join(const char *ssid, const char *pass, int timeout_ms)
@@ -591,6 +608,8 @@ bool net_wifi_join(const char *ssid, const char *pass, int timeout_ms)
     s_joining = false;
     if (s_kind != NET_WIFI) /* design (b): Wi-Fi only while the cable is out */
         wifi_down();
+    if (ok)
+        switch_check(); /* a cable already out: the network just saved is its backup */
     wifi_unlock();
     return ok;
 }

@@ -1,9 +1,10 @@
 /*
  * A wired board's Wi-Fi backup (net.c): when to switch between Ethernet and Wi-Fi. Wi-Fi runs
- * only while the cable is out. On every Ethernet link change net.c stops the pending switch
- * and, if netsw_next says one is due, starts it again with netsw_hold_ms; when the hold ends
- * it asks netsw_next once more and makes that switch. A link that comes back (or goes again)
- * within the hold so switches nothing. Pure, so the host tests run it (tests/test_core.c).
+ * only while the cable is out. On every Ethernet link change, at boot and after each switch,
+ * net.c stops the pending switch and, if netsw_next says one is due, starts it again with
+ * netsw_hold_ms; when the hold ends it asks netsw_next once more and makes that switch. A
+ * link that comes back (or goes again) within the hold so switches nothing. Pure, so the
+ * host tests run it (tests/test_core.c).
  */
 #pragma once
 

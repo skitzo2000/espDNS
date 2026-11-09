@@ -26,7 +26,12 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # not from flash through the cache.
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_LWIP_IRAM_OPTIMIZATION=y
-# The Wi-Fi backup's buffers in PSRAM first, internal RAM only if that fails: Wi-Fi runs only
-# while the cable is out, and wifi_up() logs the internal RAM free before and after it starts.
-# lwIP's own heap allocations prefer PSRAM too, on Ethernet as well.
+# PSRAM first, internal RAM only if that fails, for two allocators (IDF 5.5): the Wi-Fi
+# driver's heap (esp_adapter.c wifi_malloc/calloc/realloc), only while the backup runs; and
+# all of lwIP's heap (lwipopts.h mem_clib_malloc; MEM_LIBC_MALLOC and MEMP_MEM_MALLOC route
+# pbufs, PCBs and netbufs through it), always, on Ethernet too: outgoing packets and the
+# pbuf headers around received frames (the W5500 driver's frame buffers are unchanged).
+# With SPIRAM_IGNORE_NOTFOUND set, the Kconfig defaults that follow this option (more Wi-Fi
+# RX buffers, static TX buffers, TCP out-of-order limit) stay as on esp32s3-octal.
+# wifi_up() logs the internal RAM free before and after Wi-Fi starts.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

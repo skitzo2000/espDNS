@@ -237,14 +237,15 @@ optional W5500 that isn't fitted), it uses Wi-Fi.
 A wired S3 node with a Wi-Fi network set (in its config, or saved over USB) uses Wi-Fi as a
 backup while its cable is out:
 
-- When the Ethernet link has been down for 5 seconds, the node starts Wi-Fi and joins the
-  network, keeping its address. It doesn't answer until it has joined.
+- When the Ethernet link has been down for 5 seconds (from power-on, too), the node starts
+  Wi-Fi and joins the network, keeping its static address. A node set to DHCP asks for an
+  address on Wi-Fi instead. It doesn't answer until it has joined.
 - When the link has been back for 10 seconds, it moves back to Ethernet and turns Wi-Fi off
   again.
 - A cable that comes back sooner, or drops again sooner, moves nothing.
 - On the backup, its `/status` shows `wifi` with the Wi-Fi MAC, `backup: true` and
   `eth_link: false`. The gateway and your clients learn the new MAC from the node itself.
-- Wi-Fi is off while the node is wired, so it costs no memory until the cable goes.
+- Wi-Fi is off while the node is wired, so its driver takes no RAM until the cable goes.
 
 Wire the nodes you rely on. Wi-Fi is best effort:
 
