@@ -37,10 +37,7 @@ async function routes(page, state) {
     const name = r.request().postDataJSON().name;
     const list = await (await page.request.get("api/boards", { headers: { "X-Session-Token": await page.evaluate(() => localStorage.getItem("espdns.session")) } })).json();
     const board = list.find(e => e.board.name === name).board, eth = board.ethernet || {};
-    // As the builder says it (build.WiFi the chip's, boards.HasWiFi; build.Wired wired as it
-    // ships, an optional add-on not).
-    await r.fulfill({ json: { id: `e2e-${name}`, board, wifi: board.image.startsWith("esp32s3"),
-      wired: !!eth.kind && eth.kind !== "none" && !eth.optional,
+    await r.fulfill({ json: { id: `e2e-${name}`, board, wifi: !eth.kind || eth.kind === "none" || !!eth.optional,
       chip: { image: board.image, chip_family: board.image.startsWith("esp32p4") ? "ESP32-P4" : "ESP32-S3", version: "0.0.5", built: "2026-10-07", elf_sha256: "ab".repeat(32) },
       keys: { release: RELFP, recovery: RECFP } } });
   });
@@ -80,16 +77,6 @@ async function start(page, { board = "ws-s3-eth", address = "192.0.2.52/24", fak
   await expect(u.locator("#usb-erase")).not.toBeChecked();
   return { u, state, violations };
 }
-
-// The build's wifi is the chip's (boards.HasWiFi) and wired whether the board ships wired
-// (a build's fields, not the route's guess), so a board with no Wi-Fi at all (a P4) shows
-// no checkbox even against the real controller.
-test("Install over USB: the Wi-Fi checkbox shows for an S3 board and not for a P4 one", async ({ page }) => {
-  const { u, violations } = await start(page, { board: "p4-ip101" });
-  await expect(u.locator("#usb-wifi-box")).toHaveCount(0);
-  await expect(u.locator("#usb-wifi")).toHaveCount(0);
-  expect(await violations()).toEqual([]);
-});
 
 const esp = page => page.evaluate(() => ({ ops: window.__esp.ops, begins: window.__esp.begins, flash: window.__esp.flash, join: window.__esp.join }));
 const step = (u, n) => u.locator(`#usb-step-${n}`);
@@ -355,37 +342,6 @@ test("Install over USB: while it writes, the panel won't close, and says why in 
   expect(await leaving()).toBe(false);
   await u.getByRole("button", { name: "Close" }).last().click();
   await expect(u).toBeHidden();
-  expect(await violations()).toEqual([]);
-});
-
-// A wired board whose chip has Wi-Fi (ws-s3-eth: an ESP32-S3) gets the checkbox too, off by
-// default and said to be the backup for when the cable is out; left off, the install skips
-// Wi-Fi and says it uses the Ethernet add-on.
-test("Install over USB: a wired S3 board offers the Wi-Fi checkbox off by default; left off, the install skips Wi-Fi", async ({ page }) => {
-  const { u, violations } = await start(page);
-  const box = u.locator("#usb-wifi-box");
-  await expect(box).toBeVisible();
-  await expect(box).not.toBeChecked();
-  await expect(u.locator("label[for=usb-wifi-box]")).toContainText("a backup for when its cable is out");
-  await expect(u.locator("#usb-wifi")).toContainText("for when the cable is out");
-  await u.locator("#usb-go").click();
-  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
-  await expect(step(u, "wifi")).toHaveCount(0);
-  await expect(step(u, "connect")).toHaveClass("done");
-  expect(await violations()).toEqual([]);
-});
-
-// Ticked, the wired board goes through the Wi-Fi step and shows the form; until the
-// firmware half lands it answers nothing over USB, and the panel says it stores the network
-// for a firmware that doesn't have it yet and stays on Ethernet.
-test("Install over USB: a wired S3 board ticked for Wi-Fi shows the form and stays on Ethernet", async ({ page }) => {
-  test.setTimeout(60000);
-  const { u, violations } = await start(page, { fake: { bootLog: [] } });
-  await u.locator("#usb-wifi-box").check();
-  await u.locator("#usb-go").click();
-  await expect(step(u, "wifi")).toHaveClass("now", { timeout: 20000 });
-  await expect(step(u, "wifi")).toContainText("It didn't answer over USB: a wired board's firmware doesn't take Wi-Fi until #74's lands", { timeout: 25000 });
-  await expect(u.locator("#usb-installed")).toHaveText("Installed, on its Ethernet: it keeps the Wi-Fi network for #74's firmware, for when the cable is out. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
   expect(await violations()).toEqual([]);
 });
 

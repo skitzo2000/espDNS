@@ -42,15 +42,8 @@ type build struct {
 	Chip     image.Chip   `json:"chip"`
 	Keys     buildKeys    `json:"keys"`
 	KeysOnly bool         `json:"keys_only,omitempty"`
-	// WiFi is the chip's (boards.HasWiFi): the page offers the Wi-Fi checkbox for every board
-	// whose chip has Wi-Fi. Wired is whether the board is wired as it ships: Ethernet given,
-	// not kind "none", and not one that may not be fitted (an add-on that may be left out
-	// leaves Wi-Fi the network it ships with, as the XIAO Sense). Together they say what the
-	// page offers: Wi-Fi as the only network (the checkbox ticked, as today) or a backup
-	// (off by default).
-	WiFi  bool `json:"wifi"`
-	Wired bool `json:"wired"`
-	bin   []byte
+	WiFi     bool         `json:"wifi"` // the board may run on Wi-Fi: the page asks for the network over Improv
+	bin      []byte
 }
 
 // buildKeys are the fingerprints of the keys a build writes (as /status names them).
@@ -270,12 +263,7 @@ func (b *builder) make(e boards.Entry) (*build, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(bin)
-	// the chip has Wi-Fi: the page offers the Wi-Fi checkbox. An Ethernet that may not be
-	// fitted leaves the board on Wi-Fi as it ships (MayRunOnWiFi), so it isn't wired here.
-	wifi := e.Board.HasWiFi()
-	eth := e.Board.Ethernet
-	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps,
-		WiFi: wifi, Wired: eth != nil && eth.Kind != "none" && !eth.Optional, bin: bin}), nil
+	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps, WiFi: e.Board.MayRunOnWiFi(), bin: bin}), nil
 }
 
 func (b *builder) get(w http.ResponseWriter, r *http.Request) *build {
