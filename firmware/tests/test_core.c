@@ -4149,6 +4149,75 @@ static void test_board_defs(void)
     CHECK(!board_part_open(erased, sizeof(erased), &json, &len, &why) && strstr(why, "no board definition"));
 }
 
+/* A P4 board's Wi-Fi companion (its ESP32-C6 over SDIO): board data, checked as the rest of
+ * the definition is, and refused on the card reader's slot or any pin the board already
+ * uses. espressif-p4-func-ev's own pins, from esp_hosted 2.13's defaults for that board. */
+static void test_board_companion(void)
+{
+    char err[160];
+    board_desc_t b;
+#define COMP "{\"chip\":\"esp32c6\",\"bus\":\"sdio\",\"slot\":1,\"clk\":18,\"cmd\":19," \
+             "\"d0\":14,\"d1\":15,\"d2\":16,\"d3\":17,\"reset\":54}"
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":" COMP "}}", &b, err));
+    CHECK(b.wifi_companion.kind == BOARD_COMPANION_SDIO && b.wifi_companion.slot == 1 &&
+          b.wifi_companion.clk == 18 && b.wifi_companion.cmd == 19 && b.wifi_companion.d0 == 14 &&
+          b.wifi_companion.d1 == 15 && b.wifi_companion.d2 == 16 && b.wifi_companion.d3 == 17 &&
+          b.wifi_companion.reset == 54);
+
+    /* No companion at all: the image drives nothing (a wired-only board's answer). */
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32p4-rev1\"}", &b, err) &&
+          b.wifi_companion.kind == BOARD_COMPANION_NONE);
+    /* slot left out means 1: slot 0 is where every P4 board here has its microSD card. */
+    CHECK(parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                "{\"chip\":\"esp32c6\",\"bus\":\"sdio\",\"clk\":18,\"cmd\":19,\"d0\":14,\"d1\":15,"
+                "\"d2\":16,\"d3\":17,\"reset\":54}}}", &b, err) &&
+          b.wifi_companion.slot == 1);
+
+    /* What the firmware would refuse to run. */
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":{\"chip\":\"esp32c6\","
+                 "\"bus\":\"sdio\",\"clk\":18,\"d0\":14,\"d1\":15,\"d2\":16,\"d3\":17,\"reset\":54}}}",
+                 &b, err) && strstr(err, "wifi companion cmd: required"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                 "{\"chip\":\"esp32c5\",\"bus\":\"sdio\",\"clk\":18,\"cmd\":19,\"d0\":14,\"d1\":15,"
+                 "\"d2\":16,\"d3\":17,\"reset\":54}}}", &b, err) && strstr(err, "companion chip"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                 "{\"chip\":\"esp32c6\",\"bus\":\"spi\",\"clk\":18,\"cmd\":19,\"d0\":14,\"d1\":15,"
+                 "\"d2\":16,\"d3\":17,\"reset\":54}}}", &b, err) && strstr(err, "companion bus"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":\"esp32c6\"}}", &b, err) &&
+          strstr(err, "wifi companion: not an object"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                 "{\"bus\":\"sdio\",\"clk\":18,\"cmd\":19,\"d0\":14,\"d1\":15,\"d2\":16,\"d3\":17,"
+                 "\"reset\":54}}}", &b, err) && strstr(err, "chip: missing"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                 "{\"chip\":\"esp32c6\",\"bus\":\"sdio\",\"slot\":2,\"clk\":18,\"cmd\":19,\"d0\":14,"
+                 "\"d1\":15,\"d2\":16,\"d3\":17,\"reset\":54}}}", &b, err) &&
+          strstr(err, "companion slot: 0 or 1"));
+    CHECK(!parse("{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"wifi\":{\"companion\":"
+                 "{\"chip\":\"esp32c6\",\"bus\":\"sdio\",\"clk\":18,\"cmd\":19,\"d0\":14,\"d1\":15,"
+                 "\"d2\":16,\"d3\":17,\"reset\":99}}}", &b, err) && strstr(err, "out of range"));
+    /* The card reader's slot, and a pin the Ethernet PHY reset already holds. */
+    char j[400];
+    snprintf(j, sizeof(j), "{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"sd\":{\"kind\":\"sdmmc\",\"slot\":0,"
+                           "\"width\":4},\"wifi\":{\"companion\":"
+                           "{\"chip\":\"esp32c6\",\"bus\":\"sdio\",\"slot\":0,\"clk\":18,\"cmd\":19,"
+                           "\"d0\":14,\"d1\":15,\"d2\":16,\"d3\":17,\"reset\":54}}}");
+    CHECK(!parse(j, &b, err) && strstr(err, "companion slot 0: the SD card is on SDMMC slot 0"));
+    /* The same board's C6 on slot 1, next to the card on slot 0: fits. */
+    snprintf(j, sizeof(j), "{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"sd\":{\"kind\":\"sdmmc\",\"slot\":0,"
+                           "\"width\":4},\"wifi\":{\"companion\":%s}}", COMP);
+    CHECK(parse(j, &b, err) && b.wifi_companion.slot == 1);
+    snprintf(j, sizeof(j), "{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"ethernet\":{\"kind\":\"emac\","
+                           "\"phy\":\"ip101\",\"addr\":1,\"reset\":54},\"wifi\":{\"companion\":%s}}", COMP);
+    CHECK(!parse(j, &b, err) && strstr(err, "GPIO 54 used twice"));
+    /* The same board with its PHY reset moved off 54: the companion fits. */
+    snprintf(j, sizeof(j), "{\"name\":\"x\",\"image\":\"esp32p4-c6\",\"ethernet\":{\"kind\":\"emac\","
+                           "\"phy\":\"ip101\",\"addr\":1,\"reset\":51},\"wifi\":{\"companion\":%s}}", COMP);
+    CHECK(parse(j, &b, err));
+    /* A companion pin on the SD card's SDMMC pins is the builder's business (it knows the
+     * chip); the firmware only refuses the clash with a pin the board itself names. */
+#undef COMP
+}
+
 
 /* ---- the UDP receive queue under load (load.h) ---- */
 
@@ -6658,6 +6727,7 @@ int main(void)
     test_blocklist();
     test_block();
     test_board_defs();
+    test_board_companion();
     test_health();
     test_led_patterns();
     test_config();

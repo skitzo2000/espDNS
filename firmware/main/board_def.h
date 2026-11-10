@@ -52,6 +52,19 @@ typedef struct {
     uint32_t ip, netmask, gateway; /* static; IPv4 in network order */
 } board_net_t;
 
+/* The Wi-Fi companion chip of a board that has none of its own (a C6 on a P4), as its file
+ * describes it (wifi.companion): the bus, the SDMMC slot and the seven pins, from the vendor
+ * schematic. kind NONE: nothing bolted on, or a companion whose pins no schematic settles. */
+typedef struct {
+    int kind; /* BOARD_COMPANION_NONE or BOARD_COMPANION_SDIO */
+    int slot; /* SDMMC slot: 0 or 1 */
+    int clk, cmd, d0, d1, d2, d3, reset;
+} board_companion_t;
+
+/* wifi.companion.kind, from the board file's "bus". */
+#define BOARD_COMPANION_NONE 0
+#define BOARD_COMPANION_SDIO 1
+
 /* An SPI bus the board wires up; Ethernet and the SD card each name one by number. */
 typedef struct {
     int bus; /* 2 (SPI2) or 3 (SPI3); 0 = unused */
@@ -90,6 +103,13 @@ typedef struct {
     /* Wi-Fi transmit power cap in dBm, 0 = the chip's default. Small boards with a marginal
      * antenna or supply often transmit cleaner below full power. */
     int wifi_max_tx_dbm;
+
+    /* The Wi-Fi companion chip bolted to this board, when it has none of its own: an
+     * ESP32-C6 on an ESP32-P4 board, talked to over SDIO (esp_hosted). Board data from the
+     * vendor schematic: kind NONE is a board with nothing bolted on, or a C6 whose pins no
+     * schematic has settled yet. The image that drives one links esp_hosted (esp32p4-c6);
+     * a companion in a board file the image cannot drive is refused by the builder. */
+    board_companion_t wifi_companion;
 
     /* PSRAM fitted, MB; -1 = not given (the chip's, as found at boot). */
     int psram_mb;

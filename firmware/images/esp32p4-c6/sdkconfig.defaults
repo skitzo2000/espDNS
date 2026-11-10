@@ -1,0 +1,18 @@
+# The same board as esp32p4-rev1, silicon v1.x, with esp_hosted linked: the image for a P4
+# board whose file describes its ESP32-C6 companion (boards/*.json, wifi.companion). The
+# pins are board data, not sdkconfig values: board.c hands them to the transport before it
+# comes up (board_wifi_companion_attach), from the board partition.
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+# esp_wifi_remote's hosted transport (its Kconfig: ESP_HOSTED_ENABLED defaults to y with
+# ESP_WIFI_REMOTE_LIBRARY_HOSTED, which is the hosted default on the P4). The SDIO host is
+# slot 1: slot 0 is IOMUXed to GPIO 43/44/39-42, which every P4 board here gives its microSD
+# card. 4-bit at 40 MHz, the component's own default (its Kconfig caps the P4 at 40).
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000

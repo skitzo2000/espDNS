@@ -33,14 +33,26 @@ idf_build_get_property(image ESPDNS_IMAGE)
 idf_build_get_property(image_sibling ESPDNS_IMAGE_SIBLING)
 idf_build_get_property(fallback ESPDNS_FALLBACK)
 idf_build_get_property(fallback_json ESPDNS_FALLBACK_JSON)
-# Wi-Fi only on the S3; the P4 is wired only. The node key (nodekey.h) is for a Wi-Fi
-# password alone: a wired-only image leaves it out.
+# Wi-Fi on the S3, whose chip has a radio, and on esp32p4-c6, whose board carries a
+# companion chip that does; a P4 without one links nothing new. The node key (nodekey.h) is
+# for a Wi-Fi password alone: a wired-only image leaves it out.
 idf_build_get_property(target IDF_TARGET)
 set(wifi "")
 set(wifi_srcs "")
-if(target STREQUAL "esp32s3")
+set(wifi_defs "")
+if(image STREQUAL "esp32p4-c6")
+    # Wi-Fi through the board's companion chip (images/esp32p4-c6): the same esp_wifi_* API,
+    # served over SDIO by esp_hosted, so net.c and improv.c need no second code path. The
+    # node key belongs here as much as on an S3: a pushed config's sealed Wi-Fi password
+    # opens with it (nodekey_node.h). ESPDNS_WIFI is what says "this image has Wi-Fi"; the
+    # chip's own SOC_WIFI_SUPPORTED is false on a P4, whose radio is the companion's.
+    set(wifi esp_wifi esp_wifi_remote esp_hosted bootloader_support)
+    set(wifi_srcs "nodekey.c" "nodekey_node.c")
+    set(wifi_defs ESPDNS_WIFI=1 ESPDNS_WIFI_HOSTED=1)
+elseif(target STREQUAL "esp32s3")
     set(wifi esp_wifi bootloader_support)
     set(wifi_srcs "nodekey.c" "nodekey_node.c")
+    set(wifi_defs ESPDNS_WIFI=1)
 endif()
 # A transitional image carries its catalog board as the fallback definition.
 if(fallback_json)
@@ -71,7 +83,7 @@ idf_component_register(SRCS ${srcs}
                                      esp_app_format mbedtls esp_hw_support esp_pm esp_partition spi_flash json w5500)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDNS_IMAGE="${image}" ESPDNS_IMAGE_SIBLING="${image_sibling}"
-                           ${seed_defs})
+                           ${wifi_defs} ${seed_defs})
 if(fallback)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESPDNS_FALLBACK="${fallback}")
 endif()

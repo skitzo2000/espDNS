@@ -417,6 +417,12 @@ static bool wifi_up(void)
 {
     if (s_wifi_netif)
         return true;
+    /* On a companion board this is where the C6's SDIO pins reach esp_hosted and its
+     * transport starts; on an S3 it does nothing (board.h). A C6 that doesn't answer - one
+     * without esp-hosted slave firmware, which the operator flashes on the bench - fails
+     * here and leaves the node wired-only, as it is today. */
+    if (!board_wifi_companion_attach())
+        return false;
     if (!s_wifi_sta)
         s_wifi_sta = esp_netif_create_default_wifi_sta();
     esp_netif_t *n = s_wifi_sta;
@@ -727,7 +733,7 @@ void net_start(void)
             ESP_LOGE(TAG, "no network: Ethernet and Wi-Fi both failed");
         }
 #else
-        ESP_LOGE(TAG, "no network: Ethernet failed and this chip has no Wi-Fi");
+        ESP_LOGE(TAG, "no network: Ethernet failed and this board has no Wi-Fi");
 #endif
     }
     if (s_kind != NET_NONE)

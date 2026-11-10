@@ -15,9 +15,12 @@
 
 #include "sdkconfig.h"
 
-/* The image has a Wi-Fi driver: the chip's own (the S3), or a companion chip's. Everything
- * Wi-Fi in net.c and improv.c is built only then, so an image without one links none of it. */
-#if CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED
+/* The image has a Wi-Fi driver: the chip's own (the S3), or a companion chip's over
+ * esp_hosted (a P4 with a C6: esp32p4-c6, which links esp_wifi_remote and answers the same
+ * esp_wifi_* calls over SDIO). Everything Wi-Fi in net.c and improv.c is built only then, so
+ * an image without one links none of it. SOC_WIFI_SUPPORTED is the wrong test: it is the
+ * chip's own radio, false on a P4 whose Wi-Fi is the companion's. */
+#if ESPDNS_WIFI
 #define NET_HAS_WIFI 1
 #else
 #define NET_HAS_WIFI 0

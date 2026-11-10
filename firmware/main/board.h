@@ -38,5 +38,12 @@ const char *board_fallback_name(void);
 /* Installs the board's Ethernet driver (not started, no interface attached). False if the
  * board has no Ethernet or it failed to start (a W5500 module not fitted). */
 bool board_eth_install(esp_eth_handle_t *eth);
+/* Brings up the board's Wi-Fi companion chip - a C6 on a P4 - on the pins the board file
+ * names, before anything calls esp_wifi_* (net.c calls this first in wifi_up). On an image
+ * whose chip has its own radio (an S3) it does nothing and says true; on esp32p4-c6 it
+ * hands the pins to esp_hosted's SDIO transport and starts it, false with a log if the
+ * board describes no companion or the transport refuses (a C6 that does not answer leaves
+ * the node wired-only, as it is today). */
+bool board_wifi_companion_attach(void);
 /* Mounts the SD card at DNS2_SD_MOUNT and creates the zone directory. */
 bool board_sd_mount(void);

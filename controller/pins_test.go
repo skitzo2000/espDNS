@@ -129,31 +129,32 @@ func TestPinnedPatterns(t *testing.T) {
 	}
 }
 
-// Every chip target of firmware/images/* has its committed lock, firmware/dependencies.lock.<target>
-// (firmware/CMakeLists.txt), naming that target, and every lock is one of them
+// Every chip image of firmware/images/* has its committed lock, firmware/dependencies.lock.<image>
+// (firmware/CMakeLists.txt), naming that image's chip target, and every lock is one of them.
+// Per image and not per target because two images of one chip can link different components
+// (esp32p4-rev1 and esp32p4-c6: the second adds esp_hosted).
 func TestComponentLocks(t *testing.T) {
-	defaults, err := filepath.Glob("../firmware/images/*/sdkconfig.defaults")
-	if err != nil || len(defaults) == 0 {
+	images, err := filepath.Glob("../firmware/images/*/sdkconfig.defaults")
+	if err != nil || len(images) == 0 {
 		t.Fatalf("no firmware/images/*/sdkconfig.defaults (%v)", err)
 	}
 	re := regexp.MustCompile(`(?m)^CONFIG_IDF_TARGET="([^"]+)"`)
-	targets := map[string]bool{}
-	for _, d := range defaults {
+	locksOf := map[string]bool{}
+	for _, d := range images {
 		m := re.FindStringSubmatch(read(t, d))
 		if m == nil {
 			t.Fatalf("%s: no CONFIG_IDF_TARGET", d)
 		}
-		targets[m[1]] = true
-	}
-	for target := range targets {
-		lock := "../firmware/dependencies.lock." + target
+		image := filepath.Base(filepath.Dir(d))
+		locksOf[image] = true
+		lock := "../firmware/dependencies.lock." + image
 		b, err := os.ReadFile(lock)
 		if err != nil {
 			t.Errorf("no %s: make -C firmware components writes it", lock)
 			continue
 		}
-		if !regexp.MustCompile(`(?m)^target: ` + regexp.QuoteMeta(target) + `$`).Match(b) {
-			t.Errorf("%s is not for target %s", lock, target)
+		if !regexp.MustCompile(`(?m)^target: ` + regexp.QuoteMeta(m[1]) + `$`).Match(b) {
+			t.Errorf("%s is not for target %s", lock, m[1])
 		}
 		if !regexp.MustCompile(`(?m)^manifest_hash: [0-9a-f]{64}$`).Match(b) {
 			t.Errorf("%s: no manifest_hash", lock)
@@ -162,7 +163,7 @@ func TestComponentLocks(t *testing.T) {
 	locks, _ := filepath.Glob("../firmware/dependencies.lock.*")
 	var stray []string
 	for _, l := range locks {
-		if !targets[strings.TrimPrefix(filepath.Base(l), "dependencies.lock.")] {
+		if !locksOf[strings.TrimPrefix(filepath.Base(l), "dependencies.lock.")] {
 			stray = append(stray, l)
 		}
 	}

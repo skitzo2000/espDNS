@@ -286,6 +286,57 @@ bool board_eth_install(esp_eth_handle_t *out)
     return true;
 }
 
+#if ESPDNS_WIFI_HOSTED
+#include "esp_hosted.h"
+#include "esp_hosted_transport_config.h"
+#endif
+
+/* The companion's pins, to esp_hosted, then the transport up. esp_hosted would normally
+ * start itself from a constructor in port_esp_hosted_host_init.c, which runs before
+ * app_main - before board_load() has read the board partition, so the board's pins could
+ * never reach it; wifi_hosted/CMakeLists.txt takes that one source out of the build (the
+ * operator's approved option (b)) and this is where it starts instead.
+ * esp_hosted_sdio_set_config refuses once the transport is configured, so if the
+ * constructor ever came back into the build this fails loudly rather than running the C6 on
+ * esp_hosted's own default pins; esp_hosted_init is idempotent. */
+bool board_wifi_companion_attach(void)
+{
+#if ESPDNS_WIFI_HOSTED
+    const board_companion_t *wc = &board.wifi_companion;
+    if (wc->kind != BOARD_COMPANION_SDIO) {
+        ESP_LOGE(TAG, "wifi: this image drives a companion chip, but the board (%s) names none", board.name);
+        return false;
+    }
+    struct esp_hosted_sdio_config c = INIT_DEFAULT_HOST_SDIO_CONFIG();
+    c.slot = (uint8_t)wc->slot;
+    c.pin_clk.pin = wc->clk;
+    c.pin_cmd.pin = wc->cmd;
+    c.pin_d0.pin = wc->d0;
+    c.pin_d1.pin = wc->d1;
+    c.pin_d2.pin = wc->d2;
+    c.pin_d3.pin = wc->d3;
+    c.pin_reset.pin = wc->reset;
+    c.iomux_enable = false; /* the pins are GPIO-matrix'd: slot 0's IOMUX is the SD card's */
+    esp_hosted_transport_err_t terr = esp_hosted_sdio_set_config(&c);
+    if (terr != ESP_TRANSPORT_OK) {
+        ESP_LOGE(TAG, "wifi companion: SDIO slot %d pins refused (%d): the transport was already up", wc->slot,
+                 terr);
+        return false;
+    }
+    int rc = esp_hosted_init();
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "wifi companion: esp_hosted failed to start (%d)", rc);
+        return false;
+    }
+    ESP_LOGI(TAG, "wifi companion: C6 on SDIO slot %d (CLK %d CMD %d D0-D3 %d/%d/%d/%d, reset %d)", wc->slot,
+             wc->clk, wc->cmd, wc->d0, wc->d1, wc->d2, wc->d3, wc->reset);
+    return true;
+#else
+    /* The chip has its own radio: nothing to attach. */
+    return true;
+#endif
+}
+
 static esp_err_t sd_mount_sdmmc(const esp_vfs_fat_mount_config_t *mount_cfg, sdmmc_card_t **card)
 {
 #if SOC_SDMMC_HOST_SUPPORTED

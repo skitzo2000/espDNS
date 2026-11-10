@@ -240,7 +240,9 @@ func TestFetchOnly(t *testing.T) {
 
 	// One the release doesn't have: refused, nothing more downloaded or imported
 	sub, k := filepath.Join(t.TempDir(), "dist"), testKey(t)
-	if _, err := Build(Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", catalogImages[:4]...), Catalog: catalog, Out: sub}); err != nil {
+	// Every catalog image but esp32p4: the release still covers the catalog, and a fetch of
+	// esp32p4 is refused before anything downloads.
+	if _, err := Build(Options{Version: "0.0.4", Images: fakeChips(t, "0.0.4", catalogImages[:5]...), Catalog: catalog, Out: sub}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Sign(sub, k); err != nil {
@@ -251,7 +253,7 @@ func TestFetchOnly(t *testing.T) {
 	f.mu.Unlock()
 	opts.Images, opts.ProjectPub = []string{"esp32s3-eth", "esp32p4"}, release.PublicRaw(k)
 	if _, err := Fetch(context.Background(), opts, work, filepath.Join(t.TempDir(), "images")); err == nil ||
-		!strings.Contains(err.Error(), "no chip image esp32p4; it has esp32p4-rev1, esp32s3-eth, esp32s3-octal, esp32s3-quad") {
+		!strings.Contains(err.Error(), "no chip image esp32p4; it has esp32p4-c6, esp32p4-rev1, esp32s3-eth, esp32s3-octal, esp32s3-quad") {
 		t.Fatalf("an image not in the release: %v", err)
 	}
 	for _, p := range f.asked() {

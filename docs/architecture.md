@@ -211,6 +211,7 @@ Everything else about a board is data.
 | Chip image | For |
 |---|---|
 | `esp32p4-rev1` | ESP32-P4 silicon v1.x (wired only) |
+| `esp32p4-c6` | ESP32-P4 silicon v1.x with an ESP32-C6 companion: `esp32p4-rev1`'s sibling, esp_hosted linked; Wi-Fi only for a board whose file names its C6 (`wifi.companion`) |
 | `esp32p4` | ESP32-P4 v3 and later |
 | `esp32s3-octal` | ESP32-S3 with octal PSRAM |
 | `esp32s3-eth` | ESP32-S3 with octal PSRAM, wired: `esp32s3-octal`'s sibling, faster for less internal RAM |

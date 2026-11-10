@@ -46,8 +46,8 @@ func fakeChips(t *testing.T, version string, images ...string) string {
 				t.Fatal(err)
 			}
 		}
-		chip := map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4": "esp32p4", "esp32s3-octal": "esp32s3", "esp32s3-eth": "esp32s3",
-			"esp32s3-quad": "esp32s3"}[img]
+		chip := map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4-c6": "esp32p4", "esp32p4": "esp32p4",
+			"esp32s3-octal": "esp32s3", "esp32s3-eth": "esp32s3", "esp32s3-quad": "esp32s3"}[img]
 		info := map[string]any{"image": img, "chip": chip, "chip_family": strings.ToUpper(strings.Replace(chip, "esp32", "ESP32-", 1)),
 			"offsets": map[string]int{"bootloader.bin": 0, "partitions-8mb.bin": 0x8000, "partitions-4mb.bin": 0x8000,
 				"ota_data_initial.bin": 0xf000, "app.bin": 0x20000, "board": 0x12000, "keys": 0x1b000},
@@ -89,7 +89,7 @@ func appImage(version, addr, text string) []byte {
 }
 
 // The catalog's chip images, and one more no board runs (it is released all the same)
-var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad", "esp32p4"}
+var catalogImages = []string{"esp32p4-rev1", "esp32s3-eth", "esp32s3-octal", "esp32s3-quad", "esp32p4-c6", "esp32p4"}
 
 func catalogBoards(t *testing.T) []boards.Entry {
 	t.Helper()

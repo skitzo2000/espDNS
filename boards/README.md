@@ -21,7 +21,7 @@ in, because that's what is tested. Memory sizes are left out until measured on t
 |---|---|
 | `name` | Short name, 1-23 characters: shown in `/status` and on the dashboard |
 | `title` | Full name of the board |
-| `image` | Chip image it runs: `esp32p4-rev1`, `esp32p4`, `esp32s3-octal`, `esp32s3-eth` (a wired S3 with octal PSRAM), `esp32s3-quad` (8 MB of quad PSRAM) |
+| `image` | Chip image it runs: `esp32p4-rev1`, `esp32p4-c6` (a P4 with an ESP32-C6 companion: needs the `wifi.companion` block below), `esp32p4`, `esp32s3-octal`, `esp32s3-eth` (a wired S3 with octal PSRAM), `esp32s3-quad` (8 MB of quad PSRAM) |
 | `flash_mb`, `psram_mb` | Flash and PSRAM sizes: flash picks the flash layout (4 MB, or 8 MB and up); PSRAM (8-64) is what the memory plan has, never more than the chip finds (left out: what it finds). espDNS needs at least 8 MB of PSRAM, the smallest size tested: a board with less is refused |
 | `tier` | `tested` (on hardware every release), `community` (reported working) or `untested` |
 | `spi` | Up to two SPI buses: `host` (2 or 3), `sclk`, `mosi`, `miso` |
@@ -83,6 +83,7 @@ off live, for a latency-sensitive node or to measure; the idle clock is the boar
 
 | Image | Clock | `min_mhz` allowed | Default | Why |
 |---|---|---|---|---|
+| `esp32p4-c6` | 360 | 90, 180 | off, 180 | `esp32p4-rev1`'s sibling: the same clocks |
 | `esp32p4` | 400 | 100, 200 | on, 200 | Same PLL (a divider change); APB 100 MHz, the MAC and SD clocks unchanged; 200 keeps the 200 MHz PSRAM at full speed |
 | `esp32p4-rev1` | 360 | 90, 180 | off, 180 | Below 360 is below the PSRAM's 200 MHz: each switch (down on idle, up on every interrupt) stalls the other core and moves flash and PSRAM to 20 MHz and back. Measured: 0.53 → 0.51 W, not worth it; on by config if wanted |
 | `esp32s3-octal`, `esp32s3-eth`, `esp32s3-quad` | 240 | 40, 80, 160 | on, 80 | 80 stays on the PLL: APB, the W5500's SPI clock and the octal PSRAM timing are untouched. 40 (the crystal) changes them |

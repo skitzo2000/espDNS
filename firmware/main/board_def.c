@@ -94,6 +94,43 @@ static bool bus_defined(const board_desc_t *b, int bus)
     return false;
 }
 
+/* A companion Wi-Fi chip (a C6 on a P4), its bus, SDMMC slot and pins: board data from the
+ * vendor schematic, checked here as the rest of the definition is. Absent: no companion the
+ * firmware can drive, which is also the answer for a board whose C6's pins are unverified. */
+static void parse_companion(ctx_t *c, const cJSON *o, board_companion_t *out)
+{
+    out->kind = BOARD_COMPANION_NONE;
+    out->slot = 1;
+    out->clk = out->cmd = out->d0 = out->d1 = out->d2 = out->d3 = out->reset = BOARD_NC;
+    if (!o)
+        return;
+    if (!cJSON_IsObject(o)) {
+        fail(c, "wifi companion: not an object");
+        return;
+    }
+    char s[12];
+    str(c, o, "chip", s, sizeof(s), true);
+    if (strcmp(s, "esp32c6"))
+        fail(c, "wifi companion chip %s: esp32c6", s);
+    str(c, o, "bus", s, sizeof(s), true);
+    if (strcmp(s, "sdio"))
+        fail(c, "wifi companion bus %s: sdio", s);
+    out->slot = num(c, o, "slot", 1);
+    if (out->slot < 0 || out->slot > 1)
+        fail(c, "wifi companion slot: 0 or 1");
+    static const char *const keys[] = { "clk", "cmd", "d0", "d1", "d2", "d3", "reset" };
+    int *pins[] = { &out->clk, &out->cmd, &out->d0, &out->d1, &out->d2, &out->d3, &out->reset };
+    for (int i = 0; i < 7; i++) {
+        int v = num(c, o, keys[i], BOARD_NC);
+        if (v == BOARD_NC)
+            fail(c, "wifi companion %s: required", keys[i]);
+        else if (v < 0 || v > MAX_GPIO)
+            fail(c, "wifi companion %s: GPIO %d out of range", keys[i], v);
+        *pins[i] = v;
+    }
+    out->kind = BOARD_COMPANION_SDIO;
+}
+
 /* Every pin may be used by one thing only (an SPI bus's pins once, for all its devices). */
 static void check_pins(ctx_t *c, const board_desc_t *b)
 {
@@ -123,6 +160,15 @@ static void check_pins(ctx_t *c, const board_desc_t *b)
     }
     if (b->sd.kind == BOARD_SD_SPI)
         USE("sd cs", b->sd.cs);
+    if (b->wifi_companion.kind == BOARD_COMPANION_SDIO) {
+        USE("wifi companion clk", b->wifi_companion.clk);
+        USE("wifi companion cmd", b->wifi_companion.cmd);
+        USE("wifi companion d0", b->wifi_companion.d0);
+        USE("wifi companion d1", b->wifi_companion.d1);
+        USE("wifi companion d2", b->wifi_companion.d2);
+        USE("wifi companion d3", b->wifi_companion.d3);
+        USE("wifi companion reset", b->wifi_companion.reset);
+    }
     static const char *const rgb[] = { "led red", "led green", "led blue" };
     for (int i = 0; i < 3 && b->led.kind != BOARD_LED_NONE; i++)
         USE(b->led.kind == BOARD_LED_RGB ? rgb[i] : "led", b->led.pin[i]);
@@ -131,6 +177,13 @@ static void check_pins(ctx_t *c, const board_desc_t *b)
         for (int j = i + 1; j < n; j++)
             if (use[i].pin == use[j].pin)
                 fail(c, "GPIO %d used twice: %s and %s", use[i].pin, use[i].what, use[j].what);
+    /* A companion sharing its SDMMC slot with the card reader would be wired onto it: every
+     * board here puts its microSD card on slot 0, and its pins (CLK 43, CMD 44, D0-D3 39-42)
+     * are IOMUXed to it, so the companion takes slot 1. */
+    if (b->wifi_companion.kind == BOARD_COMPANION_SDIO && b->sd.kind == BOARD_SD_SDMMC &&
+        b->wifi_companion.slot == b->sd.slot)
+        fail(c, "wifi companion slot %d: the SD card is on SDMMC slot %d", b->wifi_companion.slot,
+             b->sd.slot);
 }
 
 static void parse_led(ctx_t *c, const cJSON *o, board_led_t *out)
@@ -292,6 +345,10 @@ bool board_def_parse(const char *json, size_t len, board_desc_t *out, char *err,
     out->wifi_max_tx_dbm = wifi ? num(&c, wifi, "tx_power_dbm", 0) : 0;
     if (out->wifi_max_tx_dbm && (out->wifi_max_tx_dbm < 2 || out->wifi_max_tx_dbm > 20))
         fail(&c, "wifi tx_power_dbm: 2-20, or 0 for the chip's default");
+    out->wifi_companion = (board_companion_t){ BOARD_COMPANION_NONE, 1, BOARD_NC, BOARD_NC, BOARD_NC,
+                                               BOARD_NC, BOARD_NC, BOARD_NC, BOARD_NC };
+    if (wifi)
+        parse_companion(&c, cJSON_GetObjectItemCaseSensitive(wifi, "companion"), &out->wifi_companion);
 
     out->psram_mb = num(&c, root, "psram_mb", -1);
     if (out->psram_mb != -1 && (out->psram_mb < 0 || out->psram_mb > BOARD_PSRAM_MB_MAX))

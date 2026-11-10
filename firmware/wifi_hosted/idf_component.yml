@@ -1,0 +1,6 @@
+# Wi-Fi through a companion chip: the two components the esp32p4-c6 image links and no
+# other image sees (firmware/CMakeLists.txt adds this directory to EXTRA_COMPONENT_DIRS
+# for that one image, so every other image's component set and lock stay as they are).
+dependencies:
+  espressif/esp_wifi_remote: "~0.16"
+  espressif/esp_hosted: "~2.13"

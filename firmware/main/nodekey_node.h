@@ -4,14 +4,15 @@
  * sealed Wi-Fi password is opened (when the config is read: at boot and when one is
  * pushed). /status "node_key" is the public key, base64. A USB install that erases the flash
  * makes a new one at the next boot, which the controller pins when it adopts the node again.
- * Only on a chip with Wi-Fi: a wired-only image has no node key ("" in /status) and refuses
- * a sealed password (main/CMakeLists.txt leaves nodekey*.c out).
+ * Only on an image with Wi-Fi (ESPDNS_WIFI): a wired-only image has no node key ("" in
+ * /status) and refuses a sealed password (main/CMakeLists.txt leaves nodekey*.c out). Not
+ * SOC_WIFI_SUPPORTED: that is the chip's own radio, and a P4's Wi-Fi is its companion's.
  */
 #pragma once
 
-#include "soc/soc_caps.h"
+#include "sdkconfig.h"
 
-#if SOC_WIFI_SUPPORTED
+#if ESPDNS_WIFI
 /* Reads the key, or makes and stores one; once, at boot, before the settings load (they open
  * the config's sealed password with it: cfg_set_unseal). */
 void nodekey_node_load(void);

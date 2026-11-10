@@ -177,7 +177,9 @@ IDF    = idf.py -B $(BUILD) -DIMAGE=$(IMAGE) -DBOARD=$(BOARD) -DBOARDS_DIR=$(BOA
          -DSTATIC_IP=$(STATIC_IP) -DSTATIC_NETMASK=$(if $(STATIC_IP),$(BUILT_NETMASK)) \
          -DSTATIC_GATEWAY=$(if $(STATIC_IP),$(BUILT_GATEWAY)) -DSITE_DEFAULTS=$(SITE_DEFAULTS_IN) \
          -DKEYS_SEED=$(KEYS_SEED_IN) -DDNS2_TEST_NO_KEYS=$(TEST_NO_KEYS) -DSDKCONFIG=$(BUILD)/sdkconfig $(IDF_EXTRA)
-FETCHED = build/.components-$(TARGET)
+# One stamp per image, not per chip target: two images of one chip can link different
+# components (esp32p4-rev1 and esp32p4-c6), and each has its own lock now.
+FETCHED = build/.components-$(IMAGE)
 DEVICE = --device $(PORT) --group-add $(shell stat -c %g $(PORT) 2>/dev/null || echo 0)
 
 .PHONY: need-host build components FORCE images export-images boards print-address print-idf-image factory flash ota status boottime keys release-key-restore enclosure monitor log menuconfig clean test bench-board bench-board-run bench-ota
@@ -192,31 +194,35 @@ build: $(if $(DOCKER),$(if $(IMAGE),$(FETCHED)))
 	  if [ -f $(BUILD)/sdkconfig ] && [ $$f -nt $(BUILD)/sdkconfig ]; then echo "$$f changed: new sdkconfig"; rm -f $(BUILD)/sdkconfig; fi; done
 	$(DOCKER) $(IDF_IMAGE) $(IDF) build
 
-# The components from the ESP component registry (main/idf_component.yml), as the committed
-# lock for the image's chip target, dependencies.lock.<target>, names them (CMakeLists.txt):
+# The components from the ESP component registry (main/idf_component.yml plus any directory
+# CMakeLists.txt adds for the image), as the committed lock dependencies.lock.<image> names
+# them (CMakeLists.txt):
 # fetched into managed_components/ once, with the network and nothing else writable, before
 # the offline builds, and again when the manifest or the lock changes (or managed_components/
 # is gone). The fetch never changes a lock: one that no longer matches the manifest is
 # refused, and `make components` solves again.
 build/.components-%: main/idf_component.yml dependencies.lock.% $(if $(wildcard managed_components/*/),,FORCE)
 	@echo "fetching the components for $* (dependencies.lock.$*)"
-	$(FETCH) $(IDF_IMAGE) idf.py -B /tmp/components -DIMAGE=$(IMAGE) -DBOARDS_DIR=$(BOARDS_DIR) \
-	  -DIDF_TARGET=$* -DSDKCONFIG=/tmp/components/sdkconfig reconfigure >/dev/null
+	$(FETCH) $(IDF_IMAGE) idf.py -B /tmp/components -DIMAGE=$* -DBOARDS_DIR=$(BOARDS_DIR) \
+	  -DIDF_TARGET=$$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"/\1/p' images/$*/sdkconfig.defaults) \
+	  -DSDKCONFIG=/tmp/components/sdkconfig reconfigure >/dev/null
 	@touch $@
 dependencies.lock.%:
-	@echo "no dependencies.lock.$* (the component lock for chip target $*): make components writes it"; exit 1
+	@echo "no dependencies.lock.$* (the component lock of chip image $*): make components writes it"; exit 1
 FORCE:
 
-# The component locks, solved again from main/idf_component.yml: the newest versions it
-# allows, for every chip target of images/*, written to dependencies.lock.<target> (and
-# fetched). The one step that changes them, with the network: review the diff and commit it.
+# The component locks, solved again from the manifests each image sees: the newest versions
+# they allow, for every chip image, written to dependencies.lock.<image> (and fetched). The
+# one step that changes them, with the network: review the diff and commit it. Per image and
+# not per chip target: two images of one chip can link different components, and the lock
+# names them.
 components:
 	rm -f dependencies.lock.* build/.components-*
 	@for i in $(IMAGES); do t=$$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"/\1/p' images/$$i/sdkconfig.defaults); \
-	  case " $$done " in *" $$t "*) continue;; esac; done="$$done $$t"; echo "== $$t ($$i)"; \
+	  echo "== $$i ($$t)"; \
 	  $(COMPONENTS_UPDATE) $(IDF_IMAGE) idf.py -B /tmp/components -DIMAGE=$$i -DBOARDS_DIR=$(BOARDS_DIR) \
 	    -DIDF_TARGET=$$t -DSDKCONFIG=/tmp/components/sdkconfig reconfigure >/dev/null || exit 1; \
-	  touch build/.components-$$t; done
+	  touch build/.components-$$i; done
 
 # Every chip image (images/*), as CI builds them (no address built in; key-neutral unless
 # KEYS_SEED= is given)

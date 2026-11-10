@@ -48,7 +48,8 @@ func table(what string) []byte {
 }
 
 // chips are the chip images a release has, and the chip each is for.
-var chips = map[string]string{"esp32p4-rev1": "esp32p4", "esp32s3-eth": "esp32s3", "esp32s3-octal": "esp32s3"}
+var chips = map[string]string{"esp32p4-rev1": "esp32p4", "esp32p4-c6": "esp32p4", "esp32s3-eth": "esp32s3",
+	"esp32s3-octal": "esp32s3"}
 
 // Release writes into out (made if missing) a release of version with a chip tarball for
 // each of images (the catalog's when none), SHA256SUMS over them, and k's signature over it.
