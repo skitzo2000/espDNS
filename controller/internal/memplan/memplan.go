@@ -82,6 +82,7 @@ type defaults struct{ internal, cache, entries, blocklist, index, secondary, que
 // noPSRAM, an image not listed other.
 var imageDefaults = map[string]defaults{
 	"esp32p4-rev1":  {320, 4096, 8192, 20480, 160, 1024, 1024, 32},
+	"esp32p4-c6":    {320, 4096, 8192, 20480, 160, 1024, 1024, 32},
 	"esp32p4":       {320, 4096, 8192, 20480, 160, 1024, 1024, 32},
 	"esp32s3-octal": {160, 2944, 8192, 2048, 0, 256, 64, 32},
 	"esp32s3-eth":   {160, 2944, 8192, 2048, 0, 256, 64, 32},

@@ -28,6 +28,7 @@ type ImageClocks struct {
 // firmware/tests/cpu_vectors.json).
 var Clocks = map[string]ImageClocks{
 	"esp32p4-rev1":  {360, 90, false, 180, []int{90, 180}},
+	"esp32p4-c6":    {360, 90, false, 180, []int{90, 180}},
 	"esp32p4":       {400, 100, true, 200, []int{100, 200}},
 	"esp32s3-octal": {240, 80, true, 80, []int{40, 80, 160}},
 	"esp32s3-eth":   {240, 80, true, 80, []int{40, 80, 160}},

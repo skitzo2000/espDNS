@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skitzo2000/espdns/controller/internal/boards"
+	"github.com/skitzo2000/espdns/controller/internal/image"
 	"github.com/skitzo2000/espdns/controller/internal/keyspart"
 )
 
@@ -36,6 +38,66 @@ func TestBuildNeedsAddress(t *testing.T) {
 		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), c.want) {
 			t.Errorf("%s: %d %s, want %q", c.body, rec.Code, rec.Body.String(), c.want)
 		}
+	}
+}
+
+// TestBuildWifiFlag: the Install over USB Wi-Fi rules (#73) come from the board and its
+// image, not from the chip alone. espressif-p4-func-ev has its ESP32-C6 described, so on
+// esp32p4-c6 it takes a Wi-Fi network over USB and shows the box (wired board with a Wi-Fi
+// backup, #78); a P4 board whose file names no companion takes none and shows no box, even
+// when its notes say a C6 sits on the board. wifiTakes/hasEthernet/MayRunOnWiFi are what
+// builder.go's make() puts into the build's wifi, wifi_box and wired; the build itself stops
+// at "isn't imported" here (no chip images in the test dir), so the flags are asserted on
+// the same three functions with a chip image version that has the Wi-Fi backup (wifiBackup).
+func TestBuildWifiFlag(t *testing.T) {
+	entries, err := boards.Load("../../../boards", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func(name string) boards.Board {
+		for _, e := range entries {
+			if e.Board.Name == name {
+				if len(e.Errors) > 0 {
+					t.Fatalf("%s: %v", name, e.Errors)
+				}
+				return e.Board
+			}
+		}
+		t.Fatalf("no %s in the catalog", name)
+		return boards.Board{}
+	}
+	backup := image.Chip{Version: "0.0.7"} // wifiBackup and newer: a wired board takes a network
+	for _, c := range []struct {
+		board   string
+		wifi    bool // takes a Wi-Fi network over USB
+		wifiBox bool // with the Wi-Fi checkbox
+		wired   bool // on its cable as it ships
+	}{
+		{"espressif-p4-func-ev", true, true, true},
+		{"p4-ip101", false, false, true},
+		{"ws-p4-nano", false, false, true}, // its notes name a C6; its image drives no radio
+		{"ws-s3-eth", true, true, true},
+		{"xiao-s3-sense", true, false, false},
+	} {
+		b := find(c.board)
+		wifi := wifiTakes(b, backup)
+		if wifi != c.wifi || (wifi && hasEthernet(b)) != c.wifiBox || !b.MayRunOnWiFi() != c.wired {
+			t.Errorf("%s: wifi %v (want %v), box %v (want %v), wired %v (want %v)", c.board,
+				wifi, c.wifi, wifi && hasEthernet(b), c.wifiBox, !b.MayRunOnWiFi(), c.wired)
+		}
+	}
+
+	// The catalog board builds as far as the missing chip image: its wifi.companion passes
+	// the checks, so the answer is "isn't imported" and not a board error.
+	bd := newBuilder("../../../boards", t.TempDir(), t.TempDir())
+	bd.keys = func() ([]byte, []byte, error) { return newPub(t), newPub(t), nil }
+	mux := http.NewServeMux()
+	bd.routes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/build",
+		strings.NewReader(`{"name":"espressif-p4-func-ev","network":{"address":"192.0.2.60/23","gateway":"192.0.2.1"}}`)))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "esp32p4-c6 isn't imported") {
+		t.Errorf("espressif-p4-func-ev: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

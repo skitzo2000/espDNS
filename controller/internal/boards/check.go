@@ -22,6 +22,12 @@ type Chip struct {
 	WiFi     bool
 }
 
+// Hosted are the chip images that link esp_hosted (esp_wifi_remote over a companion chip):
+// they have Wi-Fi only for a board whose file describes that companion (wifi.companion), so
+// a hosted image's Chip stays the bare chip's - a sibling pair shares chip, clocks and
+// memory defaults (siblings_test.go) and differs only in what its image links.
+var Hosted = map[string]bool{"esp32p4-c6": true}
+
 func span(from, to int, why string, m map[int]string) map[int]string {
 	for i := from; i <= to; i++ {
 		m[i] = why
@@ -50,8 +56,11 @@ var (
 
 // Images are the chip images (firmware/images) and their chips.
 var Images = map[string]Chip{
-	"esp32p4-rev1":  chipP4,
-	"esp32p4":       chipP4,
+	"esp32p4-rev1": chipP4,
+	"esp32p4":      chipP4,
+	// The same P4 silicon and defaults, esp_hosted linked: for the boards whose file names
+	// their ESP32-C6 companion (wifi.companion).
+	"esp32p4-c6":    chipP4,
 	"esp32s3-octal": withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
 	"esp32s3-eth":   withReserved(chipS3, 33, 37, "connected to the octal PSRAM"),
 	"esp32s3-quad":  chipS3,
@@ -64,6 +73,8 @@ var Images = map[string]Chip{
 var Siblings = map[string]string{
 	"esp32s3-octal": "esp32s3-eth",
 	"esp32s3-eth":   "esp32s3-octal",
+	"esp32p4-rev1":  "esp32p4-c6",
+	"esp32p4-c6":    "esp32p4-rev1",
 }
 
 // Swappable says whether a node running chip image from may be moved to chip image to over the
@@ -85,6 +96,30 @@ func withReserved(c Chip, from, to int, why string) Chip {
 type pinUse struct {
 	what string
 	pin  int
+}
+
+// companionPins are the Wi-Fi companion's pins, as the pin claims of pins(): its seven go
+// into the same table as Ethernet's, the SD card's and the LED's, so a companion wired onto
+// the PHY reset or the SD card's pins is refused as any other clash.
+func companionPins(w *WiFi) []pinUse {
+	if w == nil || w.Companion == nil {
+		return nil
+	}
+	c := w.Companion
+	var u []pinUse
+	add := func(what string, p *int) {
+		if p != nil {
+			u = append(u, pinUse{what, *p})
+		}
+	}
+	add("Wi-Fi companion CLK", c.CLK)
+	add("Wi-Fi companion CMD", c.CMD)
+	add("Wi-Fi companion D0", c.D0)
+	add("Wi-Fi companion D1", c.D1)
+	add("Wi-Fi companion D2", c.D2)
+	add("Wi-Fi companion D3", c.D3)
+	add("Wi-Fi companion reset", c.Reset)
+	return u
 }
 
 func pins(b Board) []pinUse {
@@ -117,6 +152,9 @@ func pins(b Board) []pinUse {
 	}
 	if b.SD != nil && b.SD.Kind == "spi" {
 		add("SD CS", b.SD.CS)
+	}
+	if c := companionPins(b.WiFi); len(c) > 0 {
+		u = append(u, c...)
 	}
 	if b.LED != nil {
 		for _, p := range b.LED.Pins() {
@@ -178,6 +216,7 @@ func Check(b Board) (errs, warns []string) {
 		e("image %q: not one of the chip images", b.Image)
 		return errs, warns
 	}
+	hosted := Hosted[b.Image]
 	if b.FlashMB != 0 && !oneOf(fmt.Sprint(b.FlashMB), "4", "8", "16", "32") {
 		e("flash_mb: 4, 8, 16 or 32")
 	}
@@ -248,7 +287,7 @@ func Check(b Board) (errs, warns []string) {
 			e("ethernet kind %q: none, emac or w5500", x.Kind)
 		}
 	}
-	if (b.Ethernet == nil || b.Ethernet.Kind == "none" || b.Ethernet.Optional) && !chip.WiFi {
+	if (b.Ethernet == nil || b.Ethernet.Kind == "none" || b.Ethernet.Optional) && !b.HasWiFi() {
 		e("no network: an %s has no Wi-Fi, so it needs Ethernet that is always fitted", chip.Name)
 	} else if b.Ethernet == nil || b.Ethernet.Kind == "none" {
 		w("no Ethernet: this node runs on Wi-Fi, which is best effort")
@@ -280,9 +319,53 @@ func Check(b Board) (errs, warns []string) {
 			e("%v", err)
 		}
 	}
+	if x := b.WiFi; x == nil || x.Companion == nil {
+		if hosted {
+			// The image links esp_hosted; with no companion described there is no radio: the
+			// node would come up wired-only on an image built for a board with one.
+			e("wifi companion: this image expects a C6 companion: give wifi.companion, or run esp32p4-rev1")
+		}
+	}
+	if x := b.WiFi; x != nil {
+		if c := x.Companion; c != nil {
+			if !hosted {
+				e("wifi companion: image %q links no esp-hosted; use esp32p4-c6", b.Image)
+			}
+			if !oneOf(c.Chip, "esp32c6") {
+				e("wifi companion chip %q: esp32c6", c.Chip)
+			}
+			if !oneOf(c.Bus, "sdio") {
+				e("wifi companion bus %q: sdio", c.Bus)
+			}
+			if c.Slot != nil && (*c.Slot < 0 || *c.Slot > 1) {
+				e("wifi companion slot: 0 or 1")
+			}
+			// Every P4 board in this catalog puts its microSD card on SDMMC slot 0, so its
+			// IOMUX pins (CLK 43, CMD 44, D0-D3 39-42) are taken; a companion on the same slot
+			// would be wired onto the card reader. Left out means slot 1, the only one free.
+			slot := 1
+			if c.Slot != nil {
+				slot = *c.Slot
+			}
+			if b.SD != nil && b.SD.Kind == "sdmmc" && b.SD.Slot != nil && slot == *b.SD.Slot {
+				e("wifi companion slot %d: the SD card is on SDMMC slot %d", slot, *b.SD.Slot)
+			}
+			for _, f := range []struct {
+				key string
+				v   *int
+			}{
+				{"clk", c.CLK}, {"cmd", c.CMD}, {"d0", c.D0}, {"d1", c.D1},
+				{"d2", c.D2}, {"d3", c.D3}, {"reset", c.Reset},
+			} {
+				if f.v == nil {
+					e("wifi companion %s: required", f.key)
+				}
+			}
+		}
+	}
 	if b.WiFi != nil && b.WiFi.TxPowerDBm != 0 {
-		if !chip.WiFi {
-			e("wifi: an %s has no Wi-Fi", chip.Name)
+		if !b.HasWiFi() {
+			e("wifi: this image has no Wi-Fi")
 		} else if b.WiFi.TxPowerDBm < 2 || b.WiFi.TxPowerDBm > 20 {
 			e("wifi tx_power_dbm: 2-20, or leave it out for the chip's 20 dBm")
 		}

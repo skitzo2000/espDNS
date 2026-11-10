@@ -98,6 +98,75 @@ func TestChecks(t *testing.T) {
 			b.Ethernet.Optional = true
 			b.SPI[0] = SPIBus{Host: 2, SCLK: p(7), MOSI: p(9), MISO: p(8)}
 		}, "no Wi-Fi", ""},
+		{"companion on a wired image", func(b *Board) {
+			b.Image = "esp32p4-rev1"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+		}, "use esp32p4-c6", ""},
+		{"hosted image without a companion", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = nil
+		}, "wifi companion", ""},
+		{"companion on the SD card's slot", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.SD = &SD{Kind: "sdmmc", Slot: p(0), Width: 4}
+			b.WiFi = companion()
+			*b.WiFi.Companion.Slot = 0
+		}, "wifi companion slot 0: the SD card is on SDMMC slot 0", ""},
+		{"companion pins clear of the board's", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.SD = &SD{Kind: "sdmmc", Slot: p(0), Width: 4}
+			b.WiFi = companion()
+		}, "", ""},
+		{"companion reset on the PHY reset", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			*b.WiFi.Companion.Reset = 51
+		}, "GPIO 51 used twice: Ethernet PHY reset and Wi-Fi companion reset", ""},
+		{"companion without a reset pin", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			b.WiFi.Companion.Reset = nil
+		}, "wifi companion reset: required", ""},
+		{"companion slot 2", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			*b.WiFi.Companion.Slot = 2
+		}, "wifi companion slot", ""},
+		{"companion chip other than a C6", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			b.WiFi.Companion.Chip = "esp32c5"
+		}, "wifi companion chip", ""},
+		{"companion on spi", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			b.WiFi.Companion.Bus = "spi"
+		}, "wifi companion bus", ""},
+		{"a hosted board's tx power cap", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = companion()
+			b.WiFi.TxPowerDBm = 18
+		}, "", ""},
+		{"tx power on a wired P4", func(b *Board) {
+			b.Image = "esp32p4-rev1"
+			b.Ethernet = &Ethernet{Kind: "emac", Reset: p(51), MDC: p(31), MDIO: p(52)}
+			b.WiFi = &WiFi{TxPowerDBm: 18}
+		}, "no Wi-Fi", ""},
+		{"a P4 without Ethernet but with a companion", func(b *Board) {
+			b.Image = "esp32p4-c6"
+			b.Ethernet = nil
+			b.WiFi = companion()
+		}, "", ""}, // Wi-Fi is its network: no "needs Ethernet" error
 	}
 	for _, c := range cases {
 		b := s3()
@@ -198,33 +267,55 @@ func TestPackFormat(t *testing.T) {
 	}
 }
 
-// HasWiFi is the chip's, as its image says: every S3 image has Wi-Fi, wired (esp32s3-eth)
-// or not; a P4 has none, and nor does a board whose image isn't a chip image.
+func companion() *WiFi {
+	return &WiFi{Companion: &Companion{Chip: "esp32c6", Bus: "sdio", Slot: p(1),
+		CLK: p(18), CMD: p(19), D0: p(14), D1: p(15), D2: p(16), D3: p(17), Reset: p(54)}}
+}
+
+// HasWiFi is the image's, or the companion its board file describes: every S3 image has
+// Wi-Fi, wired (esp32s3-eth) or not; a P4 has it only on esp32p4-c6 with a companion named
+// in its file; and nor does a board whose image isn't a chip image.
 func TestHasWiFi(t *testing.T) {
 	for _, c := range []struct {
 		image string
+		wifi  *WiFi
 		want  bool
 	}{
-		{"esp32s3-octal", true}, {"esp32s3-eth", true}, {"esp32s3-quad", true},
-		{"esp32p4", false}, {"esp32p4-rev1", false}, {"", false},
+		{"esp32s3-octal", nil, true}, {"esp32s3-eth", nil, true}, {"esp32s3-quad", nil, true},
+		{"esp32p4", nil, false}, {"esp32p4-rev1", nil, false}, {"", nil, false},
+		{"esp32p4-c6", companion(), true},
+		{"esp32p4-c6", nil, false},                   // the image links esp_hosted; the board names no C6
+		{"esp32p4-c6", &WiFi{TxPowerDBm: 18}, false}, // a tx cap is not a companion
+		{"esp32p4-rev1", companion(), false},         // the image drives no radio
 	} {
-		if got := (Board{Image: c.image}).HasWiFi(); got != c.want {
-			t.Errorf("%q: %v, want %v", c.image, got, c.want)
+		if got := (Board{Image: c.image, WiFi: c.wifi}).HasWiFi(); got != c.want {
+			t.Errorf("%s %+v: %v, want %v", c.image, c.wifi, got, c.want)
 		}
 	}
 }
 
-// MayRunOnWiFi: no Ethernet, Ethernet of kind none, or Ethernet that may not be fitted.
+// MayRunOnWiFi: it has Wi-Fi, and no Ethernet, Ethernet of kind none, or Ethernet that may
+// not be fitted. A wired board with Wi-Fi backup is not a Wi-Fi board (#78: it runs on its
+// cable); a P4 board with no Wi-Fi at all is neither.
 func TestMayRunOnWiFi(t *testing.T) {
 	for _, c := range []struct {
-		eth  *Ethernet
-		want bool
+		image string
+		eth   *Ethernet
+		wifi  *WiFi
+		want  bool
 	}{
-		{nil, true}, {&Ethernet{Kind: "none"}, true}, {&Ethernet{Kind: "w5500", Optional: true}, true},
-		{&Ethernet{Kind: "w5500"}, false}, {&Ethernet{Kind: "emac"}, false},
+		{"esp32s3-octal", nil, nil, true},
+		{"esp32s3-octal", &Ethernet{Kind: "none"}, nil, true},
+		{"esp32s3-octal", &Ethernet{Kind: "w5500", Optional: true}, nil, true},
+		{"esp32s3-octal", &Ethernet{Kind: "w5500"}, nil, false},
+		{"esp32s3-octal", &Ethernet{Kind: "emac"}, nil, false},
+		{"esp32p4-c6", &Ethernet{Kind: "emac"}, companion(), false}, // Wi-Fi as the backup only
+		{"esp32p4-c6", nil, companion(), true},
+		{"esp32p4-rev1", nil, nil, false},
+		{"esp32p4-rev1", nil, companion(), false},
 	} {
-		if got := (Board{Ethernet: c.eth}).MayRunOnWiFi(); got != c.want {
-			t.Errorf("%+v: %v, want %v", c.eth, got, c.want)
+		if got := (Board{Image: c.image, Ethernet: c.eth, WiFi: c.wifi}).MayRunOnWiFi(); got != c.want {
+			t.Errorf("%s %+v %+v: %v, want %v", c.image, c.eth, c.wifi, got, c.want)
 		}
 	}
 }

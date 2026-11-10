@@ -89,7 +89,26 @@ type SD struct {
 type LED = nodecfg.LED
 
 type WiFi struct {
-	TxPowerDBm int `json:"tx_power_dbm,omitempty"`
+	TxPowerDBm int        `json:"tx_power_dbm,omitempty"`
+	Companion  *Companion `json:"companion,omitempty"`
+}
+
+// Companion is the Wi-Fi chip bolted to a board that has none of its own: an ESP32-C6 on
+// an ESP32-P4 board, wired to it over SDIO (esp_hosted: firmware images esp32p4-c6). Pins
+// from the board's schematic, never guessed: esp_hosted's own defaults are the Espressif
+// function-ev board's wiring, and GPIO 51 for instance is the Ethernet PHY reset on every
+// P4 board in this catalog.
+type Companion struct {
+	Chip  string `json:"chip"`           // esp32c6, the only one esp_hosted speaks to here
+	Bus   string `json:"bus"`            // sdio, the only bus wired for it on these boards
+	Slot  *int   `json:"slot,omitempty"` // SDMMC slot, 0-1; the SD card has slot 0 on them all
+	CLK   *int   `json:"clk,omitempty"`
+	CMD   *int   `json:"cmd,omitempty"`
+	D0    *int   `json:"d0,omitempty"`
+	D1    *int   `json:"d1,omitempty"`
+	D2    *int   `json:"d2,omitempty"`
+	D3    *int   `json:"d3,omitempty"`
+	Reset *int   `json:"reset,omitempty"` // the C6's reset pin, driven by the P4
 }
 
 // Memory holds the board's memory plan values (internal/memplan; firmware memplan.h), in KB
@@ -114,16 +133,23 @@ type Memory struct {
 	FwdPending *int `json:"fwd_pending,omitempty"`
 }
 
-// HasWiFi is whether the board's chip has Wi-Fi, as its chip image says (Images): every S3
-// board, wired or not; no P4 board (its image has no Wi-Fi driver). MayRunOnWiFi is the
-// node's rule, not the chip's.
-func (b Board) HasWiFi() bool { return Images[b.Image].WiFi }
+// HasWiFi is whether the board has Wi-Fi at all: its chip image has a driver (Images: every
+// S3 board, wired or not), or its image links esp_hosted and its board file describes the
+// companion chip it talks through (a P4 board with a C6 on esp32p4-c6). A P4 board whose
+// file names no companion has none, even when its notes say a C6 sits on the board: its
+// pins are not verified, so its image stays esp32p4-rev1, which drives no radio. MayRunOnWiFi
+// is the node's rule, not the chip's.
+func (b Board) HasWiFi() bool {
+	return Images[b.Image].WiFi || (Hosted[b.Image] && b.WiFi != nil && b.WiFi.Companion != nil)
+}
 
-// MayRunOnWiFi is whether the node may come up on Wi-Fi: it has no Ethernet, or Ethernet
-// that may not be fitted (the firmware falls back to Wi-Fi without it, net_start). Check
-// refuses either on a chip with no Wi-Fi.
+// MayRunOnWiFi is whether the node may come up on Wi-Fi as its primary network: it has Wi-Fi
+// (HasWiFi) and no Ethernet, or Ethernet that may not be fitted (the firmware falls back to
+// Wi-Fi without it, net_start). Check refuses either on an image with no Wi-Fi. A wired
+// board with Wi-Fi is not a Wi-Fi board: it runs on Ethernet and keeps Wi-Fi as the backup
+// (#78), which the Install over USB rules read through HasWiFi (builder.go's wifi/wifi_box).
 func (b Board) MayRunOnWiFi() bool {
-	return b.Ethernet == nil || b.Ethernet.Kind == "none" || b.Ethernet.Optional
+	return b.HasWiFi() && (b.Ethernet == nil || b.Ethernet.Kind == "none" || b.Ethernet.Optional)
 }
 
 // MemoryKeys are the board's settings for the memory plan.
