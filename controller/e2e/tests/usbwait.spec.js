@@ -35,9 +35,10 @@ async function routes(page, state) {
     const list = await (await page.request.get("api/boards", { headers: { "X-Session-Token": await page.evaluate(() => localStorage.getItem("espdns.session")) } })).json();
     const board = list.find(e => e.board.name === name).board;
     const eth = board.ethernet || {};
-    // As builder.go says them for firmware 0.0.5: a wired board (no box) or one on Wi-Fi (box ticked).
+    // As builder.go says them for firmware 0.0.5: a wired board (no Wi-Fi), one on Wi-Fi only
+    // (Wi-Fi, no box) or one on Wi-Fi with an Ethernet add-on (a box, ticked).
     const wired = !!eth.kind && eth.kind !== "none" && !eth.optional;
-    await r.fulfill({ json: { id: `e2e-${name}`, board, wifi: !wired, wired,
+    await r.fulfill({ json: { id: `e2e-${name}`, board, wifi: !wired, wired, wifi_box: !wired && !!eth.kind && eth.kind !== "none",
       chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5", built: "2026-10-07", elf_sha256: "ab".repeat(32) },
       keys: { release: RELFP, recovery: RECFP } } });
   });
