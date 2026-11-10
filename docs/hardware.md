@@ -246,6 +246,9 @@ backup while its cable is out:
 - On the backup, its `/status` shows `wifi` with the Wi-Fi MAC, `backup: true` and
   `eth_link: false`. The gateway and your clients learn the new MAC from the node itself.
 - Wi-Fi is off while the node is wired, so its driver takes no RAM until the cable goes.
+- **Install over USB** sets the network when **Set up Wi-Fi as its backup** is ticked. The
+  box is off by default on a wired board, and shown only when the chip image's firmware
+  takes a network on a wired board.
 
 Wire the nodes you rely on. Wi-Fi is best effort:
 

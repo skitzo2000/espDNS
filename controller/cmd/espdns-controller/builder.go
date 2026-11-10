@@ -17,6 +17,7 @@ import (
 	"github.com/skitzo2000/espdns/controller/internal/keys"
 	"github.com/skitzo2000/espdns/controller/internal/keyspart"
 	"github.com/skitzo2000/espdns/controller/internal/nodecfg"
+	"github.com/skitzo2000/espdns/controller/internal/version"
 )
 
 // builder serves the board catalog and builds a board's image for flashing from the browser.
@@ -42,8 +43,31 @@ type build struct {
 	Chip     image.Chip   `json:"chip"`
 	Keys     buildKeys    `json:"keys"`
 	KeysOnly bool         `json:"keys_only,omitempty"`
-	WiFi     bool         `json:"wifi"` // the board may run on Wi-Fi: the page asks for the network over Improv
-	bin      []byte
+	// WiFi: the page offers the Wi-Fi checkbox (wifiBox). Wired: the board is on its cable as
+	// it ships, so the box starts unticked (Wi-Fi as its backup); else ticked.
+	WiFi  bool `json:"wifi"`
+	Wired bool `json:"wired"`
+	bin   []byte
+}
+
+// wifiBackup is the first firmware in which a wired board takes a Wi-Fi network over USB and
+// moves to it while its cable is out (firmware/main/net.c, net_wifi_join on Ethernet; Improv
+// on every image with Wi-Fi). Older firmware on a wired board answers nothing over USB.
+var wifiBackup = version.Semver{Major: 0, Minor: 0, Patch: 7}
+
+// wifiBox is whether the page offers the Wi-Fi checkbox for board e on chip image chip: the
+// chip has Wi-Fi (boards.HasWiFi: every S3 board, no P4) and, on a board wired as it ships,
+// its firmware takes a network as the backup (wifiBackup or newer). A board on Wi-Fi as it
+// ships (boards.MayRunOnWiFi) always takes one.
+func wifiBox(b boards.Board, chip image.Chip) bool {
+	if !b.HasWiFi() {
+		return false
+	}
+	if b.MayRunOnWiFi() {
+		return true
+	}
+	v, err := version.Parse(chip.Version)
+	return err == nil && v.Compare(wifiBackup) >= 0
 }
 
 // buildKeys are the fingerprints of the keys a build writes (as /status names them).
@@ -263,7 +287,8 @@ func (b *builder) make(e boards.Entry) (*build, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(bin)
-	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps, WiFi: e.Board.MayRunOnWiFi(), bin: bin}), nil
+	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps,
+		WiFi: wifiBox(e.Board, chip), Wired: !e.Board.MayRunOnWiFi(), bin: bin}), nil
 }
 
 func (b *builder) get(w http.ResponseWriter, r *http.Request) *build {

@@ -18,6 +18,11 @@ version may change anything. Write each change under Unreleased as it merges;
   back to Ethernet when the cable has been in for 10 seconds. Wi-Fi stays off while it is wired.
   `/status` says `backup` and `eth_link` under `net`. The node also answers Wi-Fi setup over
   USB while on Ethernet.
+- **Wi-Fi checkbox in Install over USB** (controller): every board whose chip has Wi-Fi gets
+  one. It starts ticked on a board that ships on Wi-Fi and unticked on a wired board, where
+  ticking it sets up Wi-Fi as the backup for when the cable is out. Unticked, the install
+  never asks for a network. A wired board gets the box only when its chip image's firmware
+  has the Wi-Fi backup above. P4 boards get no box.
 
 ### Removed
 

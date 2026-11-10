@@ -9,13 +9,16 @@
 // checks the chip is the image's (else "Board Mismatch <found> in usb, firmware for <image's>",
 // nothing written) and its flash is big enough, erases the whole flash if asked, writes the
 // image at 0 and restarts the board. Closing the panel is refused while it erases or writes.
-// Then the board's console is read into the Board log (boardlog.js), and on a board that may
-// run on Wi-Fi (build.wifi: boards.Board.MayRunOnWiFi) the panel asks for the network over
-// Improv in that same stream; the network and password go to the board over USB, never
-// through the controller. The image carries your keys (the release and recovery public keys,
-// in its keys partition): until both are set up (the first run's Make your keys) nothing is
-// prepared. Write keys only (POST /api/build/keys) writes the keys partition alone, for a
-// node in setup mode, and keeps the rest. A board whose chip image isn't in the controller yet
+// Then the board's console is read into the Board log (boardlog.js), and, with the Wi-Fi
+// checkbox ticked, the panel asks for the network over Improv in that same stream; the
+// network and password go to the board over USB, never through the controller. The box is
+// there when the build says so (build.wifi: the chip has Wi-Fi and its firmware takes the
+// network, builder.go wifiBox): ticked to start on a board that ships on Wi-Fi, unticked on
+// one wired as it ships (build.wired), where Wi-Fi is the backup for when its cable is out.
+// Unticked, the install never asks. The image carries your keys (the release and recovery
+// public keys, in its keys partition): until both are set up (the first run's Make your keys)
+// nothing is prepared. Write keys only (POST /api/build/keys) writes the keys partition
+// alone, for a node in setup mode, and keeps the rest. A board whose chip image isn't in the controller yet
 // offers Get firmware (firmware.js: that chip image from the project's release, fetched,
 // checked and imported); each board says which firmware it gets ("project release v0.0.3",
 // "your build"). Once installed, the panel waits for the node on the network (POST
@@ -278,20 +281,30 @@ const BUSY = { erase: "Erasing the board: don't close this or unplug it until it
   write: "Writing to the board: don't close this or unplug it until it's done.",
   keys: "Writing the keys: don't close this or unplug it until it's done." };
 const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
+// wired: on its cable (a wired board without Wi-Fi set up); backup: a wired board with Wi-Fi
+// set up for when its cable is out; joined: on Wi-Fi; addon: Wi-Fi left unticked on a board
+// whose definition has an Ethernet add-on; nowifi: no Wi-Fi set up on a board with no
+// Ethernet (left unticked, or it never answered); elsewhere: not this port.
 const INSTALLED = {
   wired: "Installed. Plug its network cable in: it's connected to this computer over USB only. It can stay on USB for power, or be unplugged and powered where its cable is.",
+  backup: "Installed, with Wi-Fi as its backup: it uses its network cable while that's in, and your Wi-Fi while it's out. USB can stay in for power.",
   joined: "Installed, and on your Wi-Fi network. USB can stay in for power.",
-  ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
-  elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
+  addon: "Installed without Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
+  nowifi: "Installed without setting up its Wi-Fi: it isn't on a network until it has one. To give it one, tick Set up its Wi-Fi and install again.",
+  elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there).",
 };
 // A new board's: what each way of being on the network means, once OK hands it to the
 // controller (then: what happens next, by its address or on DHCP).
 const ADDS = {
   wired: then => `Installed. Plug it into your network: ${then}`,
+  backup: then => `Installed, with Wi-Fi as its backup for when its cable is out: ${then}`,
   joined: then => `Installed, and on your Wi-Fi network: ${then}`,
+  nowifi: then => `${INSTALLED.nowifi} Then ${then}`,
   elsewhere: then => `${INSTALLED.elsewhere} Then ${then}`,
 };
-ADDS.ethernet = ADDS.wired;
+ADDS.addon = ADDS.wired;
+// cableNet: the board's network is its cable, so the panel says to plug it in.
+const cableNet = how => how === "wired" || how === "addon";
 const THEN = { fixed: "it's added to your nodes as soon as it answers.", dhcp: "Nodes shows it once it answers, to reserve its address and add it.",
   back: "it gets its settings back as soon as it answers." };
 const NAME = /^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$/; // as + Add node's (addnode.js)
@@ -533,16 +546,24 @@ export async function openUSB(o = {}) {
       const c = obj(build.chip), k = obj(build.keys), b = obj(build.board);
       const go = h("button", { class: "btn primary", type: "button", id: "usb-go", disabled: !supported }, "Install on the board over USB");
       const erase = h("input", { type: "checkbox", id: "usb-erase" });
+      // The Wi-Fi checkbox (build.wifi): ticked to start on a board that ships on Wi-Fi,
+      // unticked on a wired one, where Wi-Fi is its backup. Its hint shows while it's ticked.
+      const wifiBox = build.wifi ? h("input", { type: "checkbox", id: "usb-wifi-box", checked: !build.wired }) : null;
+      const wifiHint = wifiBox && h("p", { class: "hint", id: "usb-wifi", hidden: !wifiBox.checked },
+        "After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.",
+        build.wired ? " It uses Wi-Fi only while its cable is out." : "");
+      if (wifiBox) wifiBox.addEventListener("change", () => { wifiHint.hidden = !wifiBox.checked; });
       const box = h("div", { class: "stack" });
       out.replaceChildren(h("p", { class: "small" }, `Ready: ${str(b.title) || str(b.name)}, ${str(c.image)} ${str(c.version)}, with your keys (release `,
         h("span", { class: "mono" }, str(k.release)), ", recovery ", h("span", { class: "mono" }, str(k.recovery)), ")."),
         h("label", { class: "check" }, erase, h("span", {}, "Erase the whole flash first (slower)")),
+        ...(wifiBox ? [h("label", { class: "check" }, wifiBox,
+          h("span", {}, build.wired ? "Set up Wi-Fi as its backup, for when its cable is out" : "Set up its Wi-Fi"))] : []),
         h("div", { class: "row" }, go),
-        ...(build.wifi ? [h("p", { class: "hint", id: "usb-wifi" },
-          "After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.")] : []),
+        ...(wifiHint ? [wifiHint] : []),
         h("p", { class: "hint mono" }, `built ${str(c.built)} · ${str(c.elf_sha256).slice(0, 12)} · image ${str(build.id)}`),
         box);
-      installer(box, go, erase, build, body.network);
+      installer(box, go, erase, build, body.network, wifiBox);
     } catch (e) {
       out.replaceChildren(h("p", { class: "hint bad" }, e.message));
     }
@@ -554,7 +575,7 @@ export async function openUSB(o = {}) {
   let locked = null;
   const lock = on => {
     if (on && !locked) {
-      locked = [pick, q, prep, save, ...p.body.querySelectorAll("#usb-go, #usb-erase, #usb-keys-go")].map(e => [e, e.disabled]);
+      locked = [pick, q, prep, save, ...p.body.querySelectorAll("#usb-go, #usb-erase, #usb-wifi-box, #usb-keys-go")].map(e => [e, e.disabled]);
       for (const [e] of locked) e.disabled = true;
     } else if (!on && locked) {
       for (const [e, d] of locked) e.disabled = d;
@@ -568,8 +589,12 @@ export async function openUSB(o = {}) {
   // one Improv said, on Wi-Fi), or, on DHCP, as a node of this board not found before
   // (/api/nodes/found). One that answers is said, with Add it now when there is o.found
   // (+ Add node, with it chosen). Nothing after a minute: what to check, still waiting.
-  function installer(box, go, erase, build, net) {
-    const board = obj(build.board), wifi = !!build.wifi;
+  function installer(box, go, erase, build, net, wifiBox) {
+    // wired: on its cable as it ships. addOn: on Wi-Fi as it ships, with an Ethernet add-on
+    // that may be fitted. wifi: this install asks for the network (the box ticked).
+    const board = obj(build.board), wired = !!build.wired, eth = obj(board.ethernet);
+    const addOn = !wired && !!str(eth.kind) && eth.kind !== "none";
+    let wifi = false;
     // A node of yours reinstalled on DHCP isn't found again (it's listed): it is waited for
     // at the address it had (o.at).
     let ip = net.address === "dhcp" ? str(o.at) : str(net.address).split("/")[0];
@@ -637,6 +662,7 @@ export async function openUSB(o = {}) {
     go.addEventListener("click", async () => {
       stopRun(); // the port, as the last install left it
       const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
+      wifi = !!(wifiBox && wifiBox.checked);
       began = performance.now();
       mac = "";
       noLink = false;
@@ -736,7 +762,7 @@ export async function openUSB(o = {}) {
     });
 
     // watchBoard reads the board's console into the Board log once it restarts, asks for Wi-Fi
-    // on a board that may run on it, then waits for it on the network.
+    // when the box is ticked, then waits for it on the network.
     async function watchBoard(port, own, live, others) {
       log.add("--- the board's console ---");
       if (!own) hint("usb-uart", "Logs and Wi-Fi setup use the board's own USB port; this one only shows the bootloader.");
@@ -756,14 +782,20 @@ export async function openUSB(o = {}) {
       timers.push(setTimeout(() => {
         if (!app && live()) hint("usb-nolog", "If it shows nothing, press RESET or unplug it and plug it in again.");
       }, NOLOG_AFTER));
-      let how = wifi ? "ethernet" : "wired";
+      // A wired board is on its cable whatever happens to Wi-Fi; Wi-Fi set up, it's its backup.
+      // Unticked, a board whose definition has an Ethernet add-on is on that; else, without a
+      // Wi-Fi network, it has none.
+      let how = wired ? "wired" : !wifi && addOn ? "addon" : "nowifi";
       if (wifi && !(own && con)) {
         step("wifi", "", "Not over this port: plug it into the board's own USB port to set up Wi-Fi.");
-        how = "elsewhere";
+        if (!wired) how = "elsewhere";
       } else if (wifi) {
         const got = await askWiFi(live);
         if (!live()) return;
-        if (got) { ip = got; how = "joined"; }
+        if (got) {
+          if (got.at) ip = got.at;
+          how = wired ? "backup" : "joined";
+        }
       }
       // Its chip MAC read: one of your nodes installed again, or a new board, is handed to the
       // controller with OK.
@@ -806,7 +838,7 @@ export async function openUSB(o = {}) {
     // or sends it its settings back, once it answers. An error stays here.
     function ready(how, mine) {
       const dhcp = net.address === "dhcp";
-      step("net", "next", how === "wired" || how === "ethernet" ? "Plug its network cable in." : mine ? "It gets its settings back once it answers."
+      step("net", "next", cableNet(how) ? "Plug its network cable in." : mine ? "It gets its settings back once it answers."
         : dhcp ? "Shown on Nodes once it answers." : "It's added once it answers.");
       // Its address as installed in its image: where it comes up. One of yours listed at
       // another moves there once that one is silent.
@@ -845,8 +877,9 @@ export async function openUSB(o = {}) {
 
     // askWiFi asks the board for its Wi-Fi network over Improv: its state every second, up to
     // 15 s; once it answers, its version, the networks it sees, and the form to join one.
-    // It resolves to the address the board has once joined, or null when it never answered
-    // (the Ethernet add-on fitted: no Improv).
+    // It resolves to { at: the address the board says it has, if any } once joined, or null
+    // when it never answered. A wired board stays on its cable once joined: the network is
+    // its backup, and its address is its cable's (none yet on DHCP with the cable out).
     function askWiFi(live) {
       return new Promise(resolve => {
         const send = d => { if (con) con.send(IMPROV.RPC, d).catch(() => { /* gone */ }); };
@@ -871,11 +904,13 @@ export async function openUSB(o = {}) {
         const joined = url => {
           let at = "";
           try { at = new URL(url).hostname; } catch { /* none */ }
+          if (at === "0.0.0.0") at = "";
           clearTimeout(until);
           onFrame = null;
           step("wifi", "done", `${info ? `${info} · ` : ""}joined ${joining || "your Wi-Fi"}`);
-          rows.wifi.more.replaceChildren(...(at ? [h("p", { class: "small", id: "usb-wifi-at" }, `On your Wi-Fi at ${at}`)] : []));
-          resolve(at || ip);
+          rows.wifi.more.replaceChildren(wired ? h("p", { class: "small", id: "usb-wifi-at" }, "Kept as its backup: it moves to Wi-Fi while its cable is out.")
+            : at ? h("p", { class: "small", id: "usb-wifi-at" }, `On your Wi-Fi at ${at}`) : "");
+          resolve({ at });
         };
         const notJoined = t => { clearTimeout(until); joining = ""; join.disabled = false; tell(t, "small bad"); };
         form.addEventListener("submit", e => {
@@ -936,7 +971,8 @@ export async function openUSB(o = {}) {
           if (answered || !live()) return;
           if (tries++ >= STATE_TRIES) {
             onFrame = null;
-            step("wifi", "", "It didn't ask for Wi-Fi: it uses its Ethernet add-on.");
+            step("wifi", "", wired ? "It didn't answer over USB, so it has no Wi-Fi backup: it uses its cable."
+              : "It didn't answer over USB, so its Wi-Fi isn't set up.");
             resolve(null);
             return;
           }
@@ -951,7 +987,7 @@ export async function openUSB(o = {}) {
       if (halt) halt();
       const my = gen, started = performance.now();
       const waitHint = h("div", { class: "stack nogap", id: "usb-wait-hint", hidden: true });
-      const cable = how === "wired" || how === "ethernet";
+      const cable = cableNet(how);
       step("net", "now", cable ? "Plug its network cable in." : ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…");
       say(h("p", { class: "small", id: "usb-installed" }, INSTALLED[how]),
         h("div", { id: "usb-waiting" }, spinning(ip ? `Waiting for it at ${ip}…` : "Waiting for it on your network…")), waitHint);
@@ -984,8 +1020,9 @@ export async function openUSB(o = {}) {
     function nothingYet(other, how) {
       const again = h("p", { class: "hint" }, "To use another address, change it above, press Prepare image and install again.");
       if (other) return [h("p", { class: "small bad" }, `Something else answers at ${ip}, so that address is taken.`), again];
-      const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up, or its cable is in" : "Check the cable is in";
-      if (noLink) return [h("p", { class: "small", id: "usb-nolink" }, `The board reports no network link. ${how === "wired" || how === "ethernet" ? "Plug its network cable in" : check}.`)];
+      const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up"
+        : how === "backup" ? "Check its cable is in, or that it's on your Wi-Fi" : how === "nowifi" ? "Check its Wi-Fi is set up" : "Check the cable is in";
+      if (noLink) return [h("p", { class: "small", id: "usb-nolink" }, `The board reports no network link. ${cableNet(how) ? "Plug its network cable in" : check}.`)];
       return [h("p", { class: "small" }, ip
         ? `Nothing yet. ${check}, and that ${ip} is free on your network and outside your router's DHCP pool.`
         : `Nothing yet. ${check}, and that your router hands out addresses on that network.`),

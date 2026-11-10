@@ -114,6 +114,11 @@ type Memory struct {
 	FwdPending *int `json:"fwd_pending,omitempty"`
 }
 
+// HasWiFi is whether the board's chip has Wi-Fi, as its chip image says (Images): every S3
+// board, wired or not; no P4 board (its image has no Wi-Fi driver). MayRunOnWiFi is the
+// node's rule, not the chip's.
+func (b Board) HasWiFi() bool { return Images[b.Image].WiFi }
+
 // MayRunOnWiFi is whether the node may come up on Wi-Fi: it has no Ethernet, or Ethernet
 // that may not be fitted (the firmware falls back to Wi-Fi without it, net_start). Check
 // refuses either on a chip with no Wi-Fi.
