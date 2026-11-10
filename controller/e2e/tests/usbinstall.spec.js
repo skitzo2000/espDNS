@@ -37,8 +37,13 @@ async function routes(page, state) {
     const name = r.request().postDataJSON().name;
     const list = await (await page.request.get("api/boards", { headers: { "X-Session-Token": await page.evaluate(() => localStorage.getItem("espdns.session")) } })).json();
     const board = list.find(e => e.board.name === name).board, eth = board.ethernet || {};
-    await r.fulfill({ json: { id: `e2e-${name}`, board, wifi: !eth.kind || eth.kind === "none" || !!eth.optional,
-      chip: { image: board.image, chip_family: board.image.startsWith("esp32p4") ? "ESP32-P4" : "ESP32-S3", version: "0.0.5", built: "2026-10-07", elf_sha256: "ab".repeat(32) },
+    // As builder.go says them: wired, on its cable as it ships (MayRunOnWiFi not); wifi, the
+    // Wi-Fi checkbox, for an S3 board (a P4 has no Wi-Fi), on a wired one only from the
+    // firmware that takes a network there (wifiBackup, 0.0.7).
+    const wired = !!eth.kind && eth.kind !== "none" && !eth.optional, fw = state.fw.split(".").map(Number);
+    const backup = fw[0] > 0 || fw[1] > 0 || fw[2] >= 7;
+    await r.fulfill({ json: { id: `e2e-${name}`, board, wired, wifi: board.image.startsWith("esp32s3") && (!wired || backup),
+      chip: { image: board.image, chip_family: board.image.startsWith("esp32p4") ? "ESP32-P4" : "ESP32-S3", version: state.fw, built: "2026-10-07", elf_sha256: "ab".repeat(32) },
       keys: { release: RELFP, recovery: RECFP } } });
   });
   await page.route(/\/build\/e2e-[^/]+\/image\.bin$/, r => { state.images++; return r.fulfill({ status: 200, contentType: "application/octet-stream", body: IMAGE }); });
@@ -55,10 +60,13 @@ async function routes(page, state) {
   });
 }
 
-async function start(page, { board = "ws-s3-eth", address = "192.0.2.52/24", fake = {}, lookup = { address: "192.0.2.52", found: false } } = {}) {
+// fw is the chip image's firmware version: 0.0.5 by default, from before a wired board took
+// Wi-Fi (its fake board then answers Improv only if told to, options.wifi, as a board on Wi-Fi
+// does); a wired S3 board on 0.0.7 or later answers Improv on its cable too.
+async function start(page, { board = "ws-s3-eth", address = "192.0.2.52/24", fake = {}, fw = "0.0.5", lookup = { address: "192.0.2.52", found: false } } = {}) {
   const violations = await watch(page);
   await page.addInitScript(fakeEsp, fake);
-  const state = { lookup, lookups: [], images: 0, waiting: [] };
+  const state = { lookup, lookups: [], images: 0, waiting: [], fw };
   await routes(page, state);
   await login(page);
   await page.goto("./");
@@ -347,6 +355,7 @@ test("Install over USB: while it writes, the panel won't close, and says why in 
 
 test("Install over USB: a Wi-Fi board asks for its network, joins it; on DHCP, OK says Nodes shows it to reserve its address", async ({ page }) => {
   const { u, state, violations } = await start(page, { board: "xiao-s3-sense", address: "dhcp", fake: { wifi: true } });
+  await expect(u.locator("#usb-wifi-box")).toBeChecked();
   await expect(u.locator("#usb-wifi")).toBeVisible();
   await u.locator("#usb-go").click();
   await expect(step(u, "wifi")).toHaveClass("next", { timeout: 20000 });
@@ -454,5 +463,113 @@ test("Install over USB: a board whose chip MAC isn't read is waited for in the p
   await expect(u.locator("#usb-ok")).toHaveCount(0);
   await expect.poll(() => state.lookups.length).toBeGreaterThan(0);
   expect(state.waiting).toEqual([]);
+  expect(await violations()).toEqual([]);
+});
+
+// The Wi-Fi checkbox: there for a board whose chip has Wi-Fi and whose firmware takes the
+// network over USB; each case's fake board does what the firmware does there.
+
+// A P4 has no Wi-Fi: no box, no Wi-Fi step, and its fake board speaks no Improv.
+test("Install over USB: a P4 board has no Wi-Fi checkbox and its install skips Wi-Fi", async ({ page }) => {
+  const { u, violations } = await start(page, { board: "p4-ip101", fw: "0.0.7", fake: { magic: 0x0ADDBAD0 } });
+  await expect(u.locator("#usb-wifi-box")).toHaveCount(0);
+  await expect(u.locator("#usb-wifi")).toHaveCount(0);
+  await u.locator("#usb-go").click();
+  // (Its chip MAC isn't read from the fake P4, so it's waited for in the panel.)
+  await expect(u.locator("#usb-installed")).toHaveText(/^Installed\. Plug its network cable in/, { timeout: 20000 });
+  await expect(step(u, "restart")).toHaveClass("done");
+  await expect(step(u, "wifi")).toHaveCount(0);
+  expect(await violations()).toEqual([]);
+});
+
+// A wired S3 board on firmware from before it took Wi-Fi on its cable answers nothing over
+// USB, so it gets no box.
+test("Install over USB: a wired S3 board on older firmware has no Wi-Fi checkbox", async ({ page }) => {
+  const { u, violations } = await start(page, { fw: "0.0.6" });
+  await expect(u.locator("#usb-wifi-box")).toHaveCount(0);
+  await expect(u.locator("#usb-wifi")).toHaveCount(0);
+  expect(await violations()).toEqual([]);
+});
+
+// On current firmware a wired S3 board answers Improv on its cable: the box is there,
+// unticked; left so, the install never asks.
+test("Install over USB: a wired S3 board offers Wi-Fi unticked; left so, the install skips Wi-Fi", async ({ page }) => {
+  const { u, violations } = await start(page, { fw: "0.0.7", fake: { wifi: true } });
+  const box = u.locator("#usb-wifi-box");
+  await expect(box).toBeVisible();
+  await expect(box).not.toBeChecked();
+  await expect(u.locator("label.check:has(#usb-wifi-box)")).toHaveText("Set up Wi-Fi as its backup, for when its cable is out");
+  await expect(u.locator("#usb-wifi")).toBeHidden();
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
+  await expect(step(u, "wifi")).toHaveCount(0);
+  await expect(step(u, "net")).toContainText("Plug its network cable in.");
+  expect((await esp(page)).join).toBe(null);
+  expect(await violations()).toEqual([]);
+});
+
+// Ticked, the wired board is asked for its network over USB on its cable, joins it, keeps it
+// as its backup, and stays at its own address.
+test("Install over USB: a wired S3 board ticked for Wi-Fi joins a network as its backup", async ({ page }) => {
+  const { u, state, violations } = await start(page, { fw: "0.0.7", fake: { wifi: true } });
+  await u.locator("#usb-wifi-box").check();
+  await expect(u.locator("#usb-wifi")).toHaveText("After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller. It uses Wi-Fi only while its cable is out.");
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one.", { timeout: 20000 });
+  await u.locator("#usb-pass").fill("e2e password");
+  await u.locator("#usb-join").click();
+  await expect(step(u, "wifi")).toHaveClass("done");
+  await expect(step(u, "wifi")).toContainText("joined example-net");
+  await expect(u.locator("#usb-wifi-at")).toHaveText("Kept as its backup: it moves to Wi-Fi while its cable is out.");
+  expect((await esp(page)).join).toBe("\x0bexample-net\x0ce2e password");
+  await expect(u.locator("#usb-installed")).toHaveText("Installed, with Wi-Fi as its backup for when its cable is out: it's added to your nodes as soon as it answers.");
+  await expect(step(u, "net")).toContainText("It's added once it answers.");
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(state.waiting.map(w => [w.name, w.address, w.gateway])).toEqual([["dns3", "192.0.2.52/24", "192.0.2.1"]]);
+  expect(await violations()).toEqual([]);
+});
+
+// On DHCP with its cable out, a wired board joined on its cable says no address (0.0.0.0, its
+// cable's): it's waited for as a new board on DHCP, not at that.
+test("Install over USB: a wired S3 board on DHCP ticked for Wi-Fi isn't waited for at 0.0.0.0", async ({ page }) => {
+  const { u, state, violations } = await start(page, { address: "dhcp", fw: "0.0.7", fake: { wifi: true, url: "http://0.0.0.0/status" } });
+  await u.locator("#usb-wifi-box").check();
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-wifi-said")).toHaveText("2 networks found: pick one.", { timeout: 20000 });
+  await u.locator("#usb-pass").fill("e2e password");
+  await u.locator("#usb-join").click();
+  await expect(step(u, "wifi")).toHaveClass("done");
+  await expect(u.locator("#usb-installed")).toHaveText("Installed, with Wi-Fi as its backup for when its cable is out: Nodes shows it once it answers, to reserve its address and add it.");
+  await u.getByRole("button", { name: "OK" }).click();
+  await expect(u).toBeHidden();
+  expect(state.waiting.map(w => [w.name, w.address])).toEqual([["dns3", "dhcp"]]);
+  expect(state.lookups).toEqual([]);
+  expect(await violations()).toEqual([]);
+});
+
+// Unticked on a board that ships on Wi-Fi, the install never asks, though the board would
+// answer: with an Ethernet add-on it's on that.
+test("Install over USB: a Wi-Fi board unticked skips Wi-Fi and uses its Ethernet add-on", async ({ page }) => {
+  const { u, violations } = await start(page, { board: "xiao-s3-sense", fake: { wifi: true } });
+  await expect(u.locator("#usb-wifi-box")).toBeChecked();
+  await u.locator("#usb-wifi-box").uncheck();
+  await expect(u.locator("#usb-wifi")).toBeHidden();
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toHaveText("Installed. Plug it into your network: it's added to your nodes as soon as it answers.", { timeout: 20000 });
+  await expect(step(u, "wifi")).toHaveCount(0);
+  await expect(step(u, "net")).toContainText("Plug its network cable in.");
+  expect((await esp(page)).join).toBe(null);
+  expect(await violations()).toEqual([]);
+});
+
+// Unticked on a board with no Ethernet at all, it says it isn't on a network until it has one.
+test("Install over USB: a Wi-Fi-only board unticked says it has no network yet", async ({ page }) => {
+  const { u, violations } = await start(page, { board: "xiao-s3-expansion", fake: { wifi: true } });
+  await u.locator("#usb-wifi-box").uncheck();
+  await u.locator("#usb-go").click();
+  await expect(u.locator("#usb-installed")).toHaveText("Installed without setting up its Wi-Fi: it isn't on a network until it has one. To give it one, tick Set up its Wi-Fi and install again. Then it's added to your nodes as soon as it answers.", { timeout: 20000 });
+  await expect(step(u, "wifi")).toHaveCount(0);
+  expect((await esp(page)).join).toBe(null);
   expect(await violations()).toEqual([]);
 });

@@ -400,7 +400,7 @@ test("Reinstall over USB: OK hands it to the controller, which gives it its sett
   });
   await page.route(/\/api\/build$/, async r => {
     const board = { name: "ws-s3-eth", title: "Waveshare ESP32-S3-ETH", image: "esp32s3-eth" };
-    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
+    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, wired: true, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
       keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
   });
   await page.route(/\/build\/e2e-ws-s3-eth\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x4000, 0x5a) }));
@@ -451,7 +451,7 @@ test("Reinstall over USB on DHCP, its chip MAC not read: waited for at its addre
   });
   await page.route(/\/api\/build$/, async r => {
     const board = { name: "ws-s3-eth", title: "Waveshare ESP32-S3-ETH", image: "esp32s3-eth" };
-    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
+    await r.fulfill({ json: { id: "e2e-ws-s3-eth", board, wifi: false, wired: true, chip: { image: board.image, chip_family: "ESP32-S3", version: "0.0.5" },
       keys: { release: "a1b2c3d4e5f60718", recovery: "0f1e2d3c4b5a6978" } } });
   });
   await page.route(/\/build\/e2e-ws-s3-eth\/image\.bin$/, r => r.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.alloc(0x4000, 0x5a) }));

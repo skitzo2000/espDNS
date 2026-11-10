@@ -16,7 +16,8 @@
 // among them, as firmware/main/nodekey_node.c logs it) to the port,
 // then, on a Wi-Fi board (options.wifi), speaks Improv Wi-Fi serial as firmware/main/improv.c
 // does: ready, its info, two networks scanned, a join that works (options.join false: one
-// refused, ERROR 3). options.vid is the port's USB vendor ID (0x303a: the chip's own USB).
+// refused, ERROR 3), saying options.url as its address (a wired board's is its cable's: on
+// DHCP with the cable out, 0.0.0.0). options.vid is the port's USB vendor ID (0x303a: the chip's own USB).
 // Every command's op is kept in window.__esp.ops, each write's offset and size in .begins,
 // the flash written in .flash (offset -> byte), each setSignals call in .signals with .after,
 // the number of commands before it, and the Wi-Fi join's data (as the firmware's RPC reads
@@ -24,7 +25,7 @@
 // eFuse words); options.keyLate leaves the node key line out of its first boot's log;
 // window.__esp.print(lines) prints more console lines in the app. As a real port, it refuses to open while
 // open (InvalidStateError) and to close while a stream is locked.
-function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, vid = 0x303a, app = false, keyLate = false,
+function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = Infinity, failWrite = false, hold = false, wifi = false, join = true, url = "http://192.0.2.52/status", vid = 0x303a, app = false, keyLate = false,
   bootLog = ["ESP-ROM:esp32s3-20210327", "rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)",
     "\x1b[0;32mI (311) espdns: espDNS 0.0.5 starting\x1b[0m", "\x1b[0;33mW (342) net: no link yet\x1b[0m",
     "\x1b[0;32mI (345) nodekey: node key BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\x1b[0m", "\x1b[0;32mI (350) improv: listening on USB serial\x1b[0m"] } = {}) {
@@ -100,7 +101,7 @@ function fakeEsp({ magic = 0x9, regs = {}, mac = "aa:bb:cc:00:00:52", syncs = In
     packet(4, [cmd, d.length, ...d]);
   };
   let state = 2;
-  const URL = "http://192.0.2.52/status";
+  const URL = url;
   const rpc = (cmd, data) => {
     if (cmd === 2) { packet(1, [state]); if (state === 4) result(2, [URL]); }
     else if (cmd === 3) result(3, ["espDNS", "0.0.5", "esp32s3", "espdns-e2e"]);
