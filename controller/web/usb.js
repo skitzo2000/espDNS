@@ -282,17 +282,16 @@ const BUSY = { erase: "Erasing the board: don't close this or unplug it until it
   keys: "Writing the keys: don't close this or unplug it until it's done." };
 const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
 // wired: on its cable (a wired board without Wi-Fi set up); backup: a wired board with Wi-Fi
-// set up for when its cable is out; joined: on Wi-Fi; ethernet: Wi-Fi asked for, never
-// answered (its Ethernet add-on); addon: Wi-Fi left unticked on a board with an add-on;
-// nowifi: Wi-Fi left unticked on a board with no Ethernet; elsewhere: not this port.
+// set up for when its cable is out; joined: on Wi-Fi; addon: Wi-Fi left unticked on a board
+// whose definition has an Ethernet add-on; nowifi: no Wi-Fi set up on a board with no
+// Ethernet (left unticked, or it never answered); elsewhere: not this port.
 const INSTALLED = {
   wired: "Installed. Plug its network cable in: it's connected to this computer over USB only. It can stay on USB for power, or be unplugged and powered where its cable is.",
   backup: "Installed, with Wi-Fi as its backup: it uses its network cable while that's in, and your Wi-Fi while it's out. USB can stay in for power.",
   joined: "Installed, and on your Wi-Fi network. USB can stay in for power.",
-  ethernet: "Installed. It didn't ask for Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
   addon: "Installed without Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
   nowifi: "Installed without setting up its Wi-Fi: it isn't on a network until it has one. To give it one, tick Set up its Wi-Fi and install again.",
-  elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there), or plug in its Ethernet add-on.",
+  elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there).",
 };
 // A new board's: what each way of being on the network means, once OK hands it to the
 // controller (then: what happens next, by its address or on DHCP).
@@ -303,9 +302,9 @@ const ADDS = {
   nowifi: then => `${INSTALLED.nowifi} Then ${then}`,
   elsewhere: then => `${INSTALLED.elsewhere} Then ${then}`,
 };
-ADDS.ethernet = ADDS.addon = ADDS.wired;
+ADDS.addon = ADDS.wired;
 // cableNet: the board's network is its cable, so the panel says to plug it in.
-const cableNet = how => how === "wired" || how === "ethernet" || how === "addon";
+const cableNet = how => how === "wired" || how === "addon";
 const THEN = { fixed: "it's added to your nodes as soon as it answers.", dhcp: "Nodes shows it once it answers, to reserve its address and add it.",
   back: "it gets its settings back as soon as it answers." };
 const NAME = /^[a-z0-9]([a-z0-9-]{0,29}[a-z0-9])?$/; // as + Add node's (addnode.js)
@@ -784,7 +783,9 @@ export async function openUSB(o = {}) {
         if (!app && live()) hint("usb-nolog", "If it shows nothing, press RESET or unplug it and plug it in again.");
       }, NOLOG_AFTER));
       // A wired board is on its cable whatever happens to Wi-Fi; Wi-Fi set up, it's its backup.
-      let how = wired ? "wired" : wifi ? "ethernet" : addOn ? "addon" : "nowifi";
+      // Unticked, a board whose definition has an Ethernet add-on is on that; else, without a
+      // Wi-Fi network, it has none.
+      let how = wired ? "wired" : !wifi && addOn ? "addon" : "nowifi";
       if (wifi && !(own && con)) {
         step("wifi", "", "Not over this port: plug it into the board's own USB port to set up Wi-Fi.");
         if (!wired) how = "elsewhere";
@@ -971,7 +972,7 @@ export async function openUSB(o = {}) {
           if (tries++ >= STATE_TRIES) {
             onFrame = null;
             step("wifi", "", wired ? "It didn't answer over USB, so it has no Wi-Fi backup: it uses its cable."
-              : "It didn't ask for Wi-Fi: it uses its Ethernet add-on.");
+              : "It didn't answer over USB, so its Wi-Fi isn't set up.");
             resolve(null);
             return;
           }
@@ -1019,7 +1020,7 @@ export async function openUSB(o = {}) {
     function nothingYet(other, how) {
       const again = h("p", { class: "hint" }, "To use another address, change it above, press Prepare image and install again.");
       if (other) return [h("p", { class: "small bad" }, `Something else answers at ${ip}, so that address is taken.`), again];
-      const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up, or its cable is in"
+      const check = how === "joined" ? "Check it's still on your Wi-Fi" : how === "elsewhere" ? "Check its Wi-Fi is set up"
         : how === "backup" ? "Check its cable is in, or that it's on your Wi-Fi" : how === "nowifi" ? "Check its Wi-Fi is set up" : "Check the cable is in";
       if (noLink) return [h("p", { class: "small", id: "usb-nolink" }, `The board reports no network link. ${cableNet(how) ? "Plug its network cable in" : check}.`)];
       return [h("p", { class: "small" }, ip
