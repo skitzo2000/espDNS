@@ -13,7 +13,7 @@ release.
 | Guition JC-ESP32P4-M3-DEV | `p4-ip101` | `esp32p4-rev1` | 16 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY | SDMMC, 4-bit | None usable: [add one](#a-status-light) |
 | Waveshare ESP32-P4-ETH | `ws-p4-eth` | `esp32p4-rev1` | 32 MB | 32 MB | Ethernet: built-in MAC + IP101 PHY. Optional PoE module | SDMMC, 4-bit | None usable: [add one](#a-status-light) |
 | Waveshare ESP32-S3-ETH | `ws-s3-eth` | `esp32s3-eth` | 16 MB | 8 MB | Ethernet: W5500 over SPI. Optional PoE module (802.3af) | SPI, its own bus | WS2812 RGB on GPIO 21 |
-| Seeed XIAO ESP32S3 Sense | `xiao-s3-sense` | `esp32s3-octal` | 8 MB | 8 MB | Wi-Fi as it ships. Wired with an added W5500 module | SPI, on the Sense board | None usable: add one |
+| Seeed XIAO ESP32S3 Sense | `xiao-s3-sense` | `esp32s3-octal` | 8 MB | 8 MB | Wi-Fi only | SPI, on the Sense board | None usable: add one |
 
 - The two ESP32-P4 boards are top of the pecking order: 32 MB of PSRAM keeps large
   blocklists in RAM. Both entries are for P4 silicon v1.x. Silicon v3 or later needs the
@@ -25,11 +25,11 @@ release.
 - On the Waveshare ESP32-S3-ETH, the RGB LED shows health in colour. With the PoE module one
   cable carries power and network, so a PoE switch on a UPS keeps both up. The W5500 runs
   at 20 MHz; the SD card's own SPI bus is slower than the P4's SDMMC.
-- The Seeed XIAO ESP32S3 Sense is Wi-Fi as it ships. For a wired node, add a W5500 on the
-  Sense board's SPI bus, shared with the SD card: CS on D0 (GPIO 1), INT on D1 (GPIO 2), RST
-  on D3 (GPIO 4). The user LED shares GPIO 21 with the SD card's chip select, so it's
-  unusable. Wi-Fi transmit power is capped at 15 dBm (at 20 dBm it lost packets and the
-  access point dropped it). PoE needs a separate splitter. The camera isn't used.
+- The Seeed XIAO ESP32S3 Sense is Wi-Fi only. One with a W5500 added is a board of your
+  own: describe it from this one, with the W5500 on the Sense board's SPI bus. The user LED
+  shares GPIO 21 with the SD card's chip select, so it's unusable. Wi-Fi transmit power is
+  capped at 15 dBm (at 20 dBm it lost packets and the access point dropped it). The camera
+  isn't used.
 
 ## Untested boards
 

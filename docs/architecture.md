@@ -226,7 +226,7 @@ The board catalog is JSON files in [`boards/`](../boards/), each marked *tested*
 - Guition JC-ESP32P4-M3-DEV (ESP32-P4, built-in Ethernet with an IP101 PHY, SDMMC)
 - Waveshare ESP32-P4-ETH (ESP32-P4, built-in Ethernet with an IP101 PHY, optional PoE, SDMMC)
 - Waveshare ESP32-S3-ETH (W5500 Ethernet, optional PoE, SD over SPI)
-- Seeed XIAO ESP32S3 Sense (Wi-Fi, or wired with an added W5500 module)
+- Seeed XIAO ESP32S3 Sense (Wi-Fi)
 
 **Install over USB** (on Nodes, and Reinstall over USB on a node's page) flashes a node from
 the browser; once it answers on the network, the controller adds it to your nodes (a node

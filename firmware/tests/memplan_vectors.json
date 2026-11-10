@@ -447,13 +447,7 @@
     }
    ],
    "ethernet": {
-    "kind": "w5500",
-    "spi_host": 2,
-    "cs": 1,
-    "int": 2,
-    "rst": 4,
-    "mhz": 20,
-    "optional": true
+    "kind": "none"
    },
    "sd": {
     "kind": "spi",
@@ -477,7 +471,7 @@
     "querylog_kb": 64,
     "fwd_pending": 32
    },
-   "notes": "Wi-Fi as it ships; wired with a W5500 module on the SD card's bus: CS D0 (GPIO1), INT D1 (GPIO2), RST D3 (GPIO4). The user LED shares GPIO21 with the SD card's chip select: use an add-on LED. At 20 dBm transmit, packets were lost and the access point dropped it for low ACK; 15 dBm measured clean."
+   "notes": "Wi-Fi only; one with a W5500 module added is a board of your own. The user LED shares GPIO21 with the SD card's chip select: use an add-on LED. At 20 dBm transmit, packets were lost and the access point dropped it for low ACK; 15 dBm measured clean."
   },
   "services": [
    "dns",

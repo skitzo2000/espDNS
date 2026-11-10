@@ -18,11 +18,18 @@ version may change anything. Write each change under Unreleased as it merges;
   back to Ethernet when the cable has been in for 10 seconds. Wi-Fi stays off while it is wired.
   `/status` says `backup` and `eth_link` under `net`. The node also answers Wi-Fi setup over
   USB while on Ethernet.
-- **Wi-Fi checkbox in Install over USB** (controller): every board whose chip has Wi-Fi gets
-  one. It starts ticked on a board that ships on Wi-Fi and unticked on a wired board, where
-  ticking it sets up Wi-Fi as the backup for when the cable is out. Unticked, the install
-  never asks for a network. A wired board gets the box only when its chip image's firmware
-  has the Wi-Fi backup above. P4 boards get no box.
+- **Wi-Fi checkbox in Install over USB** (controller): a board with Wi-Fi and Ethernet gets
+  one. It starts ticked on a board that ships on Wi-Fi with an Ethernet add-on, and unticked
+  on a wired board, where ticking it sets up Wi-Fi as the backup for when the cable is out.
+  Unticked, the install never asks for a network. A wired board gets the box only when its
+  chip image's firmware has the Wi-Fi backup above. A board with no Ethernet gets no box: the
+  install always sets up its Wi-Fi. P4 boards get no box and no Wi-Fi step.
+
+### Changed
+
+- The Seeed XIAO ESP32S3 Sense (`xiao-s3-sense`) is Wi-Fi only in the board library. Its
+  optional W5500 add-on is gone: a XIAO Sense with a W5500 is a board of your own, described
+  from this one.
 
 ### Removed
 

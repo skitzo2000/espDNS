@@ -141,24 +141,24 @@ func testChips(t *testing.T, v string) string {
 	return dir
 }
 
-// A build says what the page offers for Wi-Fi: wifi, the Wi-Fi checkbox, for a board whose
-// chip has Wi-Fi (no P4) whose firmware takes the network; wired, the board is on its cable
-// as it ships (the box starts unticked: Wi-Fi as its backup). A wired S3 board's firmware
-// takes a network only from wifiBackup on: on older firmware it gets no box; a board on
-// Wi-Fi as it ships (the XIAO, its Ethernet an add-on that may not be fitted) gets one on any.
+// A build says what the page does about Wi-Fi: wifi, the install can set the network over
+// USB (a chip with Wi-Fi, no P4; on a wired board only from wifiBackup on); wifi_box, only
+// when the Wi-Fi checkbox is ticked (a board with Ethernet, fitted or an add-on; a board
+// with no Ethernet always gets its Wi-Fi set); wired, the board is on its cable as it ships
+// (the box starts unticked: Wi-Fi as its backup).
 func TestBuildWiFiWired(t *testing.T) {
 	for _, c := range []struct {
-		board, fw   string
-		wifi, wired bool
+		board, fw        string
+		wifi, box, wired bool
 	}{
-		{"ws-s3-eth", "0.0.7", true, true},      // wired S3: Wi-Fi as its backup
-		{"ws-s3-eth", "0.1.0", true, true},      // and on any later firmware
-		{"ws-s3-eth", "0.0.6", false, true},     // firmware that takes no network on a wired board
-		{"ws-s3-eth", "3fbae0a", false, true},   // a build from before versions
-		{"xiao-s3-sense", "0.0.7", true, false}, // ships on Wi-Fi, its add-on optional
-		{"xiao-s3-sense", "0.0.6", true, false},
-		{"xiao-s3-expansion", "0.0.6", true, false}, // no Ethernet at all
-		{"p4-ip101", "0.0.7", false, true},          // a P4: no Wi-Fi
+		{"ws-s3-eth", "0.0.7", true, true, true},       // wired S3: Wi-Fi as its backup, a choice
+		{"ws-s3-eth", "0.1.0", true, true, true},       // and on any later firmware
+		{"ws-s3-eth", "0.0.6", false, false, true},     // firmware that takes no network on a wired board
+		{"ws-s3-eth", "3fbae0a", false, false, true},   // a build from before versions
+		{"m5stack-cores3", "0.0.6", true, true, false}, // ships on Wi-Fi, an optional add-on: a box, ticked
+		{"xiao-s3-sense", "0.0.7", true, false, false}, // Wi-Fi only: no box, Wi-Fi always set
+		{"xiao-s3-expansion", "0.0.6", true, false, false},
+		{"p4-ip101", "0.0.7", false, false, true}, // a P4: no Wi-Fi
 	} {
 		b := newBuilder("../../../boards", t.TempDir(), testChips(t, c.fw))
 		b.keys = func() ([]byte, []byte, error) { return newPub(t), newPub(t), nil }
@@ -169,13 +169,15 @@ func TestBuildWiFiWired(t *testing.T) {
 		mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/build", bytes.NewReader(body)))
 		var out struct {
 			WiFi  bool `json:"wifi"`
+			Box   bool `json:"wifi_box"`
 			Wired bool `json:"wired"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); rec.Code != http.StatusOK || err != nil {
 			t.Fatalf("%s on %s: %d %s", c.board, c.fw, rec.Code, rec.Body)
 		}
-		if out.WiFi != c.wifi || out.Wired != c.wired {
-			t.Errorf("%s on %s: wifi %v wired %v, want wifi %v wired %v", c.board, c.fw, out.WiFi, out.Wired, c.wifi, c.wired)
+		if out.WiFi != c.wifi || out.Box != c.box || out.Wired != c.wired {
+			t.Errorf("%s on %s: wifi %v box %v wired %v, want wifi %v box %v wired %v", c.board, c.fw,
+				out.WiFi, out.Box, out.Wired, c.wifi, c.box, c.wired)
 		}
 	}
 }

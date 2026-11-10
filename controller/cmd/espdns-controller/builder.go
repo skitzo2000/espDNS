@@ -43,11 +43,14 @@ type build struct {
 	Chip     image.Chip   `json:"chip"`
 	Keys     buildKeys    `json:"keys"`
 	KeysOnly bool         `json:"keys_only,omitempty"`
-	// WiFi: the page offers the Wi-Fi checkbox (wifiBox). Wired: the board is on its cable as
-	// it ships, so the box starts unticked (Wi-Fi as its backup); else ticked.
-	WiFi  bool `json:"wifi"`
-	Wired bool `json:"wired"`
-	bin   []byte
+	// WiFi: the install can set the board's Wi-Fi network over USB (wifiTakes). WiFiBox: it
+	// does so only when the Wi-Fi checkbox is ticked (a board with Wi-Fi and Ethernet); a
+	// board with no Ethernet always gets its Wi-Fi set, with no box. Wired: the board is on
+	// its cable as it ships, so the box starts unticked (Wi-Fi as its backup); else ticked.
+	WiFi    bool `json:"wifi"`
+	WiFiBox bool `json:"wifi_box"`
+	Wired   bool `json:"wired"`
+	bin     []byte
 }
 
 // wifiBackup is the first firmware in which a wired board takes a Wi-Fi network over USB and
@@ -55,11 +58,11 @@ type build struct {
 // on every image with Wi-Fi). Older firmware on a wired board answers nothing over USB.
 var wifiBackup = version.Semver{Major: 0, Minor: 0, Patch: 7}
 
-// wifiBox is whether the page offers the Wi-Fi checkbox for board e on chip image chip: the
-// chip has Wi-Fi (boards.HasWiFi: every S3 board, no P4) and, on a board wired as it ships,
-// its firmware takes a network as the backup (wifiBackup or newer). A board on Wi-Fi as it
-// ships (boards.MayRunOnWiFi) always takes one.
-func wifiBox(b boards.Board, chip image.Chip) bool {
+// wifiTakes is whether board b on chip image chip takes a Wi-Fi network over USB: the chip
+// has Wi-Fi (boards.HasWiFi: every S3 board, no P4) and, on a board wired as it ships, its
+// firmware takes a network as the backup (wifiBackup or newer). A board on Wi-Fi as it ships
+// (boards.MayRunOnWiFi) always takes one.
+func wifiTakes(b boards.Board, chip image.Chip) bool {
 	if !b.HasWiFi() {
 		return false
 	}
@@ -68,6 +71,12 @@ func wifiBox(b boards.Board, chip image.Chip) bool {
 	}
 	v, err := version.Parse(chip.Version)
 	return err == nil && v.Compare(wifiBackup) >= 0
+}
+
+// hasEthernet is whether the board has Ethernet, fitted or an add-on that may be: only then is
+// Wi-Fi a choice (the checkbox). A board without has no other network.
+func hasEthernet(b boards.Board) bool {
+	return b.Ethernet != nil && b.Ethernet.Kind != "none" && b.Ethernet.Kind != ""
 }
 
 // buildKeys are the fingerprints of the keys a build writes (as /status names them).
@@ -287,8 +296,9 @@ func (b *builder) make(e boards.Entry) (*build, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(bin)
+	wifi := wifiTakes(e.Board, chip)
 	return b.keep(&build{ID: hex.EncodeToString(sum[:8]), Board: e.Board, Chip: chip, Keys: fps,
-		WiFi: wifiBox(e.Board, chip), Wired: !e.Board.MayRunOnWiFi(), bin: bin}), nil
+		WiFi: wifi, WiFiBox: wifi && hasEthernet(e.Board), Wired: !e.Board.MayRunOnWiFi(), bin: bin}), nil
 }
 
 func (b *builder) get(w http.ResponseWriter, r *http.Request) *build {

@@ -9,13 +9,13 @@
 // checks the chip is the image's (else "Board Mismatch <found> in usb, firmware for <image's>",
 // nothing written) and its flash is big enough, erases the whole flash if asked, writes the
 // image at 0 and restarts the board. Closing the panel is refused while it erases or writes.
-// Then the board's console is read into the Board log (boardlog.js), and, with the Wi-Fi
-// checkbox ticked, the panel asks for the network over Improv in that same stream; the
-// network and password go to the board over USB, never through the controller. The box is
-// there when the build says so (build.wifi: the chip has Wi-Fi and its firmware takes the
-// network, builder.go wifiBox): ticked to start on a board that ships on Wi-Fi, unticked on
-// one wired as it ships (build.wired), where Wi-Fi is the backup for when its cable is out.
-// Unticked, the install never asks. The image carries your keys (the release and recovery
+// Then the board's console is read into the Board log (boardlog.js), and on a board that
+// takes Wi-Fi over USB (build.wifi: builder.go wifiTakes) the panel asks for the network over
+// Improv in that same stream; the network and password go to the board over USB, never
+// through the controller. A board with no Ethernet is always asked. One with Ethernet as
+// well gets a Wi-Fi checkbox (build.wifi_box): ticked to start on a board that ships on
+// Wi-Fi with an add-on, unticked on one wired as it ships (build.wired), where Wi-Fi is the
+// backup for when its cable is out. Unticked, the install never asks. The image carries your keys (the release and recovery
 // public keys, in its keys partition): until both are set up (the first run's Make your keys)
 // nothing is prepared. Write keys only (POST /api/build/keys) writes the keys partition
 // alone, for a node in setup mode, and keeps the rest. A board whose chip image isn't in the controller yet
@@ -283,14 +283,14 @@ const BUSY = { erase: "Erasing the board: don't close this or unplug it until it
 const SAID = { erase: m => `Erasing failed (${m}). Unplug the board, plug it back in, and try again.` };
 // wired: on its cable (a wired board without Wi-Fi set up); backup: a wired board with Wi-Fi
 // set up for when its cable is out; joined: on Wi-Fi; addon: Wi-Fi left unticked on a board
-// whose definition has an Ethernet add-on; nowifi: no Wi-Fi set up on a board with no
-// Ethernet (left unticked, or it never answered); elsewhere: not this port.
+// whose definition has an Ethernet add-on; nowifi: asked for Wi-Fi, it never answered (no
+// network set up); elsewhere: not this port.
 const INSTALLED = {
   wired: "Installed. Plug its network cable in: it's connected to this computer over USB only. It can stay on USB for power, or be unplugged and powered where its cable is.",
   backup: "Installed, with Wi-Fi as its backup: it uses its network cable while that's in, and your Wi-Fi while it's out. USB can stay in for power.",
   joined: "Installed, and on your Wi-Fi network. USB can stay in for power.",
   addon: "Installed without Wi-Fi, so it uses its Ethernet add-on. Plug its network cable in: it's connected to this computer over USB only.",
-  nowifi: "Installed without setting up its Wi-Fi: it isn't on a network until it has one. To give it one, tick Set up its Wi-Fi and install again.",
+  nowifi: "Installed, but its Wi-Fi isn't set up: it isn't on a network until it is. Install again to set it up.",
   elsewhere: "Installed. Set up its Wi-Fi over the board's own USB port (Install again there).",
 };
 // A new board's: what each way of being on the network means, once OK hands it to the
@@ -546,10 +546,11 @@ export async function openUSB(o = {}) {
       const c = obj(build.chip), k = obj(build.keys), b = obj(build.board);
       const go = h("button", { class: "btn primary", type: "button", id: "usb-go", disabled: !supported }, "Install on the board over USB");
       const erase = h("input", { type: "checkbox", id: "usb-erase" });
-      // The Wi-Fi checkbox (build.wifi): ticked to start on a board that ships on Wi-Fi,
-      // unticked on a wired one, where Wi-Fi is its backup. Its hint shows while it's ticked.
-      const wifiBox = build.wifi ? h("input", { type: "checkbox", id: "usb-wifi-box", checked: !build.wired }) : null;
-      const wifiHint = wifiBox && h("p", { class: "hint", id: "usb-wifi", hidden: !wifiBox.checked },
+      // The Wi-Fi checkbox (build.wifi_box: a board with Ethernet too): ticked to start on a
+      // board that ships on Wi-Fi, unticked on a wired one, where Wi-Fi is its backup. With no
+      // box (a board with no Ethernet) Wi-Fi is always set up. The hint shows while it will be.
+      const wifiBox = build.wifi && build.wifi_box ? h("input", { type: "checkbox", id: "usb-wifi-box", checked: !build.wired }) : null;
+      const wifiHint = build.wifi && h("p", { class: "hint", id: "usb-wifi", hidden: !!wifiBox && !wifiBox.checked },
         "After it installs, this panel asks for your Wi-Fi network and password; they go to the board over USB, not through the controller.",
         build.wired ? " It uses Wi-Fi only while its cable is out." : "");
       if (wifiBox) wifiBox.addEventListener("change", () => { wifiHint.hidden = !wifiBox.checked; });
@@ -591,7 +592,7 @@ export async function openUSB(o = {}) {
   // (+ Add node, with it chosen). Nothing after a minute: what to check, still waiting.
   function installer(box, go, erase, build, net, wifiBox) {
     // wired: on its cable as it ships. addOn: on Wi-Fi as it ships, with an Ethernet add-on
-    // that may be fitted. wifi: this install asks for the network (the box ticked).
+    // that may be fitted. wifi: this install asks for the network (no box, or the box ticked).
     const board = obj(build.board), wired = !!build.wired, eth = obj(board.ethernet);
     const addOn = !wired && !!str(eth.kind) && eth.kind !== "none";
     let wifi = false;
@@ -662,7 +663,7 @@ export async function openUSB(o = {}) {
     go.addEventListener("click", async () => {
       stopRun(); // the port, as the last install left it
       const my = gen, live = () => my === gen && box.isConnected, wipe = erase.checked;
-      wifi = !!(wifiBox && wifiBox.checked);
+      wifi = !!build.wifi && (!wifiBox || wifiBox.checked);
       began = performance.now();
       mac = "";
       noLink = false;
@@ -783,8 +784,8 @@ export async function openUSB(o = {}) {
         if (!app && live()) hint("usb-nolog", "If it shows nothing, press RESET or unplug it and plug it in again.");
       }, NOLOG_AFTER));
       // A wired board is on its cable whatever happens to Wi-Fi; Wi-Fi set up, it's its backup.
-      // Unticked, a board whose definition has an Ethernet add-on is on that; else, without a
-      // Wi-Fi network, it has none.
+      // Unticked, a board whose definition has an Ethernet add-on is on that; asked and never
+      // answering, it has no network set up.
       let how = wired ? "wired" : !wifi && addOn ? "addon" : "nowifi";
       if (wifi && !(own && con)) {
         step("wifi", "", "Not over this port: plug it into the board's own USB port to set up Wi-Fi.");
